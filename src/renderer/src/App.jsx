@@ -58,7 +58,9 @@ export default function App() {
     return unsub;
   }, []);
 
-  const activeMachine = machines.find((m) => m.id === activeMachineId);
+  const activeMachine = typeof activeMachineId === 'string'
+    ? machines.find((m) => m.id === activeMachineId)
+    : activeMachineId;
 
   const connectMachine = useCallback((machine) => {
     addLog(`Connecting to: ${machine.name} (${machine.host}:${machine.port})`);

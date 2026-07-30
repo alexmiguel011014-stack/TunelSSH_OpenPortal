@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, globalShortcut, dialog } = require('electron');
+const { app, BrowserWindow, Menu, ipcMain, globalShortcut, dialog } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { autoUpdater } = require('electron-updater');
@@ -87,10 +87,113 @@ function createWindow() {
   });
 }
 
+// Daily update check timer
+let updateInterval = null;
+
+function startDailyUpdateCheck() {
+  if (!isDev) {
+    // Check every 24 hours
+    updateInterval = setInterval(() => {
+      console.log('[auto-update] Daily check: checking for updates...');
+      autoUpdater.checkForUpdates();
+    }, 24 * 60 * 60 * 1000);
+  }
+}
+
+function buildAppMenu() {
+  const template = [
+    {
+      label: 'File',
+      submenu: [
+        { role: 'quit', label: 'Sair' }
+      ]
+    },
+    {
+      label: 'Edit',
+      submenu: [
+        { role: 'undo', label: 'Desfazer' },
+        { role: 'redo', label: 'Refazer' },
+        { type: 'separator' },
+        { role: 'cut', label: 'Recortar' },
+        { role: 'copy', label: 'Copiar' },
+        { role: 'paste', label: 'Colar' },
+        { role: 'selectAll', label: 'Selecionar Tudo' }
+      ]
+    },
+    {
+      label: 'View',
+      submenu: [
+        { role: 'reload', label: 'Recarregar' },
+        { role: 'forceReload', label: 'Forcar Recarga' },
+        { role: 'toggleDevTools', label: 'Ferramentas do Desenvolvedor' },
+        { type: 'separator' },
+        { role: 'resetZoom', label: 'Zoom Padrao' },
+        { role: 'zoomIn', label: 'Aumentar Zoom' },
+        { role: 'zoomOut', label: 'Diminuir Zoom' },
+        { type: 'separator' },
+        { role: 'togglefullscreen', label: 'Tela Cheia' }
+      ]
+    },
+    {
+      label: 'Atualizacoes',
+      submenu: [
+        {
+          label: 'Verificar atualizacoes...',
+          accelerator: 'CmdOrCtrl+U',
+          click: () => {
+            if (isDev) {
+              dialog.showMessageBox(mainWindow, {
+                type: 'info',
+                title: 'Atualizacoes',
+                message: 'Modo desenvolvimento: as atualizacoes so funcionam no app instalado.',
+                buttons: ['OK']
+              });
+            } else {
+              dialog.showMessageBox(mainWindow, {
+                type: 'question',
+                title: 'Atualizacoes',
+                message: 'Deseja procurar por atualizacoes no sistema?',
+                buttons: ['Sim', 'Nao'],
+                defaultId: 0
+              }).then(({ response }) => {
+                if (response === 0) {
+                  autoUpdater.checkForUpdates();
+                }
+              });
+            }
+          }
+        }
+      ]
+    },
+    {
+      label: 'Help',
+      submenu: [
+        {
+          label: 'Ferramentas do Desenvolvedor',
+          accelerator: 'F12',
+          click: () => {
+            if (mainWindow && !mainWindow.isDestroyed()) {
+              if (mainWindow.webContents.isDevToolsOpened()) {
+                mainWindow.webContents.closeDevTools();
+              } else {
+                mainWindow.webContents.openDevTools({ mode: 'detach' });
+              }
+            }
+          }
+        }
+      ]
+    }
+  ];
+
+  const menu = Menu.buildFromTemplate(template);
+  Menu.setApplicationMenu(menu);
+}
+
 app.whenReady().then(() => {
   console.log('[main] App ready, starting...');
   console.log('[main] Proxy port:', PROXY_PORT);
 
+  buildAppMenu();
   wss = startWebSocketProxy(PROXY_PORT);
   fileWss = startFileProxy(18901);
 
@@ -129,6 +232,7 @@ app.whenReady().then(() => {
       repo: 'TunelSSH_OpenPortal'
     });
     autoUpdater.checkForUpdates();
+    startDailyUpdateCheck();
 
     autoUpdater.on('update-available', (info) => {
       console.log('[auto-update] Update available:', info.version);
@@ -171,6 +275,7 @@ app.on('window-all-closed', () => {
   globalShortcut.unregisterAll();
   if (wss) wss.close();
   if (fileWss) fileWss.close();
+  if (updateInterval) clearInterval(updateInterval);
   stopFileServer().then(() => console.log('[main] File server stopped'));
   if (process.platform !== 'darwin') app.quit();
 });

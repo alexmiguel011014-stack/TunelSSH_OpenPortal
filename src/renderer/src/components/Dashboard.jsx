@@ -15,6 +15,8 @@ export default function Dashboard({ onConnect }) {
   const [serverStatus, setServerStatus] = useState({ running: false, port: 0, rootDir: '' });
   const [localIp, setLocalIp] = useState('');
   const [copied, setCopied] = useState(false);
+  const [quickIp, setQuickIp] = useState('');
+  const [quickPort, setQuickPort] = useState(5900);
 
   useEffect(() => {
     window.electronAPI.getServerStatus().then(setServerStatus);
@@ -39,6 +41,30 @@ export default function Dashboard({ onConnect }) {
       await window.electronAPI.connectVnc(machine);
       setActiveMachine(machine);
       addLog(`Conectando a ${machine.name} (${machine.host})`);
+    } catch (err) {
+      addLog(`Erro ao conectar: ${err.message}`, 'error');
+    }
+  };
+
+  const handleQuickConnect = async () => {
+    const ip = quickIp.trim();
+    if (!ip) {
+      addLog('Digite um IP para conectar', 'warn');
+      return;
+    }
+    const tempMachine = {
+      id: 'quick-' + Date.now(),
+      name: 'Conexao Direta',
+      host: ip,
+      port: quickPort || 5900
+    };
+    if (activeMachine) {
+      try { await window.electronAPI.disconnectVnc(); } catch {}
+    }
+    try {
+      await window.electronAPI.connectVnc(tempMachine);
+      setActiveMachine(tempMachine);
+      addLog(`Conectando a ${ip}:${quickPort}`);
     } catch (err) {
       addLog(`Erro ao conectar: ${err.message}`, 'error');
     }
@@ -132,6 +158,57 @@ export default function Dashboard({ onConnect }) {
               </div>
             ))
           )}
+        </div>
+
+        {/* Conectar por IP card */}
+        <div style={card}>
+          <h2 style={{ fontSize: '14px', fontWeight: 600, marginBottom: '12px', textTransform: 'uppercase', letterSpacing: '0.5px', color: '#94a3b8' }}>
+            Conectar por IP
+          </h2>
+          <div style={{ display: 'flex', gap: '8px', alignItems: 'flex-end' }}>
+            <div style={{ flex: 1 }}>
+              <label style={{ display: 'block', fontSize: '11px', color: '#64748b', marginBottom: '4px' }}>
+                Endereco IP
+              </label>
+              <input
+                type="text"
+                value={quickIp}
+                onChange={(e) => setQuickIp(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') handleQuickConnect(); }}
+                placeholder="100.x.x.x"
+                style={{
+                  width: '100%', padding: '8px 10px', borderRadius: '6px',
+                  border: '1px solid #475569', background: '#0f172a', color: '#e2e8f0',
+                  fontSize: '14px', fontFamily: 'monospace', outline: 'none',
+                  boxSizing: 'border-box'
+                }}
+              />
+            </div>
+            <div style={{ width: '80px' }}>
+              <label style={{ display: 'block', fontSize: '11px', color: '#64748b', marginBottom: '4px' }}>
+                Porta
+              </label>
+              <input
+                type="number"
+                value={quickPort}
+                onChange={(e) => setQuickPort(parseInt(e.target.value) || 5900)}
+                onKeyDown={(e) => { if (e.key === 'Enter') handleQuickConnect(); }}
+                placeholder="5900"
+                style={{
+                  width: '100%', padding: '8px 10px', borderRadius: '6px',
+                  border: '1px solid #475569', background: '#0f172a', color: '#e2e8f0',
+                  fontSize: '14px', fontFamily: 'monospace', outline: 'none',
+                  boxSizing: 'border-box'
+                }}
+              />
+            </div>
+            <button onClick={handleQuickConnect} style={{
+              ...btn, padding: '8px 16px', background: '#2563eb', borderColor: '#2563eb',
+              color: '#fff', fontWeight: 500, whiteSpace: 'nowrap'
+            }}>
+              Conectar
+            </button>
+          </div>
         </div>
 
         {/* Status row */}
