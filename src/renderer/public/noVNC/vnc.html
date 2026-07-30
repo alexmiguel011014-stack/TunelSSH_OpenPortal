@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>VNC Viewer</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; overflow: hidden; background: #000; }
+    #vnc-container {
+      width: 100%; height: 100%; overflow: hidden;
+    }
+    #error-overlay {
+      display: none; position: fixed; inset: 0;
+      background: rgba(0,0,0,0.85); z-index: 999;
+      align-items: center; justify-content: center;
+    }
+    #error-overlay.visible { display: flex; }
+    #error-box {
+      background: #1e293b; border: 1px solid #334155; border-radius: 12px;
+      padding: 32px; text-align: center; max-width: 400px;
+    }
+    #error-box h2 { color: #f87171; font-size: 16px; margin-bottom: 8px; }
+    #error-box p { color: #94a3b8; font-size: 13px; margin-bottom: 16px; }
+    #error-box button {
+      background: #2563eb; color: white; border: none; padding: 8px 20px;
+      border-radius: 6px; cursor: pointer; font-size: 13px;
+    }
+    #error-box button:hover { background: #3b82f6; }
+    #connecting-overlay {
+      position: fixed; inset: 0; background: #000; z-index: 998;
+      display: flex; align-items: center; justify-content: center;
+    }
+    #connecting-overlay.hidden { display: none; }
+    #connecting-overlay .spinner {
+      width: 32px; height: 32px; border: 3px solid #2563eb;
+      border-top-color: transparent; border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+    #connecting-overlay p { color: #64748b; font-size: 13px; margin-top: 12px; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+  </style>
+</head>
+<body>
+  <div id="connecting-overlay">
+    <div style="text-align:center">
+      <div class="spinner"></div>
+      <p id="connecting-text">Connecting...</p>
+    </div>
+  </div>
+
+  <div id="error-overlay">
+    <div id="error-box">
+      <h2>Connection Failed</h2>
+      <p id="error-msg">Could not reach the VNC server</p>
+      <button onclick="reconnect()">Retry</button>
+    </div>
+  </div>
+
+  <div id="vnc-container"></div>
+
+  <script type="module">
+    import RFB from './novnc.js';
+
+    const params = new URLSearchParams(window.location.search);
+    const host = params.get('host');
+    const port = params.get('port') || '5900';
+    const password = params.get('password') || '';
+    const proxyWs = params.get('proxy') || 'ws://127.0.0.1:18900';
+
+    const connectingOverlay = document.getElementById('connecting-overlay');
+    const connectingText = document.getElementById('connecting-text');
+    const errorOverlay = document.getElementById('error-overlay');
+    const errorMsg = document.getElementById('error-msg');
+    const container = document.getElementById('vnc-container');
+
+    let rfb = null;
+    let fbWidth = 0;
+    let fbHeight = 0;
+
+    function getFbWidth() {
+      return fbWidth || (rfb && rfb._fbWidth) || 0;
+    }
+
+    function getFbHeight() {
+      return fbHeight || (rfb && rfb._fbHeight) || 0;
+    }
+
+    function fitScreen() {
+      if (!rfb) return;
+      const fbW = getFbWidth();
+      const fbH = getFbHeight();
+      if (fbW <= 0 || fbH <= 0) return;
+      const cw = container.clientWidth;
+      const ch = container.clientHeight;
+      if (cw <= 0 || ch <= 0) return;
+
+      const scale = Math.min(cw / fbW, ch / fbH, 1);
+      if (rfb._display) {
+        rfb._display.scale = scale;
+      }
+    }
+
+    function connect() {
+      if (!host) {
+        errorMsg.textContent = 'No host specified';
+        errorOverlay.classList.add('visible');
+        return;
+      }
+
+      const wsUrl = `${proxyWs}?host=${host}&port=${port}`;
+      connectingOverlay.classList.remove('hidden');
+      connectingText.textContent = `Connecting to ${host}:${port}...`;
+
+      try {
+        rfb = new RFB(container, wsUrl, {
+          scaleViewport: false,
+          resizeSession: false,
+          showDotCursor: true,
+          keyboardDelay: 20,
+          qualityLevel: 4,
+          compressionLevel: 3,
+          credentials: password ? { password } : undefined,
+        });
+
+        rfb.addEventListener('connect', () => {
+          connectingOverlay.classList.add('hidden');
+          errorOverlay.classList.remove('visible');
+          fbWidth = rfb._fbWidth || 0;
+          fbHeight = rfb._fbHeight || 0;
+          fitScreen();
+          parent.postMessage({ type: 'vnc-resolution', width: fbWidth, height: fbHeight }, '*');
+          // Watch canvas for dynamic resolution changes from server
+          const roCanvas = new ResizeObserver(() => fitScreen());
+          const canvas = container.querySelector('canvas');
+          if (canvas) roCanvas.observe(canvas);
+        });
+
+        rfb.addEventListener('disconnect', (e) => {
+          const clean = e.detail ? e.detail.clean : 'unknown';
+          if (clean === false) {
+            errorMsg.textContent = 'Connection lost unexpectedly';
+            errorOverlay.classList.add('visible');
+          }
+          connectingOverlay.classList.add('hidden');
+          parent.postMessage({ type: 'vnc-status', state: clean ? 'disconnected' : 'error' }, '*');
+        });
+
+        rfb.addEventListener('credentialsrequired', () => {
+          if (password) {
+            rfb.approvePassword(password);
+          } else {
+            parent.postMessage({ type: 'vnc-status', state: 'error', message: 'Password required' }, '*');
+            errorMsg.textContent = 'VNC server requires a password';
+            errorOverlay.classList.add('visible');
+          }
+        });
+
+        rfb.addEventListener('error', (e) => {
+          const msg = e.detail?.message || e.detail || 'Unknown error';
+          errorMsg.textContent = msg;
+          connectingOverlay.classList.add('hidden');
+          errorOverlay.classList.add('visible');
+          parent.postMessage({ type: 'vnc-status', state: 'error', message: msg }, '*');
+        });
+      } catch (err) {
+        errorMsg.textContent = err.message;
+        connectingOverlay.classList.add('hidden');
+        errorOverlay.classList.add('visible');
+        parent.postMessage({ type: 'vnc-status', state: 'error', message: err.message }, '*');
+      }
+    }
+
+    if (window.ResizeObserver) {
+      const ro = new ResizeObserver(() => fitScreen());
+      ro.observe(container);
+    }
+
+    window.addEventListener('message', (e) => {
+      if (e.data?.type === 'resize-viewport') fitScreen();
+    });
+
+    window.reconnect = () => {
+      errorOverlay.classList.remove('visible');
+      if (rfb) { rfb.disconnect(); rfb = null; }
+      container.innerHTML = '';
+      fbWidth = 0; fbHeight = 0;
+      connect();
+    };
+
+    parent.postMessage({ type: 'vnc-ready' }, '*');
+
+    connect();
+  </script>
+</body>
+</html>
