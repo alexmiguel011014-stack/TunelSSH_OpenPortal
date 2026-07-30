@@ -10,3 +10,7 @@ startup.log
 *.env
 .DS_Store
 Thumbs.db
+
+# Certificados auto-assinados (gerados pelo BUILD.bat)
+resources/cert.pfx
+resources/cert.cer
