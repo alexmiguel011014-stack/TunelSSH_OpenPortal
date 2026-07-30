@@ -3,6 +3,10 @@ dist/
 dist-electron/
 electron-out.log
 electron-err.log
+vite-run*.log
+vite-test*.log
+vite.pid
+startup.log
 *.env
 .DS_Store
 Thumbs.db

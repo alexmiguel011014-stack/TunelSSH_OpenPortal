@@ -1,19 +1,7 @@
 # OpenPortal Remote
 
 Acesso remoto seguro a PCs Windows via Tailscale + TightVNC + Electron.
-
----
-
-## Sumário
-
-- [O que precisa instalar](#o-que-precisa-instalar)
-- [Passo a passo completo](#passo-a-passo-completo)
-  - [1. Tailscale (VPN)](#1-tailscale-vpn)
-  - [2. TightVNC Server](#2-tightvnc-server)
-  - [3. OpenPortal Remote](#3-openportal-remote)
-- [Como usar](#como-usar)
-- [Estrutura do projeto](#estrutura-do-projeto)
-- [Solução de problemas](#solucao-de-problemas)
+**Modo Hibrido:** este app funciona como cliente (conecta em outros PCs) E como servidor (recebe conexões de arquivos automaticamente).
 
 ---
 
@@ -21,98 +9,94 @@ Acesso remoto seguro a PCs Windows via Tailscale + TightVNC + Electron.
 
 | App | Onde baixar | Pra que |
 |-----|-------------|---------|
-| **Tailscale** | https://tailscale.com/download | VPN gratuita que conecta os PCs |
-| **TightVNC Server** | https://www.tightvnc.com/download.php | Servidor VNC no PC remoto |
-| **Node.js** | https://nodejs.org (v18+) | Para rodar o app em desenvolvimento |
-| **OpenPortal Remote** | Este projeto | Interface para conectar via VNC |
+| **Tailscale** | https://tailscale.com/download | VPN gratuita para conectar os PCs |
+| **TightVNC Server** | https://www.tightvnc.com/download.php | Servidor VNC no PC remoto (apenas no PC alvo) |
+| **Node.js** | https://nodejs.org (v18+) | Para rodar o app |
+| **OpenPortal Remote** | Este repositorio | Interface VNC + transferencia de arquivos |
+
+### Dependencias do Node (instaladas via `npm install`)
+
+| Pacote | Versao | Uso |
+|--------|--------|-----|
+| `ws` | ^8.18.0 | Servidor WebSocket para proxy VNC e arquivos |
+| `electron` | ^33.0.0 | Desktop shell do app |
+| `react` / `react-dom` | ^18.3.0 | Interface grafica |
+| `vite` | ^6.0.0 | Build tool e dev server |
+| `tailwindcss` | ^3.4.0 | Estilos CSS |
+| `electron-builder` | ^25.1.0 | Empacotamento para distribuicao |
+| `nodemon` | ^3.0.0 | Auto-restart do Electron em desenvolvimento |
+| `concurrently` | ^9.1.0 | Rodar Vite + Electron em paralelo |
+| `wait-on` | ^8.0.0 | Aguardar Vite iniciar antes do Electron |
 
 ---
 
-## Passo a passo completo
+## Como funciona (arquitetura)
 
-### 1. Tailscale (VPN)
+```
++------------------------------------------------------------------+
+|                      Electron Shell (Modo Hibrido)                |
+|                                                                   |
+|  Servicos iniciados automaticamente ao abrir o app:               |
+|                                                                   |
+|  +----------+    +-----------+    +------------------+           |
+|  | VNC Proxy|    |File Proxy |    |File Server (TCP) |           |
+|  | :18900   |    | :18901    |    | :5001            |           |
+|  | WS->TCP  |    | WS->TCP   |    | (agente receptor)|           |
+|  +----+-----+    +----+------+    +--------+---------+           |
+|       |               |                    |                      |
+|       v               v                    v                      |
+|  TightVNC(5900)  File Server(5001)   Recebe conexoes de          |
+|  PC Remoto       PC Remoto           outros PCs na rede          |
+|                                       (sem precisar rodar        |
+|                                        nada no terminal)         |
++------------------------------------------------------------------+
+```
 
-O Tailscale cria uma rede privada entre seus PCs sem precisar abrir portas no roteador.
+### Fluxo VNC
+1. Usuario seleciona um PC na sidebar/dashboard
+2. noVNC (iframe) conecta no proxy local `ws://127.0.0.1:18900`
+3. Proxy abre socket TCP para o TightVNC remoto (porta 5900)
+4. Dados sao bridgeados: video frames + teclado/mouse
 
-**Em CADA PC que voce quer conectar:**
+### Fluxo File Transfer (upload)
+1. Abre "Files" na sidebar → painel duplo (Local | Remoto)
+2. Seleciona arquivos/pastas no painel local, navega no remoto
+3. "Enviar para Remoto" → main process le os arquivos via `fs`
+4. Conecta no file proxy (18901) → TCP para file server remoto (5001)
+5. Streaming em chunks de 64KB com barra de progresso
 
-1. Baixe e instale o Tailscale de https://tailscale.com/download
-2. Crie uma conta (Google / Microsoft / GitHub)
-3. Faça login no Tailscale em cada PC **com a mesma conta**
-4. Anote o IP Tailscale de cada maquina (aparece no menu da bandeja do Windows:
-   `100.x.x.x`)
-
-> Todos os PCs precisam estar logados no **mesmo** Tailscale account.
-
-### 2. TightVNC Server
-
-Instale no PC que voce quer **acessar remotamente** (o PC alvo).
-
-1. Baixe de https://www.tightvnc.com/download.php
-2. Durante a instalacao, escolha:
-   - **Install service** (para rodar em segundo plano)
-   - Defina uma **senha de acesso** (ex: `MinhaSenha123`)
-   - Marque "Register application for automatic startup"
-3. Após instalado, o TightVNC roda como servico no PC alvo na porta **5900**
-4. Para verificar: clique com botao direito no icone do TightVNC na bandeja
-   e veja se esta "Listening on port 5900"
-
-### 3. OpenPortal Remote
-
-**No PC que voce vai usar para controlar:**
-
-1. Instale o Node.js de https://nodejs.org (v18 ou superior)
-2. Abra o terminal (PowerShell) e confirme:
-   ```
-   node --version
-   npm --version
-   ```
-3. Clone ou copie a pasta do projeto para o seu PC
-4. Instale as dependencias:
-   ```
-   cd "D:\ProjetosVS\TunelSSH"
-   npm install
-   ```
-5. Inicie o app:
-   ```
-   npm run dev
-   ```
-   Ou clique duas vezes no atalho **"OpenPortal Remote"** da area de trabalho
-   (se foi criado).
-
-> Na primeira vez que rodar, pode demorar alguns segundos para o Vite
-> iniciar e o Electron abrir a janela.
+### Agente Receptor (novo no Modo Hibrido)
+- O file server TCP (porta 5001) e iniciado automaticamente com o app
+- Outros PCs na Tailscale podem enviar/receber arquivos deste PC
+- **Nao precisa rodar `node remote-file-server.js` no terminal**
 
 ---
 
 ## Como usar
 
-### Configurar as maquinas
+### 1. Configurar Tailscale
+Instale e logue com a **mesma conta** em todos os PCs.
 
-1. Abra o app
-2. Clique no botao de engrenagem na sidebar ou va em **Settings**
-3. Para adicionar um PC novo: clique em **"+"** ou **"Add PC"**
-4. Para remover: passe o mouse sobre o PC na lista e clique no **"x"**
-5. Limite maximo: **20 PCs**
+### 2. Instalar TightVNC Server
+Apenas no PC que sera acessado remotamente. Porta padrao: 5900.
 
-### Conectar
+### 3. Baixar e rodar o app
+```bash
+git clone https://github.com/alexmiguel011014-stack/TunelSSH_OpenPortal.git
+cd TunelSSH_OpenPortal
+npm install
+npm run dev
+```
 
-1. Na barra lateral, clique no PC desejado
-2. O iframe do noVNC carrega e tenta conectar
-3. Status aparece na sidebar na secao **"Conectado"** expandida
-4. Para reconectar: use o botao **Reconnect** na sidebar
-5. Para desconectar: clique no **"Disconnect"** na sidebar
+### 4. Tela inicial (Dashboard)
+- **"Minha Maquina (Agente)"** — mostra o IP Tailscale local, status do servidor de arquivos (ATIVO), botao "Copiar IP"
+- **"Conectar a um PC"** — lista de PCs cadastrados com botoes VNC e Files
 
-### Sidebar recolhivel
-
-- Clique no icone de **hamburguer** (3 barrinhas, canto superior esquerdo)
-  para recolher/expandir a sidebar
-- Quando recolhida, o VNC ocupa a tela inteira
-
-### Logs
-
-Clique em **"Logs"** dentro da sidebar para ver o terminal de depuracao
-com todas as mensagens do app.
+### 5. Transferencia de arquivos
+1. Clique em **"Files"** na sidebar
+2. Painel esquerdo: navegue nos arquivos locais (drives C:, D:, atalhos Desktop/Downloads/Documentos)
+3. Painel direito: navegue no PC remoto conectado
+4. Selecione (checkbox ou Ctrl+Click) e clique em **"Enviar para Remoto"**
 
 ---
 
@@ -120,81 +104,84 @@ com todas as mensagens do app.
 
 ```
 TunelSSH/
-+-- README.md           Instrucoes de uso
-+-- STATUS.md           Status atual do desenvolvimento
-+-- PLAN.md             Plano de implementacao detalhado
-+-- HISTORY.md          Historico de bugs e modificacoes
-+-- package.json        Dependencias e scripts
-+-- start.bat           Iniciar o app (terminal visivel)
-+-- start.vbs           Iniciar o app (sem janela de terminal)
++-- README.md                Este arquivo
++-- STATUS.md                Status atual e diagrama de arquitetura
++-- PLAN.md                  Plano de implementacao detalhado
++-- HISTORY.md               Historico de bugs e modificacoes
++-- PROCEDIMENTOS.md         Regras de desenvolvimento
++-- package.json             Dependencias e scripts
++-- start.bat / start.vbs    Atalhos para iniciar o app
 |
 +-- src/
-|   +-- main/           Processo principal (Electron)
-|   |   +-- main.js             Janela, atalhos, inicializacao
-|   |   +-- preload.js          Ponte segura entre processos
-|   |   +-- proxy.js            Proxy WebSocket <-> TCP
-|   |   +-- config-manager.js   Leitura/escrita de config
-|   |   +-- ipc-handlers.js     Comunicacao entre processos
+|   +-- main/                Processo principal (Electron + servicos)
+|   |   +-- main.js                     Inicializacao (janela, proxies, file server)
+|   |   +-- preload.js                  Ponte segura IPC (contextBridge)
+|   |   +-- proxy.js                    WebSocket <-> TCP (VNC, porta 18900)
+|   |   +-- file-proxy.js               WebSocket <-> TCP (arquivos, porta 18901)
+|   |   +-- file-server.js              Servidor TCP de arquivos embutido (porta 5001)
+|   |   +-- file-transfer.js            Gerenciador de transferencia (main)
+|   |   +-- remote-file-server.js       CLI wrapper do file-server (uso opcional)
+|   |   +-- config-manager.js           Leitura/escrita de config em arquivo
+|   |   +-- ipc-handlers.js             Todos os handlers IPC
 |   |
-|   +-- renderer/       Interface grafica (React)
+|   +-- renderer/            Interface grafica (React)
+|       +-- index.html                 Shell HTML
+|       +-- vite.config.js             Configuracao do Vite
 |       +-- src/
-|           +-- App.jsx              Layout principal
-|           +-- main.jsx             Entry point React
+|           +-- App.jsx                Layout principal + roteamento
+|           +-- main.jsx               Entry point React
 |           +-- components/
-|               +-- Sidebar.jsx      Barra lateral
-|               +-- RemoteViewer.jsx  Iframe noVNC
-|               +-- ConfigPanel.jsx  Tela de configuracao
-|               +-- StatusBadge.jsx  Indicador de status
-|               +-- Terminal.jsx     Terminal de logs
+|               +-- Dashboard.jsx      Tela inicial (agente + lista de PCs)
+|               +-- Sidebar.jsx        Barra lateral (status, maquinas, logs)
+|               +-- FileTransfer.jsx   Explorador two-panel (local | remoto)
+|               +-- RemoteViewer.jsx   Iframe noVNC
+|               +-- ConfigPanel.jsx    Gerenciamento de maquinas
+|               +-- StatusBadge.jsx    Indicador de status
+|               +-- Terminal.jsx       Terminal de logs
+|       +-- public/
+|           +-- noVNC/
+|               +-- vnc.html           Viewer VNC standalone
+|               +-- novnc.js           Bundle noVNC (184KB)
 ```
 
 ---
 
 ## Solucao de problemas
 
-### "ERR_CONNECTION_REFUSED" ao abrir o app
+### App abre com tela preta
+- Pressione `F12` (ou `Ctrl+Shift+I`) para abrir DevTools
+- Verifique erros no Console
 
-**Causa:** Vite pode estar ouvindo em IPv6 em vez de IPv4.
-**Solucao:** Verifique se o `vite.config.js` tem `host: '127.0.0.1'`.
+### VNC nao conecta
+- Tailscale esta rodando? `ping 100.x.x.x`
+- TightVNC esta rodando no PC remoto? `netstat -ano | findstr 5900`
+- Senha VNC correta?
 
-### O app abre mas a tela fica preta/cinza
+### File Transfer nao conecta no remoto
+- O PC remoto precisa estar com o app OpenPortal Remote **aberto** (o file server TCP :5001 inicia automaticamente)
+- Ou rode `node src/main/remote-file-server.js` manualmente no PC remoto se nao estiver usando o app
 
-1. Pressione `Ctrl+Shift+I` para abrir o DevTools
-2. Va na aba **Console** e veja se há erros vermelhos
-3. Se vir erro de conexao com o Vite, reinicie o app
-
-### A sidebar aparece mas o VNC nao conecta
-
-1. Confirme que o Tailscale esta rodando nos dois PCs
-2. Teste o ping: `ping 100.x.x.x` (do PC local para o remoto)
-3. Confirme que o TightVNC esta rodando no PC remoto:
-   `netstat -ano | findstr 5900`
-4. Verifique se a senha VNC esta correta no arquivo de config
-
-### Esqueci a senha do VNC
-
-A senha é a que voce definiu na instalacao do **TightVNC Server**
-no PC remoto. Para alterar:
-1. Abra o TightVNC no PC remoto (icone da bandeja)
-2. Va em "Configuration" e mude a senha
-
-### O F12 nao abre o DevTools
-
-Use o menu: **View > Toggle Developer Tools** ou atalho
-**Ctrl+Shift+I**.
+### "Servidor: INATIVO" no Dashboard
+- Pode ser conflito de porta. Verifique se outra aplicacao esta usando a porta 5001
+- Reinicie o app
 
 ---
 
-## Tamanho do projeto
+## Desenvolvimento
 
-O projeto completo ocupa aproximadamente **~603 MB** no disco,
-sendo:
-- `node_modules/`: ~602 MB (dependencias)
-- `src/`: ~0,22 MB (codigo fonte)
-- Demais arquivos: < 1 MB
+```bash
+# Modo desenvolvimento (Vite HMR + nodemon)
+npm run dev
+
+# Build do renderer
+npm run build
+
+# Empacotar para Windows
+npm run dist
+```
 
 ---
 
 ## Licenca
 
-Projeto privado - OpenPortal Remote.
+Projeto privado — OpenPortal Remote.
