@@ -215,14 +215,13 @@ Isso faz o assistente ler estes arquivos na ordem:
 
 | Arquivo | O que contem |
 |---------|-------------|
-| `README.md` | Visao geral, instalacao, uso, solucao de problemas |
-| `STATUS.md` | Status atual, o que funciona, diagrama arquitetura |
-| `PLAN.md` | Plano de implementacao, arquitetura, decisoes tecnicas |
-| `HISTORY.md` | Historico de bugs e modificacoes |
-| `PROCEDIMENTOS.md` | Este arquivo — regras de desenvolvimento |
+| `docs/README.md` | Visao geral, instalacao, uso, solucao de problemas |
+| `docs/STATUS.md` | Status atual, o que funciona, diagrama arquitetura |
+| `docs/PLAN.md` | Plano de implementacao, arquitetura, decisoes tecnicas |
+| `docs/HISTORY.md` | Historico de bugs e modificacoes |
+| `docs/PROCEDIMENTOS.md` | Este arquivo — regras de desenvolvimento |
 | `src/main/file-server.js` | File server TCP embutido (auto-start) |
 | `src/renderer/src/components/Dashboard.jsx` | Tela inicial com status do agente |
-| `STATUS.md` | Status atual, o que funciona, diagrama de arquitetura |
 
 ### Apos a leitura
 

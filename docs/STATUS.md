@@ -99,7 +99,7 @@ O React agora funciona. O noVNC foi extraído para iframe isolado (abordagem do 
 | `src/main/file-server.js` | Modulo TCP file server (embutido no Electron, auto-start) |
 | `src/renderer/src/components/FileTransfer.jsx` | Interface two-panel de transferencia de arquivos |
 | `src/renderer/src/components/Dashboard.jsx` | Tela inicial com status do agente + lista de PCs |
-| `HISTORY.md` | Documentacao do bug IPv4/IPv6 e dev workflow |
+| `docs/HISTORY.md` | Documentacao do bug IPv4/IPv6 e dev workflow |
 
 ---
 

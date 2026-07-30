@@ -132,7 +132,7 @@ dinamicamente:
 | `src/renderer/src/components/RemoteViewer.jsx` | Barra superior removida; fullscreen; captura resolucao remota via postMessage |
 | `src/renderer/src/components/ConfigPanel.jsx` | Add/Remove de maquinas (ate 20) |
 | `src/renderer/public/noVNC/vnc.html` | Status bar removida; scaleViewport removido; fitScreen() manual com CSS `max-width/max-height !important` + `object-fit: contain` |
-| `STATUS.md` | Atualizado |
+| `docs/STATUS.md` | Atualizado |
 
 ### VNC Scaling
 

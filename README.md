@@ -105,13 +105,17 @@ npm run dev
 ```
 TunelSSH/
 +-- README.md                Este arquivo
-+-- STATUS.md                Status atual e diagrama de arquitetura
-+-- PLAN.md                  Plano de implementacao detalhado
-+-- HISTORY.md               Historico de bugs e modificacoes
-+-- PROCEDIMENTOS.md         Regras de desenvolvimento
 +-- package.json             Dependencias e scripts
-+-- start.bat / start.vbs    Atalhos para iniciar o app
-|
++-- docs/
+|   +-- README.md            (link para o README raiz)
+|   +-- STATUS.md            Status atual e diagrama de arquitetura
+|   +-- PLAN.md              Plano de implementacao detalhado
+|   +-- HISTORY.md           Historico de bugs e modificacoes
+|   +-- PROCEDIMENTOS.md     Regras de desenvolvimento
++-- scripts/
+|   +-- start.bat            Atalho para iniciar o app
+|   +-- start.vbs            Atalho silencioso
+|   +-- start-vite.ps1       Helper Vite
 +-- src/
 |   +-- main/                Processo principal (Electron + servicos)
 |   |   +-- main.js                     Inicializacao (janela, proxies, file server)

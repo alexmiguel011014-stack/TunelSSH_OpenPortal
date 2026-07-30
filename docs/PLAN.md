@@ -88,12 +88,14 @@ TunelSSH/ (project root)
 +-- .gitignore
 +-- tailwind.config.js              # TailwindCSS configuration
 +-- postcss.config.js               # PostCSS configuration
-+-- PLAN.md                         # This file
-+-- STATUS.md                       # Current status
-+-- HISTORY.md                      # Bug fixes and modifications log
-+-- start.bat                       # Dev startup script
-+-- start.vbs                       # Silent dev startup (desktop shortcut)
-+-- start-vite.ps1                  # Helper for Vite background start
++-- docs/
+|   +-- PLAN.md                     # This file
+|   +-- STATUS.md                   # Current status
+|   +-- HISTORY.md                  # Bug fixes and modifications log
++-- scripts/
+|   +-- start.bat                   # Dev startup script
+|   +-- start.vbs                   # Silent dev startup (desktop shortcut)
+|   +-- start-vite.ps1              # Helper for Vite background start
 |
 +-- src/
 |   +-- main/
