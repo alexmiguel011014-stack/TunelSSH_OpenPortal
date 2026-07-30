@@ -13,6 +13,7 @@
     "dist": "npm run build && electron-builder"
   },
   "dependencies": {
+    "electron-updater": "^6.8.9",
     "ws": "^8.18.0"
   },
   "devDependencies": {
@@ -41,8 +42,33 @@
       "dist/renderer/**/*"
     ],
     "win": {
-      "target": "nsis",
-      "icon": "resources/icon.png"
+      "target": [
+        {
+          "target": "nsis",
+          "arch": ["x64"]
+        }
+      ],
+      "icon": "resources/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "OpenPortal Remote",
+      "license": "docs/LICENSE.txt",
+      "include": "scripts/installer.nsh",
+      "installerIcon": "resources/icon.ico",
+      "uninstallerIcon": "resources/icon.ico",
+      "installerHeaderIcon": "resources/icon.ico",
+      "guid": "b7a1c2d3-e4f5-4a6b-8c9d-0e1f2a3b4c5d"
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "alexmiguel011014-stack",
+      "repo": "TunelSSH_OpenPortal",
+      "releaseType": "release"
     }
   }
 }

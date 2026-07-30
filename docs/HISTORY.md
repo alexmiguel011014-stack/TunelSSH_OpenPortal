@@ -348,3 +348,47 @@ Interface anterior usava upload/download/delete/mkdir como botoes separados, sem
 | `src/renderer/src/components/FileTransfer.jsx` | Refatorado para two-panel com multi-select, shortcuts, coluna data |
 | `src/main/ipc-handlers.js` | Adicionado mtime + getSpecialDirs; removido wmic |
 | `src/main/preload.js` | Exposto getSpecialDirs |
+
+---
+
+## [2026-07-30] Instalador NSIS + Auto-update + Firewall
+
+### Problema
+O app so rodava via `npm run dev`, exigindo Node.js + terminal. Nao havia
+instalador para distribuicao, nem mecanismo de atualizacao.
+
+### Solucao
+
+**1. electron-builder configurado (NSIS installer)**
+- Instalador com licenca (MIT), escolha de pasta, atalhos desktop/start menu
+- Desinstalador no "Adicionar/Remover Programas"
+- Icone personalizado (.ico)
+
+**2. Auto-update com electron-updater**
+- `main.js` integra `autoUpdater` que verifica GitHub Releases na inicializacao
+- Dialogos nativos: "Nova versao disponivel" / "Reiniciar agora?"
+- IPC handler `app:checkUpdate` + preload exposto `checkForUpdates()`
+
+**3. Firewall rule no instalador**
+- `scripts/installer.nsh` adiciona regra para porta 5001 (file server)
+- Removida automaticamente na desinstalacao
+- Usa `netsh advfirewall firewall add rule`
+
+**4. Script de build**
+- `BUILD.bat` — um clique para gerar o instalador
+- Roda `npm run build` + `electron-builder --win nsis`
+
+### Arquivos Criados
+| Arquivo | Descricao |
+|---------|-----------|
+| `docs/LICENSE.txt` | Licenca MIT para o instalador |
+| `resources/icon.ico` | Icone do app (formato Windows ICO) |
+| `scripts/installer.nsh` | Script NSIS para regra de firewall |
+| `BUILD.bat` | Script para gerar o instalador |
+
+### Arquivos Modificados
+| Arquivo | Mudanca |
+|---------|---------|
+| `package.json` | Adicionado electron-updater; config NSIS completa (licenca, icone, atalhos, firewall); publish GitHub |
+| `src/main/main.js` | Import e setup do autoUpdater; dialogo de atualizacao; IPC app:checkUpdate |
+| `src/main/preload.js` | Exposto `checkForUpdates()` no electronAPI |

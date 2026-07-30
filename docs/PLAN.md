@@ -528,11 +528,14 @@ Config file location: `C:\Users\beatl\AppData\Roaming\openportal-remote\config.j
 - [x] TightVNC authentication handling (password dialog)
 - [ ] Test both IPs: 100.81.199.56 and 100.66.218.65
 
-### Phase 9: Packaging
-- [ ] Configure `electron-builder` for Windows
-- [ ] Build and test distributable
-- [ ] App icon (`resources/icon.png`)
-- [ ] Final integration test
+### Phase 9: Packaging (2026-07-30)
+- [x] **electron-builder configurado** — NSIS installer com licenca, pasta, atalhos
+- [x] **Icone do app** — `resources/icon.ico` (PNG 256x256 convertido para ICO)
+- [x] **Auto-update** — `electron-updater` com GitHub Releases
+- [x] **Firewall rule** — script NSIS customizado (`scripts/installer.nsh`) para porta 5001
+- [x] **Build script** — `BUILD.bat` para gerar instalador com um clique
+- [x] **Instalador gerado** — `OpenPortal Remote Setup 1.0.0.exe` (78 MB)
+- [ ] Publicar primeira Release no GitHub (manual)
 
 ---
 
@@ -551,8 +554,10 @@ Config file location: `C:\Users\beatl\AppData\Roaming\openportal-remote\config.j
 | **VNC scaling** | **Manual fitScreen() + _display.scale** | scaleViewport:true conflita com CSS; _display.scale corrige mouse tracking |
 | **File transfer** | **Proxy dedicado (porta 18901) + file server remoto** | Mesma arquitetura do VNC; protocolo length-prefixed binario |
 | **Modo Hibrido** | **File server embutido no Electron (auto-start)** | Nao precisa rodar script externo; app e cliente e servidor |
+| **Auto-update** | **electron-updater + GitHub Releases** | Gratuito, integrado ao workflow de desenvolvimento |
+| **Firewall rule** | **NSIS custom script (netsh advfirewall)** | Porta 5001 liberada automaticamente na instalacao |
 
 ---
 
-*Last updated: 2026-07-29 (Phase 8d — Modo Hibrido + Dashboard)*
+*Last updated: 2026-07-30 (Phase 9 — Packaging + Auto-update)*
 *End of plan.*

@@ -42,6 +42,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     return () => ipcRenderer.removeListener('ft:status', handler);
   },
 
+  checkForUpdates: () => ipcRenderer.invoke('app:checkUpdate'),
+
   showOpenDialog: (options) => ipcRenderer.invoke('dialog:open', options),
   showSaveDialog: (options) => ipcRenderer.invoke('dialog:save', options),
   readLocalFile: (filePath) => ipcRenderer.invoke('fs:readFile', filePath),

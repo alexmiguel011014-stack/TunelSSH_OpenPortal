@@ -74,13 +74,19 @@ Acesso remoto seguro a PCs Windows via Tailscale + TightVNC + Electron.
 
 ## Como usar
 
+### 0. Instalar o app (usuarios finais)
+Baixe o instalador na pagina de **Releases** do GitHub:
+`https://github.com/alexmiguel011014-stack/TunelSSH_OpenPortal/releases`
+
+Execute o `.exe` — nao precisa de Node.js nem terminal.
+
 ### 1. Configurar Tailscale
 Instale e logue com a **mesma conta** em todos os PCs.
 
 ### 2. Instalar TightVNC Server
 Apenas no PC que sera acessado remotamente. Porta padrao: 5900.
 
-### 3. Baixar e rodar o app
+### 3. Baixar e rodar o app (desenvolvedores)
 ```bash
 git clone https://github.com/alexmiguel011014-stack/TunelSSH_OpenPortal.git
 cd TunelSSH_OpenPortal

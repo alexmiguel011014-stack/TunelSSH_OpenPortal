@@ -1,6 +1,7 @@
-const { app, BrowserWindow, ipcMain, globalShortcut } = require('electron');
+const { app, BrowserWindow, ipcMain, globalShortcut, dialog } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const { autoUpdater } = require('electron-updater');
 const { startWebSocketProxy } = require('./proxy');
 const { startFileProxy } = require('./file-proxy');
 const { startFileServer, stopFileServer, getFileServerStatus } = require('./file-server');
@@ -102,6 +103,14 @@ app.whenReady().then(() => {
   registerIpcHandlers(mainWindow);
   createWindow();
 
+  ipcMain.handle('app:checkUpdate', () => {
+    if (!isDev) {
+      autoUpdater.checkForUpdates();
+      return { checking: true };
+    }
+    return { checking: false, message: 'Auto-update only in production' };
+  });
+
   globalShortcut.register('F12', () => {
     if (mainWindow && !mainWindow.isDestroyed()) {
       if (mainWindow.webContents.isDevToolsOpened()) {
@@ -111,6 +120,47 @@ app.whenReady().then(() => {
       }
     }
   });
+
+  if (!isDev) {
+    autoUpdater.logger = console;
+    autoUpdater.setFeedURL({
+      provider: 'github',
+      owner: 'alexmiguel011014-stack',
+      repo: 'TunelSSH_OpenPortal'
+    });
+    autoUpdater.checkForUpdates();
+
+    autoUpdater.on('update-available', (info) => {
+      console.log('[auto-update] Update available:', info.version);
+      dialog.showMessageBox(mainWindow, {
+        type: 'info',
+        title: 'Atualizacao disponivel',
+        message: `Nova versao ${info.version} disponivel. Baixando...`,
+        buttons: ['OK']
+      });
+    });
+
+    autoUpdater.on('update-downloaded', (info) => {
+      console.log('[auto-update] Update downloaded:', info.version);
+      dialog.showMessageBox(mainWindow, {
+        type: 'question',
+        title: 'Atualizacao pronta',
+        message: `Versao ${info.version} baixada. Reiniciar agora?`,
+        buttons: ['Reiniciar', 'Depois'],
+        defaultId: 0
+      }).then(({ response }) => {
+        if (response === 0) autoUpdater.quitAndInstall();
+      });
+    });
+
+    autoUpdater.on('error', (err) => {
+      console.log('[auto-update] Error:', err.message);
+    });
+
+    autoUpdater.on('download-progress', (progress) => {
+      console.log(`[auto-update] Download: ${Math.round(progress.percent)}%`);
+    });
+  }
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();

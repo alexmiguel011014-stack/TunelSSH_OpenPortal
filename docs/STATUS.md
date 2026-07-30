@@ -61,6 +61,14 @@ O React agora funciona. O noVNC foi extraído para iframe isolado (abordagem do 
 - [x] **Otimizacoes de conexao** — setNoDelay, keepAlive, qualityLevel:4, compressionLevel:3, keyboardDelay:20
 - [x] **F12 funciona via View > Toggle Developer Tools**
 
+## O Que Funciona (Packaging / Distribuicao)
+
+- [x] **Instalador NSIS** — `electron-builder` gera `.exe` instalavel com opcao de pasta, atalhos, desinstalador
+- [x] **Auto-update** — `electron-updater` verifica GitHub Releases e atualiza automaticamente
+- [x] **Firewall rule** — instalador adiciona regra no firewall para porta 5001 (file server)
+- [x] **Icone personalizado** — `resources/icon.ico` usado no exe, instalador e atalhos
+- [x] **Build script** — `BUILD.bat` para gerar instalador facilmente
+
 ## Em Andamento (bugs)
 
 - [ ] **File transfer com layout two-panel (AnyDesk style)** — upload funciona, mas:
@@ -99,7 +107,11 @@ O React agora funciona. O noVNC foi extraído para iframe isolado (abordagem do 
 | `src/main/file-server.js` | Modulo TCP file server (embutido no Electron, auto-start) |
 | `src/renderer/src/components/FileTransfer.jsx` | Interface two-panel de transferencia de arquivos |
 | `src/renderer/src/components/Dashboard.jsx` | Tela inicial com status do agente + lista de PCs |
-| `docs/HISTORY.md` | Documentacao do bug IPv4/IPv6 e dev workflow |
+| `docs/PROCEDIMENTOS.md` | Regras de desenvolvimento e build |
+| `docs/PLAN.md` | Plano de implementacao e decisoes tecnicas |
+| `scripts/installer.nsh` | Script NSIS para regra de firewall no instalador |
+| `scripts/BUILD.bat` | Script para gerar o instalador |
+| `resources/icon.ico` | Icone do aplicativo |
 
 ---
 
@@ -179,4 +191,4 @@ O React agora funciona. O noVNC foi extraído para iframe isolado (abordagem do 
 
 ---
 
-*Ultima atualizacao: 2026-07-29 — modo hibrido (agente + cliente) + dashboard*
+*Ultima atualizacao: 2026-07-30 — instalador NSIS + auto-update + firewall*

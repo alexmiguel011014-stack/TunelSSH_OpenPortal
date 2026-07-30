@@ -185,6 +185,8 @@ na lista e clique no **"x"**.
 | Iniciar o app (terminal visivel) | `npm run dev` |
 | Ver logs do Electron | `Get-Content electron-out.log -Tail 20` |
 | Ver erros do Electron | `Get-Content electron-err.log -Tail 20` |
+| **Gerar instalador** | `BUILD.bat` (como Administrador) |
+| **Verificar atualizacao** | `window.electronAPI.checkForUpdates()` no DevTools |
 
 ---
 
@@ -243,4 +245,52 @@ Isso fara ele ler os componentes React e o processo principal.
 
 ---
 
-*Ultima atualizacao: 2026-07-29*
+---
+
+## 8. Fluxo de Build e Publicacao
+
+### Gerar o Instalador
+
+1. Feche o app (se estiver rodando)
+2. Clique com botao direito no `BUILD.bat` → **Executar como administrador**
+3. O script vai:
+   - Compilar o renderer (Vite build)
+   - Gerar o instalador na pasta `dist-electron/`
+4. Saida: `dist-electron/OpenPortal Remote Setup X.X.X.exe`
+
+### Publicar uma Atualizacao (GitHub Releases)
+
+1. Altere a versao no `package.json` (ex: `"version": "1.0.1"`)
+2. Rode `BUILD.bat` como administrador
+3. Va em: `https://github.com/alexmiguel011014-stack/TunelSSH_OpenPortal/releases`
+4. Clique em **"Create a new release"**
+5. Tag version: `v1.0.1` (igual ao package.json)
+6. Release title: `v1.0.1`
+7. Anexe os arquivos da pasta `dist-electron/`:
+   - `OpenPortal Remote Setup X.X.X.exe`
+   - `OpenPortal Remote Setup X.X.X.exe.blockmap`
+8. Publique a release
+
+> O auto-update detecta a nova versao automaticamente na proxima vez
+> que o usuario abrir o app instalado.
+
+### Sobre o Firewall do Windows
+
+O file server do app (porta 5001) precisa de permissao no firewall:
+- **Com instalador:** a regra e adicionada automaticamente
+- **Modo dev (`npm run dev`):** o Windows vai perguntar se pode permitir
+- **Se bloquear:** va em "Firewall do Windows" → "Permitir um app" → adicione `Open Portal Remote.exe`
+
+---
+
+## 9. Checklist Antes de Publicar uma Release
+
+- [ ] Versao atualizada no `package.json`
+- [ ] `npm run build` compila sem erros
+- [ ] Instalador gera sem erros
+- [ ] Testar o instalador em maquina limpa (sem Node.js)
+- [ ] .exe e .blockmap anexados na GitHub Release
+
+---
+
+*Ultima atualizacao: 2026-07-30*
