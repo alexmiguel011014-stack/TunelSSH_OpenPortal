@@ -39,6 +39,8 @@ process.on('unhandledRejection', (reason, promise) => {
 let mainWindow = null;
 let wss = null;
 let fileWss = null;
+let updateProgressWindow = null;
+let isUserTriggeredUpdate = false;
 const FILE_SERVER_PORT = 5001;
 
 const isDev = process.env.NODE_ENV === 'development';
@@ -100,6 +102,31 @@ function startDailyUpdateCheck() {
   }
 }
 
+function closeUpdateProgressWindow() {
+  if (updateProgressWindow && !updateProgressWindow.isDestroyed()) {
+    updateProgressWindow.close();
+  }
+  updateProgressWindow = null;
+}
+
+function createUpdateProgressWindow() {
+  closeUpdateProgressWindow();
+  const win = new BrowserWindow({
+    width: 420, height: 300, resizable: false,
+    title: 'Atualização', backgroundColor: '#0f172a',
+    webPreferences: { nodeIntegration: false, contextIsolation: true }
+  });
+  win.loadFile(path.join(__dirname, '..', '..', 'resources', 'update-progress.html'));
+  win.on('closed', () => { updateProgressWindow = null; });
+  updateProgressWindow = win;
+}
+
+function updateWinJS(code) {
+  if (updateProgressWindow && !updateProgressWindow.isDestroyed()) {
+    updateProgressWindow.webContents.executeJavaScript(code).catch(() => {});
+  }
+}
+
 function buildAppMenu() {
   const template = [
     {
@@ -124,10 +151,10 @@ function buildAppMenu() {
       label: 'View',
       submenu: [
         { role: 'reload', label: 'Recarregar' },
-        { role: 'forceReload', label: 'Forcar Recarga' },
+        { role: 'forceReload', label: 'Forçar Recarga' },
         { role: 'toggleDevTools', label: 'Ferramentas do Desenvolvedor' },
         { type: 'separator' },
-        { role: 'resetZoom', label: 'Zoom Padrao' },
+        { role: 'resetZoom', label: 'Zoom Padrão' },
         { role: 'zoomIn', label: 'Aumentar Zoom' },
         { role: 'zoomOut', label: 'Diminuir Zoom' },
         { type: 'separator' },
@@ -135,31 +162,24 @@ function buildAppMenu() {
       ]
     },
     {
-      label: 'Atualizacoes',
+      label: 'Atualizações',
       submenu: [
         {
-          label: 'Verificar atualizacoes...',
+          label: 'Verificar atualizações...',
           accelerator: 'CmdOrCtrl+U',
           click: () => {
             if (isDev) {
               dialog.showMessageBox(mainWindow, {
                 type: 'info',
-                title: 'Atualizacoes',
-                message: 'Modo desenvolvimento: as atualizacoes so funcionam no app instalado.',
+                title: 'Atualizações',
+                message: 'Modo de desenvolvimento: as atualizações só funcionam no app instalado.',
                 buttons: ['OK']
               });
             } else {
-              dialog.showMessageBox(mainWindow, {
-                type: 'question',
-                title: 'Atualizacoes',
-                message: 'Deseja procurar por atualizacoes no sistema?',
-                buttons: ['Sim', 'Nao'],
-                defaultId: 0
-              }).then(({ response }) => {
-                if (response === 0) {
-                  autoUpdater.checkForUpdates();
-                }
-              });
+              isUserTriggeredUpdate = true;
+              createUpdateProgressWindow();
+              updateWinJS("addLog('Verificando atualizações...')");
+              autoUpdater.checkForUpdates();
             }
           }
         }
@@ -234,35 +254,71 @@ app.whenReady().then(() => {
     autoUpdater.checkForUpdates();
     startDailyUpdateCheck();
 
+    autoUpdater.on('checking-for-update', () => {
+      console.log('[auto-update] Checking for updates...');
+    });
+
     autoUpdater.on('update-available', (info) => {
       console.log('[auto-update] Update available:', info.version);
-      dialog.showMessageBox(mainWindow, {
-        type: 'info',
-        title: 'Atualizacao disponivel',
-        message: `Nova versao ${info.version} disponivel. Baixando...`,
-        buttons: ['OK']
-      });
+      if (!updateProgressWindow || updateProgressWindow.isDestroyed()) {
+        createUpdateProgressWindow();
+      }
+      updateWinJS(`addLog('Nova versão ${info.version} encontrada. Baixando...')`);
+      updateWinJS(`setStatus('Baixando v${info.version}...')`);
+    });
+
+    autoUpdater.on('update-not-available', (info) => {
+      console.log('[auto-update] No update available');
+      if (isUserTriggeredUpdate) {
+        updateWinJS("addLog('Nenhuma atualização disponível')");
+        updateWinJS("setStatus('Sistema atualizado')");
+        setTimeout(() => {
+          closeUpdateProgressWindow();
+          dialog.showMessageBox(mainWindow, {
+            type: 'info',
+            title: 'Atualizações',
+            message: 'Nenhuma atualização disponível. O sistema está atualizado.',
+            buttons: ['OK']
+          });
+          isUserTriggeredUpdate = false;
+        }, 1500);
+      }
+    });
+
+    autoUpdater.on('download-progress', (progress) => {
+      const pct = Math.round(progress.percent);
+      const speed = (progress.bytesPerSecond / 1024).toFixed(0);
+      console.log(`[auto-update] Download: ${pct}% (${speed} KB/s)`);
+      updateWinJS(`setProgress(${pct})`);
+      updateWinJS(`addLog('Download: ${pct}% (${speed} KB/s)')`);
     });
 
     autoUpdater.on('update-downloaded', (info) => {
       console.log('[auto-update] Update downloaded:', info.version);
-      dialog.showMessageBox(mainWindow, {
-        type: 'question',
-        title: 'Atualizacao pronta',
-        message: `Versao ${info.version} baixada. Reiniciar agora?`,
-        buttons: ['Reiniciar', 'Depois'],
-        defaultId: 0
-      }).then(({ response }) => {
-        if (response === 0) autoUpdater.quitAndInstall();
-      });
+      updateWinJS(`addLog('Versão ${info.version} baixada com sucesso')`);
+      updateWinJS("setStatus('Reiniciando...')");
+      setTimeout(() => {
+        closeUpdateProgressWindow();
+        isUserTriggeredUpdate = false;
+        autoUpdater.quitAndInstall();
+      }, 2000);
     });
 
     autoUpdater.on('error', (err) => {
-      console.log('[auto-update] Error:', err.message);
-    });
-
-    autoUpdater.on('download-progress', (progress) => {
-      console.log(`[auto-update] Download: ${Math.round(progress.percent)}%`);
+      console.log('[auto-update] Erro:', err.message);
+      if (isUserTriggeredUpdate || (updateProgressWindow && !updateProgressWindow.isDestroyed())) {
+        updateWinJS(`addLog('Erro: ${err.message.replace(/'/g, "\\'")}')`);
+        setTimeout(() => {
+          closeUpdateProgressWindow();
+          dialog.showMessageBox(mainWindow, {
+            type: 'error',
+            title: 'Erro de Atualização',
+            message: `Erro ao verificar atualizações: ${err.message}`,
+            buttons: ['OK']
+          });
+          isUserTriggeredUpdate = false;
+        }, 2000);
+      }
     });
   }
 

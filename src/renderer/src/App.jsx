@@ -121,6 +121,7 @@ export default function App() {
     machines,
     activeMachineId,
     setActiveMachineId,
+    setActiveMachine: setActiveMachineId,
     activeMachine,
     statuses,
     setStatuses,

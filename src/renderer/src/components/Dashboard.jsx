@@ -54,7 +54,7 @@ export default function Dashboard({ onConnect }) {
     }
     const tempMachine = {
       id: 'quick-' + Date.now(),
-      name: 'Conexao Direta',
+      name: 'Conexão Direta',
       host: ip,
       port: quickPort || 5900
     };
@@ -94,7 +94,7 @@ export default function Dashboard({ onConnect }) {
         {/* Minha Maquina card */}
         <div style={card}>
           <h2 style={{ fontSize: '14px', fontWeight: 600, marginBottom: '12px', textTransform: 'uppercase', letterSpacing: '0.5px', color: '#94a3b8' }}>
-            Minha Maquina (Agente)
+            Minha Máquina (Agente)
           </h2>
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '10px' }}>
             <span style={{
@@ -168,7 +168,7 @@ export default function Dashboard({ onConnect }) {
           <div style={{ display: 'flex', gap: '8px', alignItems: 'flex-end' }}>
             <div style={{ flex: 1 }}>
               <label style={{ display: 'block', fontSize: '11px', color: '#64748b', marginBottom: '4px' }}>
-                Endereco IP
+                Endereço IP
               </label>
               <input
                 type="text"
@@ -214,8 +214,8 @@ export default function Dashboard({ onConnect }) {
         {/* Status row */}
         <div style={{ fontSize: '12px', color: '#475569', textAlign: 'center', marginTop: '8px' }}>
           {serverStatus.running
-            ? `Pronto para receber conexoes na porta ${serverStatus.port}`
-            : 'Servidor de arquivos nao disponivel'}
+            ? `Pronto para receber conexões na porta ${serverStatus.port}`
+            : 'Servidor de arquivos não disponível'}
         </div>
       </div>
     </div>
