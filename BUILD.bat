@@ -52,7 +52,7 @@ echo.
 echo [4/4] Assinando o instalador...
 set SIGNTOOL="C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\signtool.exe"
 if exist %SIGNTOOL% (
-    %SIGNTOOL% sign /fd SHA256 /a /f %CERT_PFX% /p %CERT_PWD% /t http://timestamp.digicert.com "dist-electron\OpenPortal Remote Setup 1.0.0.exe" >nul 2>&1
+    %SIGNTOOL% sign /fd SHA256 /a /f %CERT_PFX% /p %CERT_PWD% /t http://timestamp.digicert.com "dist-electron\OpenPortal Remote Setup 1.0.1.exe" >nul 2>&1
     if %ERRORLEVEL% equ 0 (
         echo OK - Instalador assinado
     ) else (
@@ -67,7 +67,7 @@ echo ========================================
 echo  BUILD CONCLUIDO COM SUCESSO!
 echo ========================================
 echo.
-echo Instalador: dist-electron\OpenPortal Remote Setup 1.0.0.exe
+echo Instalador: dist-electron\OpenPortal Remote Setup 1.0.1.exe
 echo.
 echo Para confiar no app em outro PC:
 echo   1. Copie resources\cert.cer para o outro PC
