@@ -1,0 +1,13 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+
+  // Modelo padrao global (provider/model-id)
+  "model": "opencode-go/kimi-k3",
+
+  // Modelo leve: titulos, resumos, tarefas auxiliares
+  // TODO: trocar por um modelo barato do seu provider
+  "small_model": "opencode-go/kimi-k3",
+
+  // Agentes ficam em .opencode/agent/*.md (modelo por agente no frontmatter)
+  // architect = forte | coder = rapido | reviewer = leve
+}

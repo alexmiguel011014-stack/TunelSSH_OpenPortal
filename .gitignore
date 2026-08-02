@@ -14,3 +14,17 @@ Thumbs.db
 # Certificados auto-assinados (gerados pelo BUILD.bat)
 resources/cert.pfx
 resources/cert.cer
+
+# Repos de referencia (baixados pelo bootstrap)
+external/
+
+# Grafo de conhecimento
+graphify-out/
+
+# Mapa XML do RepoMix
+repomix-output.xml
+
+# Python
+.venv/
+venv/
+__pycache__/
