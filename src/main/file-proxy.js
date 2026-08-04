@@ -8,9 +8,15 @@ const IDLE_TIMEOUT = 30 * 60 * 1000;
 
 function isAllowedHost(host) {
   if (!host) return false;
-  if (host.startsWith('100.')) return true;
-  if (host.startsWith('10.') || host.startsWith('192.168.') || host.startsWith('172.')) return true;
   if (isDev && (host === '127.0.0.1' || host === 'localhost')) return true;
+  const parts = host.split('.');
+  if (parts.length !== 4) return false;
+  const a = parseInt(parts[0], 10);
+  const b = parseInt(parts[1], 10);
+  if (a === 100) return true;                                    // Tailscale (CGNAT 100.64/10)
+  if (a === 10) return true;                                     // 10/8
+  if (a === 192 && b === 168) return true;                       // 192.168/16
+  if (a === 172 && b >= 16 && b <= 31) return true;              // 172.16/12
   return false;
 }
 
@@ -25,6 +31,10 @@ function sendControl(ws, obj) {
 
 function startFileProxy(port = 18901) {
   const wss = new WebSocket.Server({ port });
+
+  wss.on('error', (err) => {
+    console.error(`[file-proxy] WebSocket server error (port ${port}):`, err.message);
+  });
 
   wss.on('connection', (ws, req) => {
     let tcpSocket = null;

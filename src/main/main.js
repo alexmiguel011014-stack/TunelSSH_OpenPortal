@@ -50,6 +50,10 @@ const FILE_SERVER_PORT = 5001;
 const isDev = process.env.NODE_ENV === 'development';
 const PROXY_PORT = 18900;
 
+if (!app.requestSingleInstanceLock()) {
+  app.quit();
+}
+
 function createWindow() {
   console.log('[main] Creating window...');
 
@@ -288,8 +292,8 @@ app.whenReady().then(() => {
   requestServer = new ConnectionRequestServer((req, respond) => handleConnectionRequest(req, respond));
   requestServer.start();
 
-  registerIpcHandlers(mainWindow);
   createWindow();
+  registerIpcHandlers(mainWindow);
 
   ipcMain.handle('app:checkUpdate', () => {
     if (!isDev) {
@@ -390,6 +394,13 @@ app.whenReady().then(() => {
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
+  });
+
+  app.on('second-instance', () => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.focus();
+    }
   });
 });
 

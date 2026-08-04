@@ -15,7 +15,7 @@ export default function RemoteViewer({ machine, reconnectFlag }) {
 
   const proxyUrl = `ws://127.0.0.1:18900`;
   const password = VNC_PASSWORDS[machine.host] || '';
-  const viewerUrl = `/noVNC/vnc.html?host=${machine.host}&port=${machine.port}&proxy=${encodeURIComponent(proxyUrl)}&password=${encodeURIComponent(password)}`;
+  const viewerUrl = `./noVNC/vnc.html?host=${machine.host}&port=${machine.port}&proxy=${encodeURIComponent(proxyUrl)}&password=${encodeURIComponent(password)}`;
 
   const sendResize = useCallback(() => {
     try {
@@ -68,9 +68,17 @@ export default function RemoteViewer({ machine, reconnectFlag }) {
 
   useEffect(() => {
     if (!containerRef.current || !window.ResizeObserver) return;
-    const ro = new ResizeObserver(() => sendResize());
+    let rafPending = false;
+    const ro = new ResizeObserver(() => {
+      if (rafPending) return;
+      rafPending = true;
+      requestAnimationFrame(() => {
+        rafPending = false;
+        sendResize();
+      });
+    });
     ro.observe(containerRef.current);
-    return () => ro.disconnect();
+    return () => { ro.disconnect(); };
   }, [sendResize]);
 
   return (

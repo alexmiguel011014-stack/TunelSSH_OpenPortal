@@ -33,6 +33,7 @@ class FileTransferConnection {
     this.ws = null;
     this.decoder = new FrameDecoder();
     this.pending = new Map();
+    this.pendingUploads = new Map();
     this.idCounter = 0;
     this.connected = false;
     this._resolveConnect = null;
@@ -142,6 +143,10 @@ class FileTransferConnection {
       entry.reject(new Error(reason));
     }
     this.pending.clear();
+    for (const [id, entry] of this.pendingUploads) {
+      entry.reject(new Error(reason));
+    }
+    this.pendingUploads.clear();
     this.currentGet = null;
   }
 
@@ -171,6 +176,24 @@ class FileTransferConnection {
         this.currentGet = null;
         if (getCb && getCb._callback) {
           getCb._callback(msg);
+        }
+        return;
+      }
+
+      if (msg.t === 'put_done') {
+        const entry = this.pendingUploads.get(msg.i);
+        if (entry) {
+          this.pendingUploads.delete(msg.i);
+          entry.resolve(msg);
+        }
+        return;
+      }
+
+      if (msg.t === 'put_res' && msg.s !== 'ok') {
+        const entry = this.pendingUploads.get(msg.i);
+        if (entry) {
+          this.pendingUploads.delete(msg.i);
+          entry.reject(new Error(msg.m || 'Upload failed'));
         }
         return;
       }
@@ -253,7 +276,7 @@ class FileTransferConnection {
     const totalSize = data.length;
 
     return new Promise((resolve, reject) => {
-      this.pending.set(id, { resolve, reject });
+      this.pendingUploads.set(id, { resolve, reject });
       try {
         this._sendJson({ t: 'put', p: remotePath, z: totalSize, i: id });
 
@@ -271,7 +294,7 @@ class FileTransferConnection {
         };
         setImmediate(sendChunks);
       } catch (err) {
-        this.pending.delete(id);
+        this.pendingUploads.delete(id);
         reject(err);
       }
     });

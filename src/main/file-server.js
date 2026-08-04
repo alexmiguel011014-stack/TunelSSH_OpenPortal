@@ -37,8 +37,17 @@ function sendBinaryEnd(socket) {
 function resolveSafePath(userPath) {
   if (!userPath || typeof userPath !== 'string') throw new Error('Invalid path');
   const normalized = path.normalize(userPath);
-  const fullPath = path.resolve(serverRootDir, normalized);
   const rootResolved = path.resolve(serverRootDir);
+
+  let fullPath;
+  if (normalized === '.' || normalized === '\\' || normalized === '/') {
+    fullPath = rootResolved;
+  } else if (path.isAbsolute(normalized)) {
+    fullPath = path.resolve(rootResolved, normalized.replace(/^[\\/]+/, ''));
+  } else {
+    fullPath = path.resolve(rootResolved, normalized);
+  }
+
   if (!fullPath.startsWith(rootResolved + path.sep) && fullPath !== rootResolved) {
     throw new Error('Access denied: path outside root directory');
   }
@@ -99,12 +108,14 @@ async function handleGet(socket, msg) {
 }
 
 async function handlePut(socket, msg) {
+  let filePath;
   try {
-    const filePath = resolveSafePath(msg.p);
+    filePath = resolveSafePath(msg.p);
+    socket._putState = { filePath, i: msg.i, chunks: [], totalReceived: 0, expectedSize: msg.z || 0, done: false };
     await fsp.mkdir(path.dirname(filePath), { recursive: true });
-    socket._putState = { filePath, chunks: [], totalReceived: 0, expectedSize: msg.z || 0, done: false };
     sendJson(socket, { t: 'put_res', i: msg.i, s: 'ok' });
   } catch (err) {
+    socket._putState = null;
     sendJson(socket, { t: 'put_res', i: msg.i, s: 'err', m: err.message });
   }
 }
@@ -123,9 +134,9 @@ async function finalizePut(socket) {
     } finally {
       await fd.close();
     }
-    sendJson(socket, { t: 'put_done', s: 'ok', p: state.filePath });
+    sendJson(socket, { t: 'put_done', i: state.i, s: 'ok', p: state.filePath });
   } catch (err) {
-    sendJson(socket, { t: 'put_done', s: 'err', m: err.message });
+    sendJson(socket, { t: 'put_done', i: (state && state.i), s: 'err', m: err.message });
   }
   socket._putState = null;
 }
