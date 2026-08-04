@@ -41,6 +41,8 @@ let wss = null;
 let fileWss = null;
 let updateProgressWindow = null;
 let isUserTriggeredUpdate = false;
+let pendingUpdateInfo = null;
+let updateConfirmed = false;
 const FILE_SERVER_PORT = 5001;
 
 const isDev = process.env.NODE_ENV === 'development';
@@ -125,6 +127,48 @@ function updateWinJS(code) {
   if (updateProgressWindow && !updateProgressWindow.isDestroyed()) {
     updateProgressWindow.webContents.executeJavaScript(code).catch(() => {});
   }
+}
+
+function beginUpdateDownload(info) {
+  updateConfirmed = true;
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.hide();
+  }
+  if (!updateProgressWindow || updateProgressWindow.isDestroyed()) {
+    createUpdateProgressWindow();
+  }
+  updateWinJS(`addLog('Baixando v${info.version}...')`);
+  updateWinJS(`setStatus('Baixando v${info.version}...')`);
+  updateWinJS('setProgress(0)');
+  autoUpdater.downloadUpdate();
+}
+
+function promptUpdate(info) {
+  const options = {
+    type: 'info',
+    title: 'Atualização disponível',
+    message: `Nova versão ${info.version} disponível.`,
+    detail: 'Deseja baixar e instalar agora? O aplicativo será fechado durante a instalação e reaberto automaticamente ao final.',
+    buttons: ['Baixar agora', 'Agora não'],
+    defaultId: 0,
+    cancelId: 1
+  };
+  const target = (mainWindow && !mainWindow.isDestroyed()) ? mainWindow : null;
+  if (!target) {
+    beginUpdateDownload(info);
+    return;
+  }
+  dialog.showMessageBox(target, options).then(({ response }) => {
+    if (response === 0) {
+      beginUpdateDownload(info);
+    } else {
+      closeUpdateProgressWindow();
+      isUserTriggeredUpdate = false;
+    }
+  }).catch(() => {
+    closeUpdateProgressWindow();
+    isUserTriggeredUpdate = false;
+  });
 }
 
 function buildAppMenu() {
@@ -246,6 +290,7 @@ app.whenReady().then(() => {
 
   if (!isDev) {
     autoUpdater.logger = console;
+    autoUpdater.autoDownload = false;
     autoUpdater.setFeedURL({
       provider: 'github',
       owner: 'alexmiguel011014-stack',
@@ -260,11 +305,8 @@ app.whenReady().then(() => {
 
     autoUpdater.on('update-available', (info) => {
       console.log('[auto-update] Update available:', info.version);
-      if (!updateProgressWindow || updateProgressWindow.isDestroyed()) {
-        createUpdateProgressWindow();
-      }
-      updateWinJS(`addLog('Nova versão ${info.version} encontrada. Baixando...')`);
-      updateWinJS(`setStatus('Baixando v${info.version}...')`);
+      pendingUpdateInfo = info;
+      promptUpdate(info);
     });
 
     autoUpdater.on('update-not-available', (info) => {
@@ -310,6 +352,9 @@ app.whenReady().then(() => {
         updateWinJS(`addLog('Erro: ${err.message.replace(/'/g, "\\'")}')`);
         setTimeout(() => {
           closeUpdateProgressWindow();
+          if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.show();
+          }
           dialog.showMessageBox(mainWindow, {
             type: 'error',
             title: 'Erro de Atualização',
