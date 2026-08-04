@@ -8,10 +8,17 @@ const { startFileServer, stopFileServer, getFileServerStatus } = require('./file
 const { registerIpcHandlers } = require('./ipc-handlers');
 const { ConnectionRequestServer } = require('./connection-request');
 
-// Configuração de logs em arquivo
-const projectDir = path.join(__dirname, '..', '..');
-const outLogPath = path.join(projectDir, 'electron-out.log');
-const errLogPath = path.join(projectDir, 'electron-err.log');
+// Configuração de logs em arquivo (diretório oficial de dados do usuário,
+// pois __dirname falha quando empacotado dentro do arquivo .asar)
+const logsDir = path.join(app.getPath('userData'), 'logs');
+if (!fs.existsSync(logsDir)) {
+  fs.mkdirSync(logsDir, { recursive: true });
+}
+const outLogPath = path.join(logsDir, 'electron-out.log');
+const errLogPath = path.join(logsDir, 'electron-err.log');
+
+console.log('[main] Log files:', outLogPath);
+console.error('[main] Log files:', errLogPath);
 
 const outStream = fs.createWriteStream(outLogPath, { flags: 'a' });
 const errStream = fs.createWriteStream(errLogPath, { flags: 'a' });

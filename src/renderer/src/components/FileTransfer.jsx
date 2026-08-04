@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useContext } from 'react';
+import { useState, useEffect, useCallback, useContext, useRef } from 'react';
 import { MachineContext } from '../App';
 
 const btn = {
@@ -275,29 +275,52 @@ export default function FileTransfer() {
     setRemoteLoading(false);
   }, [addLog]);
 
+  // Contador de sequência para descartar respostas de conexões antigas
+  // (protege contra race conditions do React Strict Mode e trocas de máquina)
+  const connectSeq = useRef(0);
+
+  const formatConnectError = (msg, host) => {
+    const detail = (msg || '').toLowerCase();
+    const isReachability = /timeout|timed ?out|econnrefused|refused|network.*unreachable|connect.*fail|closed|unable|can't connect/i.test(detail);
+    const base = `Não foi possível alcançar a porta 5001 em ${host}. Verifique se o app está aberto no PC remoto e se o Firewall liberou a porta.`;
+    return isReachability ? `${base} Detalhe: ${msg}` : (msg || base);
+  };
+
   const connect = useCallback(async () => {
-    if (!activeMachine || !activeMachine.host) return;
+    const host = activeMachine && activeMachine.host;
+    if (!host) return;
+    const seq = ++connectSeq.current;
     setError(null);
     setConnecting(true);
-    addLog('Conectando ao servidor de arquivos remoto...');
+    addLog(`Conectando ao servidor de arquivos remoto (${host}:5001)...`);
     try {
-      const res = await window.electronAPI.ftConnect(activeMachine.host, 5001);
+      const res = await window.electronAPI.ftConnect(host, 5001);
+      if (seq !== connectSeq.current) return;
       if (res.success) {
         setConnected(true);
-        addLog(`Conectado: ${activeMachine.host}`);
+        addLog(`Conectado: ${host}`);
+        setRemotePath('\\');
+        setRemoteEntries([]);
+        setRemoteError(null);
         loadRemoteDir('\\');
       } else {
-        const msg = res.error || 'Falha na conexao';
+        const msg = formatConnectError(res.error || 'Falha na conexao', host);
         setError(msg);
+        setConnected(false);
         addLog(`Erro: ${msg}`, 'error');
       }
     } catch (err) {
-      setError(err.message);
-      addLog(`Erro: ${err.message}`, 'error');
+      if (seq !== connectSeq.current) return;
+      const msg = formatConnectError(err.message, host);
+      setError(msg);
+      setConnected(false);
+      addLog(`Erro: ${msg}`, 'error');
+    } finally {
+      if (seq === connectSeq.current) setConnecting(false);
     }
-    setConnecting(false);
   }, [activeMachine, addLog, loadRemoteDir]);
 
+  // Carrega dados locais uma única vez (montagem do componente)
   useEffect(() => {
     window.electronAPI.getHomeDir().then(dir => {
       const normalized = dir.endsWith('\\') ? dir : dir + '\\';
@@ -306,9 +329,27 @@ export default function FileTransfer() {
     });
     window.electronAPI.getDrives().then(setDrives);
     window.electronAPI.getSpecialDirs().then(setSpecialDirs);
-    connect();
-    return () => { window.electronAPI.ftDisconnect(); };
   }, []);
+
+  // Conecta à máquina ativa; limpa o estado anterior ao trocar de máquina e
+  // descarta chamadas duplicadas/simultâneas de conexão (React Strict Mode)
+  useEffect(() => {
+    connectSeq.current++;
+    setConnected(false);
+    setConnecting(false);
+    setError(null);
+    setRemotePath('\\');
+    setRemoteEntries([]);
+    setRemoteError(null);
+    window.electronAPI.ftDisconnect();
+    if (activeMachine && activeMachine.host) {
+      connect(activeMachine.host);
+    }
+    return () => {
+      connectSeq.current++;
+      window.electronAPI.ftDisconnect();
+    };
+  }, [activeMachine && activeMachine.host]);
 
   useEffect(() => {
     const unsub = window.electronAPI?.onFtProgress((data) => {

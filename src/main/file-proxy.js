@@ -57,9 +57,11 @@ function startFileProxy(port = 18901) {
     tcpSocket = net.createConnection(targetPort, targetHost);
     tcpSocket.setNoDelay(true);
     tcpSocket.setKeepAlive(true, 5000);
+    console.log(`[file-proxy] Attempting TCP connection to ${targetHost}:${targetPort}`);
 
     const connectTimer = setTimeout(() => {
       if (!settled && !tcpSocket.destroyed) {
+        console.error(`[file-proxy] TCP timeout connecting to ${targetHost}:${targetPort}`);
         sendControl(ws, { t: 'tcp', s: 'err', m: 'Connection timeout' });
         tcpSocket.destroy(new Error('Connection timeout'));
       }
@@ -69,6 +71,7 @@ function startFileProxy(port = 18901) {
       settled = true;
       clearTimeout(connectTimer);
       tcpSocket.setTimeout(IDLE_TIMEOUT);
+      console.log(`[file-proxy] TCP connected to ${targetHost}:${targetPort}`);
       sendControl(ws, { t: 'tcp', s: 'ok' });
     });
 

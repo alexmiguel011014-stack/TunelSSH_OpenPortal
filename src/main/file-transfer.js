@@ -231,12 +231,14 @@ class FileTransferConnection {
 
   async listFiles(remotePath) {
     const id = ++this.idCounter;
+    console.log(`[file-transfer] listFiles: path="${remotePath}"`);
     return new Promise((resolve, reject) => {
       this.pending.set(id, { resolve, reject });
       try {
         this._sendJson({ t: 'list', p: remotePath, i: id });
       } catch (err) {
         this.pending.delete(id);
+        console.error(`[file-transfer] listFiles ERROR for path="${remotePath}": ${err.message}`);
         reject(err);
       }
     });
@@ -274,6 +276,7 @@ class FileTransferConnection {
   async uploadFile(remotePath, data, onProgress) {
     const id = ++this.idCounter;
     const totalSize = data.length;
+    console.log(`[file-transfer] uploadFile: path="${remotePath}", size=${totalSize} bytes`);
 
     return new Promise((resolve, reject) => {
       this.pendingUploads.set(id, { resolve, reject });
@@ -295,6 +298,7 @@ class FileTransferConnection {
         setImmediate(sendChunks);
       } catch (err) {
         this.pendingUploads.delete(id);
+        console.error(`[file-transfer] uploadFile ERROR for path="${remotePath}": ${err.message}`);
         reject(err);
       }
     });
@@ -334,8 +338,16 @@ async function connectFileTransfer(host, port) {
     activeConnection.disconnect();
   }
   const conn = new FileTransferConnection();
-  const proxyUrl = `ws://127.0.0.1:18901?host=${host}&port=${port || 5001}`;
-  await conn.connect(proxyUrl);
+  const targetPort = port || 5001;
+  const proxyUrl = `ws://127.0.0.1:18901?host=${host}&port=${targetPort}`;
+  console.log(`[file-transfer] connectFileTransfer -> proxy ws://127.0.0.1:18901, target host=${host}, port=${targetPort}`);
+  try {
+    await conn.connect(proxyUrl);
+    console.log(`[file-transfer] connectFileTransfer: CONNECTED to ${host}:${targetPort}`);
+  } catch (err) {
+    console.error(`[file-transfer] connectFileTransfer FAILED to ${host}:${targetPort}: ${err.message}`);
+    throw err;
+  }
   activeConnection = conn;
   return conn;
 }

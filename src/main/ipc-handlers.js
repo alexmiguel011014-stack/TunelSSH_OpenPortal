@@ -90,11 +90,15 @@ function registerIpcHandlers(mainWindow) {
 
   // File transfer handlers
   ipcMain.handle('ft:connect', async (_, host, port) => {
+    const targetPort = port || 5001;
+    console.log(`[ipc] ft:connect host=${host} port=${targetPort}`);
     try {
-      await connectFileTransfer(host, port || 5001);
+      await connectFileTransfer(host, targetPort);
+      console.log(`[ipc] ft:connect OK host=${host} port=${targetPort}`);
       send(mainWindow, 'ft:status', { state: 'connected', host });
       return { success: true };
     } catch (err) {
+      console.error(`[ipc] ft:connect FAILED host=${host} port=${targetPort}: ${err.message}`);
       send(mainWindow, 'ft:status', { state: 'error', message: err.message });
       return { success: false, error: err.message };
     }
@@ -107,12 +111,16 @@ function registerIpcHandlers(mainWindow) {
   });
 
   ipcMain.handle('ft:list', async (_, remotePath) => {
+    const p = remotePath || '\\';
+    console.log(`[ipc] ft:list path="${p}"`);
     try {
       const conn = getActiveConnection();
       if (!conn) throw new Error('Not connected');
-      const result = await conn.listFiles(remotePath || '\\');
+      const result = await conn.listFiles(p);
+      console.log(`[ipc] ft:list path="${p}" -> ${result.s === 'ok' ? (result.e || []).length + ' entries' : result.m}`);
       return result;
     } catch (err) {
+      console.error(`[ipc] ft:list path="${p}" ERROR: ${err.message}`);
       return { s: 'err', m: err.message };
     }
   });
@@ -153,6 +161,7 @@ function registerIpcHandlers(mainWindow) {
   });
 
   ipcMain.handle('ft:upload', async (_, remotePath, options) => {
+    console.log(`[ipc] ft:upload remotePath="${remotePath}"`);
     try {
       const conn = getActiveConnection();
       if (!conn) throw new Error('Not connected');
@@ -165,6 +174,7 @@ function registerIpcHandlers(mainWindow) {
       } else {
         throw new Error('No file data provided');
       }
+      console.log(`[ipc] ft:upload remotePath="${remotePath}" size=${data.length} bytes`);
 
       const result = await conn.uploadFile(remotePath, data, (sent, total) => {
         send(mainWindow, 'ft:progress', {
@@ -175,6 +185,7 @@ function registerIpcHandlers(mainWindow) {
           percent: total > 0 ? Math.round((sent / total) * 100) : 0
         });
       });
+      console.log(`[ipc] ft:upload remotePath="${remotePath}" -> ${result.s === 'ok' ? 'OK' : result.m}`);
 
       send(mainWindow, 'ft:progress', {
         type: 'upload',
