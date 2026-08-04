@@ -16,7 +16,7 @@ export default function Dashboard({ onConnect }) {
   const [localIp, setLocalIp] = useState('');
   const [copied, setCopied] = useState(false);
   const [quickIp, setQuickIp] = useState('');
-  const [quickPort, setQuickPort] = useState(5900);
+  const [connecting, setConnecting] = useState(false);
 
   useEffect(() => {
     window.electronAPI.getServerStatus().then(setServerStatus);
@@ -52,11 +52,35 @@ export default function Dashboard({ onConnect }) {
       addLog('Digite um IP para conectar', 'warn');
       return;
     }
+    if (connecting) return;
+    setConnecting(true);
+    addLog(`Solicitando conexão a ${ip}...`);
+
+    let localIp = '';
+    try {
+      const res = await window.electronAPI.getLocalIp();
+      localIp = (res && res.ip) || '';
+    } catch {}
+
+    try {
+      const reqRes = await window.electronAPI.requestConnection(ip, { fromIp: localIp });
+      if (!reqRes || !reqRes.success || !reqRes.approved) {
+        addLog(`Conexão recusada: ${(reqRes && reqRes.message) || 'não aprovada'}`, 'error');
+        return;
+      }
+    } catch (err) {
+      addLog(`Erro ao solicitar conexão: ${err.message}`, 'error');
+      return;
+    } finally {
+      setConnecting(false);
+    }
+
+    addLog('Conexão aceita pelo PC remoto. Abrindo visualização...');
     const tempMachine = {
       id: 'quick-' + Date.now(),
       name: 'Conexão Direta',
       host: ip,
-      port: quickPort || 5900
+      port: 5900
     };
     if (activeMachine) {
       try { await window.electronAPI.disconnectVnc(); } catch {}
@@ -64,7 +88,7 @@ export default function Dashboard({ onConnect }) {
     try {
       await window.electronAPI.connectVnc(tempMachine);
       setActiveMachine(tempMachine);
-      addLog(`Conectando a ${ip}:${quickPort}`);
+      addLog(`Conectando a ${ip}:5900`);
     } catch (err) {
       addLog(`Erro ao conectar: ${err.message}`, 'error');
     }
@@ -168,7 +192,7 @@ export default function Dashboard({ onConnect }) {
           <div style={{ display: 'flex', gap: '8px', alignItems: 'flex-end' }}>
             <div style={{ flex: 1 }}>
               <label style={{ display: 'block', fontSize: '11px', color: '#64748b', marginBottom: '4px' }}>
-                Endereço IP
+                Endereço IP do PC remoto
               </label>
               <input
                 type="text"
@@ -184,30 +208,16 @@ export default function Dashboard({ onConnect }) {
                 }}
               />
             </div>
-            <div style={{ width: '80px' }}>
-              <label style={{ display: 'block', fontSize: '11px', color: '#64748b', marginBottom: '4px' }}>
-                Porta
-              </label>
-              <input
-                type="number"
-                value={quickPort}
-                onChange={(e) => setQuickPort(parseInt(e.target.value) || 5900)}
-                onKeyDown={(e) => { if (e.key === 'Enter') handleQuickConnect(); }}
-                placeholder="5900"
-                style={{
-                  width: '100%', padding: '8px 10px', borderRadius: '6px',
-                  border: '1px solid #475569', background: '#0f172a', color: '#e2e8f0',
-                  fontSize: '14px', fontFamily: 'monospace', outline: 'none',
-                  boxSizing: 'border-box'
-                }}
-              />
-            </div>
-            <button onClick={handleQuickConnect} style={{
+            <button onClick={handleQuickConnect} disabled={connecting} style={{
               ...btn, padding: '8px 16px', background: '#2563eb', borderColor: '#2563eb',
-              color: '#fff', fontWeight: 500, whiteSpace: 'nowrap'
+              color: '#fff', fontWeight: 500, whiteSpace: 'nowrap',
+              opacity: connecting ? 0.6 : 1
             }}>
-              Conectar
+              {connecting ? 'Solicitando...' : 'Solicitar'}
             </button>
+          </div>
+          <div style={{ fontSize: '11px', color: '#64748b', marginTop: '8px' }}>
+            O PC remoto receberá um pedido de conexão e precisa aceitar.
           </div>
         </div>
 

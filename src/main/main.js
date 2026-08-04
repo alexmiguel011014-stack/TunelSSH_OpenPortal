@@ -6,6 +6,7 @@ const { startWebSocketProxy } = require('./proxy');
 const { startFileProxy } = require('./file-proxy');
 const { startFileServer, stopFileServer, getFileServerStatus } = require('./file-server');
 const { registerIpcHandlers } = require('./ipc-handlers');
+const { ConnectionRequestServer } = require('./connection-request');
 
 // Configuração de logs em arquivo
 const projectDir = path.join(__dirname, '..', '..');
@@ -39,6 +40,7 @@ process.on('unhandledRejection', (reason, promise) => {
 let mainWindow = null;
 let wss = null;
 let fileWss = null;
+let requestServer = null;
 let updateProgressWindow = null;
 let isUserTriggeredUpdate = false;
 let pendingUpdateInfo = null;
@@ -121,6 +123,22 @@ function createUpdateProgressWindow() {
   win.loadFile(path.join(__dirname, '..', '..', 'resources', 'update-progress.html'));
   win.on('closed', () => { updateProgressWindow = null; });
   updateProgressWindow = win;
+}
+
+function handleConnectionRequest(req, respond) {
+  const parent = (mainWindow && !mainWindow.isDestroyed()) ? mainWindow : undefined;
+  const options = {
+    type: 'question',
+    title: 'Solicitação de conexão',
+    message: `${req.fromName} quer se conectar a você.`,
+    detail: `IP de origem: ${req.fromIp || 'desconhecido'}\n\nAceita a conexão?`,
+    buttons: ['Aceitar', 'Rejeitar'],
+    defaultId: 0,
+    cancelId: 1
+  };
+  const finish = (approved) => respond({ type: 'connect-response', requestId: req.requestId, approved });
+  const show = parent ? dialog.showMessageBox(parent, options) : dialog.showMessageBox(options);
+  show.then(({ response }) => finish(response === 0)).catch(() => finish(false));
 }
 
 function updateWinJS(code) {
@@ -267,6 +285,9 @@ app.whenReady().then(() => {
     console.error(`[main] Failed to start file server: ${err.message}`);
   });
 
+  requestServer = new ConnectionRequestServer((req, respond) => handleConnectionRequest(req, respond));
+  requestServer.start();
+
   registerIpcHandlers(mainWindow);
   createWindow();
 
@@ -376,6 +397,7 @@ app.on('window-all-closed', () => {
   globalShortcut.unregisterAll();
   if (wss) wss.close();
   if (fileWss) fileWss.close();
+  if (requestServer) requestServer.stop();
   if (updateInterval) clearInterval(updateInterval);
   stopFileServer().then(() => console.log('[main] File server stopped'));
   if (process.platform !== 'darwin') app.quit();

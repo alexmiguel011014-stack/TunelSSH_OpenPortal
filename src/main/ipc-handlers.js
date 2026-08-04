@@ -2,7 +2,9 @@ const { ipcMain, app, dialog } = require('electron');
 const { readConfig, writeConfig } = require('./config-manager');
 const { connectFileTransfer, disconnectFileTransfer, getActiveConnection } = require('./file-transfer');
 const { getFileServerStatus } = require('./file-server');
+const { sendConnectRequest, SIGNAL_PORT } = require('./connection-request');
 const { execSync } = require('child_process');
+const os = require('os');
 const fs = require('fs');
 const fsp = require('fs/promises');
 const path = require('path');
@@ -38,6 +40,36 @@ function registerIpcHandlers(mainWindow) {
     return `ws://127.0.0.1:${PROXY_PORT}`;
   });
 
+  function getLocalTailscaleIp() {
+    try {
+      const output = execSync('tailscale ip -4', { encoding: 'utf8', timeout: 5000 });
+      const ip = output.trim().split('\n')[0];
+      if (ip) return ip;
+    } catch {}
+    try {
+      const interfaces = os.networkInterfaces();
+      for (const name of Object.keys(interfaces)) {
+        for (const iface of interfaces[name]) {
+          if (iface.family === 'IPv4' && iface.address.startsWith('100.')) {
+            return iface.address;
+          }
+        }
+      }
+    } catch {}
+    return '';
+  }
+
+  ipcMain.handle('connect:request', async (_, host, opts) => {
+    try {
+      const fromName = (opts && opts.fromName) || os.hostname() || 'PC';
+      const fromIp = (opts && opts.fromIp) || getLocalTailscaleIp();
+      const res = await sendConnectRequest(host, fromName, fromIp);
+      return { success: true, approved: res.approved, message: res.message };
+    } catch (err) {
+      return { success: false, approved: false, message: err.message };
+    }
+  });
+
   ipcMain.handle('app:version', () => {
     return app.getVersion();
   });
@@ -48,22 +80,7 @@ function registerIpcHandlers(mainWindow) {
   });
 
   ipcMain.handle('server:localIp', () => {
-    try {
-      const output = execSync('tailscale ip -4', { encoding: 'utf8', timeout: 5000 });
-      return { ip: output.trim() };
-    } catch {
-      try {
-        const interfaces = require('os').networkInterfaces();
-        for (const name of Object.keys(interfaces)) {
-          for (const iface of interfaces[name]) {
-            if (iface.family === 'IPv4' && iface.address.startsWith('100.')) {
-              return { ip: iface.address };
-            }
-          }
-        }
-      } catch {}
-      return { ip: '' };
-    }
+    return { ip: getLocalTailscaleIp() };
   });
 
   // File transfer handlers

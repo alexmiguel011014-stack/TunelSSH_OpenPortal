@@ -20,6 +20,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getServerStatus: () => ipcRenderer.invoke('server:status'),
   getLocalIp: () => ipcRenderer.invoke('server:localIp'),
 
+  // Connection request (Conectar por IP)
+  requestConnection: (host, opts) => ipcRenderer.invoke('connect:request', host, opts),
+
   // File transfer API
   ftConnect: (host, port) => ipcRenderer.invoke('ft:connect', host, port),
   ftDisconnect: () => ipcRenderer.invoke('ft:disconnect'),

@@ -15,6 +15,12 @@
 - Fix failures before delivering final response.
 - Always respond in the language used by the user in their prompt.
 
+## Git & GitHub Deploy
+- **Commit & push a cada mudança:** Após cada tarefa implementada e validada (build/teste passando), fazer `git add` dos arquivos relevantes, `git commit` com mensagem concisa e `git push` para o branch remoto para a pessoa testar nos dois PCs.
+- **Release (bump de versão + instalador + upload) SOMENTE sob ordem explícita da pessoa.** Nunca criar novo release/`latest.yml`/asset sem que o usuário ordene.
+- Inspecionar `git status`, `git diff` e `git log --oneline` antes de commitar; nunca commitar segredos (tokens/PATs).
+- Mensagens de commit no estilo do repositório, curtas e descritivas da mudança.
+
 ## GLOBAL ENVIRONMENT & TOOLING REQUERIMENTS
 - **Environment Dependency:** This environment relies on global CLI tools installed on the host machine (`gh`, `graphify`, `repomix`, `biome`).
 - **Initialization Check:** If `graphify-out/` or `repomix-output.xml` are missing in a new project, ALWAYS instruct the user to run `/bootstrap` or execute `.\bootstrap.ps1` in PowerShell.
