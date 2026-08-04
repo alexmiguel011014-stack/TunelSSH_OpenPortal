@@ -4,11 +4,23 @@ const { URL } = require('url');
 
 const isDev = process.env.NODE_ENV === 'development';
 
+const CONNECT_TIMEOUT = 10000;
+const IDLE_TIMEOUT = 30 * 60 * 1000;
+
+function isAllowedHost(host) {
+  if (!host) return false;
+  if (host.startsWith('100.')) return true;
+  if (host.startsWith('10.') || host.startsWith('192.168.') || host.startsWith('172.')) return true;
+  if (isDev && (host === '127.0.0.1' || host === 'localhost')) return true;
+  return false;
+}
+
 function startWebSocketProxy(port = 18900) {
   const wss = new WebSocket.Server({ port });
 
   wss.on('connection', (ws, req) => {
     let tcpSocket = null;
+    let settled = false;
 
     const url = new URL(req.url, 'http://localhost');
     const targetHost = url.searchParams.get('host');
@@ -19,8 +31,8 @@ function startWebSocketProxy(port = 18900) {
       return;
     }
 
-    if (!targetHost.startsWith('100.') && !(isDev && targetHost === '127.0.0.1')) {
-      ws.close(4002, 'Invalid host: must be Tailscale IP (100.x.x.x)');
+    if (!isAllowedHost(targetHost)) {
+      ws.close(4002, 'Invalid host: must be a private/Tailscale IP (100.x, 10.x, 192.168.x, 172.x)');
       return;
     }
 
@@ -29,8 +41,20 @@ function startWebSocketProxy(port = 18900) {
     tcpSocket.setNoDelay(true);
     tcpSocket.setKeepAlive(true, 5000);
 
+    const connectTimer = setTimeout(() => {
+      if (!settled && !tcpSocket.destroyed) {
+        tcpSocket.destroy(new Error('Connection timeout'));
+      }
+    }, CONNECT_TIMEOUT);
+
     tcpSocket.on('connect', () => {
-      // TCP connected — noVNC will start VNC handshake
+      settled = true;
+      clearTimeout(connectTimer);
+      tcpSocket.setTimeout(IDLE_TIMEOUT);
+    });
+
+    tcpSocket.on('timeout', () => {
+      if (!tcpSocket.destroyed) tcpSocket.destroy(new Error('Idle timeout'));
     });
 
     tcpSocket.on('data', (chunk) => {
@@ -46,6 +70,7 @@ function startWebSocketProxy(port = 18900) {
     });
 
     tcpSocket.on('error', (err) => {
+      clearTimeout(connectTimer);
       console.error(`[proxy] TCP error (${targetHost}:${targetPort}):`, err.message);
       if (ws.readyState === WebSocket.OPEN) {
         ws.close(4003, `TCP error: ${err.message}`);
@@ -53,18 +78,21 @@ function startWebSocketProxy(port = 18900) {
     });
 
     tcpSocket.on('close', () => {
+      clearTimeout(connectTimer);
       if (ws.readyState === WebSocket.OPEN) {
         ws.close(1000, 'TCP closed');
       }
     });
 
     ws.on('close', () => {
+      clearTimeout(connectTimer);
       if (tcpSocket && !tcpSocket.destroyed) {
         tcpSocket.destroy();
       }
     });
 
     ws.on('error', () => {
+      clearTimeout(connectTimer);
       if (tcpSocket && !tcpSocket.destroyed) {
         tcpSocket.destroy();
       }

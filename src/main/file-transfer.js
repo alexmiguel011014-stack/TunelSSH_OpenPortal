@@ -44,17 +44,15 @@ class FileTransferConnection {
     return new Promise((resolve, reject) => {
       this._resolveConnect = resolve;
       this._rejectConnect = reject;
+      this._connectTimeout = setTimeout(() => {
+        this._failConnect(new Error('Connection timeout'));
+      }, 15000);
 
       this.ws = new WebSocket(proxyUrl);
       this.ws.binaryType = 'nodebuffer';
 
       this.ws.on('open', () => {
         this.connected = true;
-        if (this._resolveConnect) {
-          this._resolveConnect();
-          this._resolveConnect = null;
-          this._rejectConnect = null;
-        }
       });
 
       this.ws.on('message', (data) => {
@@ -68,26 +66,42 @@ class FileTransferConnection {
       this.ws.on('close', () => {
         this.connected = false;
         this._rejectPending('Connection closed');
-        if (this._rejectConnect) {
-          this._rejectConnect(new Error('Connection closed'));
-          this._resolveConnect = null;
-          this._rejectConnect = null;
-        }
+        this._failConnect(new Error('Connection closed'));
       });
 
       this.ws.on('error', (err) => {
         this.connected = false;
         this._rejectPending(err.message);
-        if (this._rejectConnect) {
-          this._rejectConnect(err);
-          this._resolveConnect = null;
-          this._rejectConnect = null;
-        }
+        this._failConnect(err);
       });
     });
   }
 
+  _failConnect(err) {
+    clearTimeout(this._connectTimeout);
+    if (this._rejectConnect) {
+      this._rejectConnect(err);
+      this._resolveConnect = null;
+      this._rejectConnect = null;
+    }
+  }
+
+  _ackConnect(msg) {
+    clearTimeout(this._connectTimeout);
+    if (!this._resolveConnect) return;
+    if (msg.s === 'ok') {
+      this.connected = true;
+      this._resolveConnect();
+    } else {
+      this.connected = false;
+      this._rejectConnect(new Error(msg.m || 'Remote connection failed'));
+    }
+    this._resolveConnect = null;
+    this._rejectConnect = null;
+  }
+
   disconnect() {
+    this._failConnect(new Error('Disconnected'));
     if (this.ws) {
       this.ws.close();
       this.ws = null;
@@ -135,11 +149,19 @@ class FileTransferConnection {
     if (frame.type === MSG_JSON) {
       const msg = JSON.parse(frame.payload.toString('utf8'));
 
+      if (msg.t === 'tcp') {
+        this._ackConnect(msg);
+        return;
+      }
+
       if (msg.t === 'get_res' && msg.s === 'ok') {
+        const prev = this.currentGet || {};
         this.currentGet = {
           chunks: [],
           totalSize: msg.z,
-          receivedSize: 0
+          receivedSize: 0,
+          _callback: prev._callback,
+          _onProgress: prev._onProgress
         };
         return;
       }

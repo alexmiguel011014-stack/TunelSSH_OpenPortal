@@ -15,7 +15,7 @@ Thumbs.db
 resources/cert.pfx
 resources/cert.cer
 
-# Repos de referencia (baixados pelo bootstrap)
+# Token economy (base_project)
 external/
 
 # Grafo de conhecimento
