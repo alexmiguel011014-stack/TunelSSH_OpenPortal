@@ -71,6 +71,7 @@ jobs:
             Copy-Item $_.FullName $newname -Force
             Write-Host "Staged $($_.Name) -> $newname"
           }
+          if (Test-Path "$dist\latest.yml") { Copy-Item "$dist\latest.yml" "latest.yml" -Force }
           if (Test-Path "resources/cert.cer") { Copy-Item "resources/cert.cer" "cert.cer" -Force }
           Get-ChildItem | Where-Object { $_.Name -like "OpenPortal-Remote-Setup-*.exe*" -or $_.Name -eq "latest.yml" -or $_.Name -eq "cert.cer" } | Format-Table Name, Length
         env:

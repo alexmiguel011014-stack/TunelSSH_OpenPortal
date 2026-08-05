@@ -10,7 +10,9 @@ const raw = fs.readFileSync(pkgPath, 'utf8');
 const pkg = JSON.parse(raw);
 
 const base = pkg.version;
-const ts = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, '').replace('T', '.');
+const d = new Date();
+const pad = (n) => String(n).padStart(2, '0');
+const ts = `${d.getUTCFullYear()}${pad(d.getUTCMonth() + 1)}${pad(d.getUTCDate())}.${pad(d.getUTCHours())}${pad(d.getUTCMinutes())}${pad(d.getUTCSeconds())}`;
 const next = `${base}-dev.${ts}`;
 
 pkg.version = next;
