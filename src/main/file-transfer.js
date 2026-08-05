@@ -41,11 +41,15 @@ class FileTransferConnection {
     this.currentGet = null;
     this._activeGetId = null;
     this._onStatus = null;
+    this._suppressStatus = false;
+    this._connectAcknowledged = false;
     this._host = '';
     this._port = 0;
   }
 
   connect(proxyUrl) {
+    this._suppressStatus = false;
+    this._connectAcknowledged = false;
     return new Promise((resolve, reject) => {
       this._resolveConnect = resolve;
       this._rejectConnect = reject;
@@ -70,17 +74,29 @@ class FileTransferConnection {
 
       this.ws.on('close', (code, reason) => {
         const reasonStr = (reason && reason.toString()) || 'Connection closed';
+        const wasAcknowledged = this._connectAcknowledged;
         this.connected = false;
+        this._connectAcknowledged = false;
         this._rejectPending(reasonStr);
         this._failConnect(new Error(reasonStr));
-        this._notifyStatus('disconnected', reasonStr, code);
+        // Só notifica quedas depois do handshake `{t:'tcp', s:'ok'}` confirmado.
+        // Falhas antes do ACK rejeitam connect() e são tratadas pelo retorno IPC.
+        if (wasAcknowledged) {
+          this._notifyStatus('disconnected', reasonStr, code);
+        }
       });
 
       this.ws.on('error', (err) => {
+        const wasAcknowledged = this._connectAcknowledged;
         this.connected = false;
+        this._connectAcknowledged = false;
         this._rejectPending(err.message);
         this._failConnect(err);
-        this._notifyStatus('error', err.message);
+        // Idem ao close: sem ACK confirmado, o erro pertence ao connect() e
+        // deve ser entregue apenas pelo retorno IPC, não por ft:status.
+        if (wasAcknowledged) {
+          this._notifyStatus('error', err.message);
+        }
       });
     });
   }
@@ -99,9 +115,11 @@ class FileTransferConnection {
     if (!this._resolveConnect) return;
     if (msg.s === 'ok') {
       this.connected = true;
+      this._connectAcknowledged = true;
       this._resolveConnect();
     } else {
       this.connected = false;
+      this._connectAcknowledged = false;
       this._rejectConnect(new Error(msg.m || 'Remote connection failed'));
     }
     this._resolveConnect = null;
@@ -109,6 +127,11 @@ class FileTransferConnection {
   }
 
   disconnect() {
+    // Desconexão explícita: suprime notificações de status (o IPC `ft:disconnect`
+    // já comunica o estado) para que eventos assíncronos `error`/`close` desta
+    // instância não derrubem a UI depois que outra conexão já está ativa.
+    this._suppressStatus = true;
+    this._connectAcknowledged = false;
     this._failConnect(new Error('Disconnected'));
     if (this.ws) {
       try { this.ws.close(); } catch {}
@@ -116,7 +139,6 @@ class FileTransferConnection {
     }
     this.connected = false;
     this._rejectPending('Disconnected');
-    this._notifyStatus('disconnected', 'Disconnected by client');
   }
 
   setStatusListener(cb) {
@@ -124,6 +146,7 @@ class FileTransferConnection {
   }
 
   _notifyStatus(state, message, code) {
+    if (this._suppressStatus) return;
     if (this._onStatus) {
       try { this._onStatus({ state, message, host: this._host, port: this._port, code }); } catch {}
     }
@@ -157,16 +180,30 @@ class FileTransferConnection {
   }
 
   _rejectPending(reason) {
-    for (const [id, entry] of this.pending) {
-      clearTimeout(entry._timeout);
-      entry.reject(new Error(reason));
-    }
+    // Entradas de list/delete/mkdir possuem `reject`; entradas de download
+    // (states com `_callback`) não possuem `.reject` e são finalizadas via
+    // callback com { s: 'err' }. Usa snapshot antes de limpar os mapas para
+    // evitar iteração inválida quando o callback muta o estado.
+    const pendingEntries = Array.from(this.pending.values());
     this.pending.clear();
-    for (const [id, entry] of this.pendingUploads) {
-      clearTimeout(entry._timeout);
-      entry.reject(new Error(reason));
+    for (const entry of pendingEntries) {
+      if (entry._timeout) clearTimeout(entry._timeout);
+      if (typeof entry.reject === 'function') {
+        entry.reject(new Error(reason));
+      } else if (typeof entry._callback === 'function') {
+        entry._callback({ s: 'err', m: reason });
+      }
     }
+    const uploadEntries = Array.from(this.pendingUploads.values());
     this.pendingUploads.clear();
+    for (const entry of uploadEntries) {
+      if (entry._timeout) clearTimeout(entry._timeout);
+      if (typeof entry.reject === 'function') {
+        entry.reject(new Error(reason));
+      } else if (typeof entry._callback === 'function') {
+        entry._callback({ s: 'err', m: reason });
+      }
+    }
     this.currentGet = null;
     this._activeGetId = null;
   }
@@ -443,35 +480,67 @@ class FileTransferConnection {
 }
 
 let activeConnection = null;
+let connectingConnection = null;
 let activeStatusListener = null;
+let connectionGen = 0;
 
 async function connectFileTransfer(host, port) {
-  if (activeConnection) {
-    activeConnection.disconnect();
+  const gen = ++connectionGen;
+  // Desconecta qualquer conexão anterior (ativa ou ainda em andamento)
+  // para que somente a mais recente possa se tornar a conexão ativa.
+  if (connectingConnection) {
+    connectingConnection.disconnect();
+    connectingConnection = null;
   }
+  const prev = activeConnection;
+  activeConnection = null;
+  if (prev) {
+    prev.disconnect();
+  }
+
   const conn = new FileTransferConnection();
   conn._host = host;
   conn._port = port || 5001;
   if (activeStatusListener) conn.setStatusListener(activeStatusListener);
   const targetPort = port || 5001;
   const proxyUrl = `ws://127.0.0.1:18901?host=${host}&port=${targetPort}`;
-  console.log(`[file-transfer] connectFileTransfer -> proxy ws://127.0.0.1:18901, target host=${host}, port=${targetPort}`);
+  console.log(`[file-transfer] connectFileTransfer -> proxy ws://127.0.0.1:18901, target host=${host}, port=${targetPort} (gen=${gen})`);
+  connectingConnection = conn;
   try {
     await conn.connect(proxyUrl);
-    console.log(`[file-transfer] connectFileTransfer: CONNECTED to ${host}:${targetPort}`);
+    console.log(`[file-transfer] connectFileTransfer: CONNECTED to ${host}:${targetPort} (gen=${gen})`);
   } catch (err) {
+    if (connectingConnection === conn) connectingConnection = null;
+    if (gen === connectionGen) activeConnection = null;
+    // Encerra/suprime a instância que falhou (fecha o socket e marca
+    // `_suppressStatus`) para que eventos tardios `error`/`close` desta
+    // conexão obsoleta não alcancem o renderer. O erro original é re-lançado.
+    conn.disconnect();
     console.error(`[file-transfer] connectFileTransfer FAILED to ${host}:${targetPort}: ${err.message}`);
-    activeConnection = null;
     throw err;
   }
-  activeConnection = conn;
+  if (connectingConnection === conn) connectingConnection = null;
+  if (gen === connectionGen) {
+    activeConnection = conn;
+  } else {
+    // Uma conexão mais nova foi solicitada enquanto esta terminava:
+    // encerra esta e não substitui a atual.
+    console.log(`[file-transfer] connectFileTransfer: stale connection discarded (gen=${gen}, current=${connectionGen})`);
+    conn.disconnect();
+  }
   return conn;
 }
 
 function disconnectFileTransfer() {
-  if (activeConnection) {
-    activeConnection.disconnect();
-    activeConnection = null;
+  connectionGen++;
+  if (connectingConnection) {
+    connectingConnection.disconnect();
+    connectingConnection = null;
+  }
+  const prev = activeConnection;
+  activeConnection = null;
+  if (prev) {
+    prev.disconnect();
   }
 }
 

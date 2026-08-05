@@ -103,7 +103,10 @@ function registerIpcHandlers(mainWindow) {
       return { success: true };
     } catch (err) {
       console.error(`[ipc] ft:connect FAILED host=${host} port=${targetPort}: ${err.message}`);
-      send(mainWindow, 'ft:status', { state: 'error', message: err.message });
+      // Não emite ft:status aqui: o retorno { success:false, error } é tratado
+      // pelo renderer com connectSeq. Falhas pré-handshake rejeitam connect()
+      // no file-transfer e são entregues por este retorno; quedas naturais
+      // após uma conexão estabelecida seguem pelo status listener.
       return { success: false, error: err.message };
     }
   });

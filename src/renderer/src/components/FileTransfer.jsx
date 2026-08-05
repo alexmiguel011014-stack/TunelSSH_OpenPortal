@@ -335,6 +335,8 @@ export default function FileTransfer() {
   // Conecta à máquina ativa; limpa o estado anterior ao trocar de máquina.
   // Não desconecta no unmount: a sessão do file transfer é independente do
   // RemoteViewer (VNC) e deve sobreviver a alternar Files <-> Connect.
+  // O cleanup apenas invalida a sequência, descartando respostas de conexões
+  // antigas (ex.: dupla montagem do React Strict Mode) sem encerrar a sessão.
   useEffect(() => {
     const host = activeMachine && activeMachine.host;
     connectSeq.current++;
@@ -349,6 +351,9 @@ export default function FileTransfer() {
     if (host) {
       connect(host);
     }
+    return () => {
+      connectSeq.current++;
+    };
   }, [activeMachine && activeMachine.host]);
 
   useEffect(() => {
@@ -395,7 +400,7 @@ export default function FileTransfer() {
 
     const fileItems = items.filter(it => !it.d);
     if (fileItems.length === 0) {
-      addLog('Selecione apenas arquivos para baixar (pastas em breve)', 'warn');
+      addLog('Selecione apenas arquivos para receber (pastas em breve)', 'warn');
       return;
     }
 
@@ -414,22 +419,22 @@ export default function FileTransfer() {
         filters: []
       });
       if (!dlg || dlg.canceled || !dlg.filePath) {
-        addLog(`Download cancelado: ${sel.n}`);
+        addLog(`Recebimento cancelado: ${sel.n}`);
         return;
       }
 
-      addLog(`Baixando: ${sel.n}...`);
+      addLog(`Recebendo: ${sel.n}...`);
       try {
         const res = await window.electronAPI.ftDownload(remoteFull, { savePath: dlg.filePath });
         if (res && res.s === 'ok') {
-          addLog(`Arquivo baixado: ${sel.n} (${formatSize(res.size || sel.s)}) -> ${dlg.filePath}`);
+          addLog(`Arquivo recebido: ${sel.n} (${formatSize(res.size || sel.s)}) -> ${dlg.filePath}`);
           downloaded++;
         } else {
-          addLog(`Falha ao baixar ${sel.n}: ${(res && res.m) || 'erro'}`, 'error');
+          addLog(`Falha ao receber ${sel.n}: ${(res && res.m) || 'erro'}`, 'error');
           failed++;
         }
       } catch (err) {
-        addLog(`Erro ao baixar ${sel.n}: ${err.message}`, 'error');
+        addLog(`Erro ao receber ${sel.n}: ${err.message}`, 'error');
         failed++;
       }
     }
@@ -495,6 +500,8 @@ export default function FileTransfer() {
   }
 
   const canSend = connected && localSelected && localSelected.size > 0;
+  const remoteSelectedItems = remoteSelected ? [...remoteSelected].map(i => remoteEntries[i]).filter(Boolean) : [];
+  const canReceive = connected && remoteSelectedItems.some(it => !it.d);
 
   return (
     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', background: '#0f172a', color: '#e2e8f0', fontSize: '13px', overflow: 'hidden' }}>
@@ -534,6 +541,7 @@ export default function FileTransfer() {
           isLocal
           specialDirs={specialDirs}
           onSpecialDir={loadLocalDir}
+          selectable
         />
 
         {/* Center action bar */}
@@ -560,18 +568,28 @@ export default function FileTransfer() {
           )}
           <button
             onClick={handleDownloadSelected}
-            disabled={!connected || !remoteSelected || remoteSelected.size === 0}
-            title="Baixar arquivos selecionados do remoto"
+            disabled={!canReceive}
+            title={canReceive ? "Receber arquivos selecionados do remoto" : "Selecione arquivos no painel remoto para receber"}
             style={{
               ...btn, padding: '10px 12px', fontSize: '14px', fontWeight: 600,
-              background: (connected && remoteSelected && remoteSelected.size > 0) ? '#10b981' : '#1e293b',
-              borderColor: (connected && remoteSelected && remoteSelected.size > 0) ? '#10b981' : '#475569',
-              color: (connected && remoteSelected && remoteSelected.size > 0) ? '#fff' : '#64748b',
-              cursor: (connected && remoteSelected && remoteSelected.size > 0) ? 'pointer' : 'default',
-              opacity: (connected && remoteSelected && remoteSelected.size > 0) ? 1 : 0.4,
+              background: canReceive ? '#10b981' : '#0f172a',
+              borderColor: canReceive ? '#10b981' : '#334155',
+              color: canReceive ? '#fff' : '#475569',
+              cursor: canReceive ? 'pointer' : 'default',
+              opacity: canReceive ? 1 : 0.55,
               writingMode: 'vertical-lr', textOrientation: 'mixed', letterSpacing: '2px'
             }}
-          >Baixar do Remoto</button>
+          >Receber do Remoto</button>
+          {!connected && (
+            <span style={{ fontSize: '9px', color: '#94a3b8', textAlign: 'center', lineHeight: '1.4' }}>
+              Conecte-se<br />ao remoto
+            </span>
+          )}
+          {connected && (!remoteSelected || remoteSelected.size === 0) && (
+            <span style={{ fontSize: '9px', color: '#94a3b8', textAlign: 'center', lineHeight: '1.4' }}>
+              Selecione<br />arquivos remotos
+            </span>
+          )}
           {remoteSelected?.size > 0 && (
             <span style={{ fontSize: '10px', color: '#94a3b8', textAlign: 'center' }}>
               {remoteSelected.size} item(ns)
@@ -600,7 +618,7 @@ export default function FileTransfer() {
         {localSelected?.size > 0 && <span>{localSelected.size} selecionado(s)</span>}
         {remoteSelected?.size > 0 && <span>{remoteSelected.size} remoto(s)</span>}
         {transfer?.percent != null && (
-          <span>{transfer.type === 'download' ? `Baixando... ${transfer.percent}%` : `Enviando... ${transfer.percent}%`}</span>
+          <span>{transfer.type === 'download' ? `Recebendo... ${transfer.percent}%` : `Enviando... ${transfer.percent}%`}</span>
         )}
       </div>
     </div>
