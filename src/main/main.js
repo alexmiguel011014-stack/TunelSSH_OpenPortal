@@ -56,6 +56,8 @@ const FILE_SERVER_PORT = 5001;
 
 const isDev = process.env.NODE_ENV === 'development';
 const PROXY_PORT = 18900;
+const UPDATE_CHECK_INTERVAL_MS = parseInt(process.env.OPENPORTAL_UPDATE_INTERVAL_MS || (isDev ? (5 * 60 * 1000) : (15 * 60 * 1000)), 10);
+const ALLOW_PRERELEASE = process.env.OPENPORTAL_ALLOW_PRERELEASE !== 'false';
 
 if (!app.requestSingleInstanceLock()) {
   app.quit();
@@ -109,11 +111,12 @@ let updateInterval = null;
 
 function startDailyUpdateCheck() {
   if (!isDev) {
-    // Check every 24 hours
+    const intervalMs = UPDATE_CHECK_INTERVAL_MS;
+    console.log(`[auto-update] Periodic check every ${Math.round(intervalMs / 60000)} min`);
     updateInterval = setInterval(() => {
-      console.log('[auto-update] Daily check: checking for updates...');
+      console.log('[auto-update] Periodic check: checking for updates...');
       autoUpdater.checkForUpdates();
-    }, 24 * 60 * 60 * 1000);
+    }, intervalMs);
   }
 }
 
@@ -323,6 +326,7 @@ app.whenReady().then(() => {
   if (!isDev) {
     autoUpdater.logger = console;
     autoUpdater.autoDownload = false;
+    autoUpdater.allowPrerelease = ALLOW_PRERELEASE;
     autoUpdater.setFeedURL({
       provider: 'github',
       owner: 'alexmiguel011014-stack',
