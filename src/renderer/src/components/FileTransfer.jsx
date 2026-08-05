@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useContext, useRef } from 'react';
+import { useState, useEffect, useCallback, useContext, useRef, useMemo } from 'react';
 import { MachineContext } from '../App';
 
 const btn = {
@@ -25,8 +25,54 @@ const formatDate = (iso) => {
   }
 };
 
-function FilePanel({ title, path, entries, selected, onSelect, onNavigate, loading, drives, onDriveChange, isLocal, specialDirs, onSpecialDir, error, isConnecting, selectable }) {
+const transferBytesInfo = (t) => {
+  const cur = t.type === 'download' ? t.received : t.sent;
+  const total = t.total;
+  if (typeof cur !== 'number' || typeof total !== 'number' || total <= 0) return 'Processando...';
+  return `${formatSize(cur) || '0 B'} / ${formatSize(total) || '0 B'}`;
+};
+
+function FilePanel({ title, path, entries, selected, onSelect, onNavigate, loading, drives, onDriveChange, isLocal, specialDirs, onSpecialDir, error, isConnecting, selectable, onRefresh }) {
   const pathParts = path ? path.split('\\').filter(Boolean) : [];
+  const [query, setQuery] = useState('');
+  const [sortKey, setSortKey] = useState(null);
+  const [sortDir, setSortDir] = useState('asc');
+
+  const visibleIndices = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    let idxs = entries.map((_, i) => i);
+    if (q) idxs = idxs.filter(i => (entries[i].n || '').toLowerCase().includes(q));
+    if (sortKey) {
+      idxs = [...idxs].sort((a, b) => {
+        const ea = entries[a];
+        const eb = entries[b];
+        let r = 0;
+        if (sortKey === 'name') r = (ea.n || '').toLowerCase().localeCompare((eb.n || '').toLowerCase());
+        else if (sortKey === 'size') r = (ea.s || 0) - (eb.s || 0);
+        else r = new Date(ea.m || 0).getTime() - new Date(eb.m || 0).getTime();
+        return sortDir === 'asc' ? r : -r;
+      });
+    }
+    return idxs;
+  }, [entries, query, sortKey, sortDir]);
+
+  const toggleSort = (key) => {
+    if (sortKey === key) setSortDir(d => (d === 'asc' ? 'desc' : 'asc'));
+    else { setSortKey(key); setSortDir('asc'); }
+  };
+
+  const selSet = selected || new Set();
+  const allVisibleSelected = visibleIndices.length > 0 && visibleIndices.every(i => selSet.has(i));
+  const someVisibleSelected = visibleIndices.some(i => selSet.has(i));
+
+  const toggleSelectAll = () => {
+    const sel = new Set(selSet);
+    if (allVisibleSelected) visibleIndices.forEach(i => sel.delete(i));
+    else visibleIndices.forEach(i => sel.add(i));
+    onSelect(sel);
+  };
+
+  const sortIndicator = (key) => (sortKey === key ? (sortDir === 'asc' ? ' \u2191' : ' \u2193') : '');
 
   return (
     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', borderRight: isLocal ? '1px solid #334155' : 'none', minWidth: 0 }}>
@@ -68,13 +114,13 @@ function FilePanel({ title, path, entries, selected, onSelect, onNavigate, loadi
             <span style={{ color: '#64748b', fontSize: '11px' }}>{path}</span>
           ) : (
             <>
-              <span style={{ color: '#3b82f6', cursor: 'pointer' }} onClick={() => onNavigate(path.slice(0, path.indexOf(pathParts[0])))}>
-                {path.slice(0, 3)}
+              <span style={{ color: '#3b82f6', cursor: 'pointer' }} onClick={() => onNavigate(pathParts[0] + '\\')}>
+                {pathParts[0]}
               </span>
-              {pathParts.map((part, i) => (
+              {pathParts.slice(1).map((part, i) => (
                 <span key={i} style={{ display: 'flex', gap: '2px', alignItems: 'center' }}>
                   <span style={{ color: '#475569' }}>\</span>
-                  <span style={{ cursor: 'pointer', color: '#e2e8f0' }} onClick={() => onNavigate(path.slice(0, path.indexOf(part)) + part + '\\')}>
+                  <span style={{ cursor: 'pointer', color: '#e2e8f0' }} onClick={() => onNavigate(pathParts.slice(0, i + 2).join('\\') + '\\')}>
                     {part}
                   </span>
                 </span>
@@ -96,6 +142,25 @@ function FilePanel({ title, path, entries, selected, onSelect, onNavigate, loadi
         )}
       </div>
 
+      {/* Toolbar (filter + refresh) */}
+      {!loading && !error && !isConnecting && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '4px 10px', background: '#0f172a', borderBottom: '1px solid #1e293b' }}>
+          <input
+            type="text"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Filtrar..."
+            style={{
+              flex: 1, minWidth: 0, background: '#0f172a', border: '1px solid #334155',
+              borderRadius: '4px', color: '#e2e8f0', fontSize: '12px', padding: '3px 8px', outline: 'none'
+            }}
+          />
+          {onRefresh && (
+            <button onClick={onRefresh} style={{ ...btn, padding: '3px 10px', fontSize: '11px', whiteSpace: 'nowrap' }}>Atualizar</button>
+          )}
+        </div>
+      )}
+
       {/* Content */}
       <div style={{ flex: 1, overflow: 'auto' }}>
         {isConnecting && (
@@ -115,106 +180,130 @@ function FilePanel({ title, path, entries, selected, onSelect, onNavigate, loadi
           <div style={{ padding: '20px', textAlign: 'center', color: '#64748b', fontSize: '12px' }}>Carregando...</div>
         )}
 
-        {!loading && !error && !isConnecting && entries.length === 0 && (
-          <div style={{ padding: '20px', textAlign: 'center', color: '#64748b', fontSize: '12px' }}>Pasta vazia</div>
-        )}
-
-        {/* Header row */}
-        {!loading && !error && !isConnecting && entries.length > 0 && (
-          <div style={{
-            display: 'flex', alignItems: 'center', padding: '4px 10px', gap: '8px',
-            borderBottom: '1px solid #1e293b', fontSize: '11px', color: '#64748b', fontWeight: 600
-          }}>
-            {selectable && <span style={{ width: '22px' }}></span>}
-            <span style={{ flex: 1 }}>Nome</span>
-            <span style={{ width: '80px', textAlign: 'right' }}>Tamanho</span>
-            <span style={{ width: '140px', textAlign: 'right' }}>Modificado</span>
-          </div>
-        )}
-
-        {/* ".." parent entry */}
-        {!loading && !error && !isConnecting && path && (isLocal ? pathParts.length > 0 : pathParts.length > 0) && (
-          <div style={{
-            display: 'flex', alignItems: 'center', padding: '4px 10px', cursor: 'pointer',
-            borderBottom: '1px solid #1e293b', gap: '8px', color: '#94a3b8', fontSize: '13px'
-          }} onClick={() => {
-            if (isLocal) {
-              const parent = path.replace(/\\$/, '').split('\\').slice(0, -1).join('\\') + '\\';
-              onNavigate(parent.match(/^[A-Z]:\\$/i) ? parent : parent.replace(/\\\\/g, '\\') || 'C:\\');
-            } else {
-              const pp = path.split('\\').filter(Boolean);
-              pp.pop();
-              onNavigate(pp.length === 0 ? '\\' : '\\' + pp.join('\\'));
-            }
-          }}>
-            {isLocal && <span style={{ width: '22px' }}></span>}
-            <span style={{ width: '18px', textAlign: 'center', fontSize: '14px', opacity: 0.6 }}>..</span>
-            <span style={{ flex: 1 }}>Voltar</span>
-            <span style={{ width: '80px' }}></span>
-            <span style={{ width: '140px' }}></span>
-          </div>
-        )}
-
-        {/* File entries */}
-        {!loading && !error && !isConnecting && entries.map((entry, i) => {
-          const isSelected = selectable ? selected?.has(i) : false;
-          return (
-            <div
-              key={i}
-              style={{
-                display: 'flex', alignItems: 'center', padding: '4px 10px', gap: '8px',
-                cursor: 'pointer', borderBottom: '1px solid #1e293b',
-                background: isSelected ? '#1e3a5f' : 'transparent',
-                color: entry.d ? '#e2e8f0' : '#cbd5e1'
-              }}
-              onClick={(e) => {
-                if (!selectable) return;
-                const sel = new Set(selected || []);
-                if (e.ctrlKey || e.metaKey) {
-                  if (sel.has(i)) sel.delete(i); else sel.add(i);
-                } else {
-                  sel.clear(); sel.add(i);
-                }
-                onSelect(sel);
-              }}
-              onDoubleClick={() => {
-                if (entry.d) {
-                  onNavigate(isLocal ? path.replace(/\\$/, '') + '\\' + entry.n : (path.endsWith('\\') ? path : path + '\\') + entry.n);
-                  if (selectable) onSelect(new Set());
-                }
-              }}
-            >
-              {/* Checkbox (selectable) */}
+        {!loading && !error && !isConnecting && (
+          <>
+            {/* Header row */}
+            <div style={{
+              display: 'flex', alignItems: 'center', padding: '4px 10px', gap: '8px',
+              borderBottom: '1px solid #1e293b', fontSize: '11px', color: '#64748b', fontWeight: 600
+            }}>
               {selectable && (
                 <span style={{ width: '22px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                   <input
                     type="checkbox"
-                    checked={isSelected}
-                    onChange={() => {}}
-                    style={{ cursor: 'pointer', accentColor: '#3b82f6' }}
-                    onClick={(e) => { e.stopPropagation(); const sel = new Set(selected || []); if (sel.has(i)) sel.delete(i); else sel.add(i); onSelect(sel); }}
+                    checked={allVisibleSelected}
+                    onChange={toggleSelectAll}
+                    ref={(el) => { if (el) el.indeterminate = someVisibleSelected && !allVisibleSelected; }}
+                    style={{ cursor: 'pointer', accentColor: '#3b82f6', margin: 0 }}
                   />
                 </span>
               )}
-              {/* Icon */}
-              <span style={{ width: '18px', textAlign: 'center', fontSize: '14px', opacity: 0.7 }}>
-                {entry.d ? '\uD83D\uDCC1' : '\uD83D\uDCC4'}
+              <span style={{ flex: 1, cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleSort('name')}>
+                Nome{sortIndicator('name')}
               </span>
-              {/* Name */}
-              <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: '13px' }}>
-                {entry.n}
+              <span style={{ width: '80px', textAlign: 'right', cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleSort('size')}>
+                Tamanho{sortIndicator('size')}
               </span>
-              {/* Size */}
-              <span style={{ width: '80px', textAlign: 'right', color: '#64748b', fontSize: '11px', whiteSpace: 'nowrap' }}>
-                {entry.d ? '' : formatSize(entry.s)}
-              </span>
-              {/* Date */}
-              <span style={{ width: '140px', textAlign: 'right', color: '#64748b', fontSize: '11px', whiteSpace: 'nowrap' }}>
-                {formatDate(entry.m)}
+              <span style={{ width: '140px', textAlign: 'right', cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleSort('date')}>
+                Modificado{sortIndicator('date')}
               </span>
             </div>
-          );
-        })}
+
+            {entries.length === 0 ? (
+              <div style={{ padding: '20px', textAlign: 'center', color: '#64748b', fontSize: '12px' }}>Pasta vazia</div>
+            ) : (
+              <>
+                {/* ".." parent entry */}
+                {path && ((isLocal && pathParts.length > 1) || (!isLocal && pathParts.length > 0)) && (
+                  <div style={{
+                    display: 'flex', alignItems: 'center', padding: '4px 10px', cursor: 'pointer',
+                    borderBottom: '1px solid #1e293b', gap: '8px', color: '#94a3b8', fontSize: '13px'
+                  }} onClick={() => {
+                    if (isLocal) {
+                      const parent = path.replace(/\\$/, '').split('\\').slice(0, -1).join('\\') + '\\';
+                      onNavigate(parent.match(/^[A-Z]:\\$/i) ? parent : parent.replace(/\\\\/g, '\\') || 'C:\\');
+                    } else {
+                      const pp = path.split('\\').filter(Boolean);
+                      pp.pop();
+                      onNavigate(pp.length === 0 ? '\\' : '\\' + pp.join('\\'));
+                    }
+                  }}>
+                    {isLocal && <span style={{ width: '22px' }}></span>}
+                    <span style={{ width: '18px', textAlign: 'center', fontSize: '14px', opacity: 0.6 }}>..</span>
+                    <span style={{ flex: 1 }}>Voltar</span>
+                    <span style={{ width: '80px' }}></span>
+                    <span style={{ width: '140px' }}></span>
+                  </div>
+                )}
+
+                {visibleIndices.length === 0 ? (
+                  <div style={{ padding: '20px', textAlign: 'center', color: '#64748b', fontSize: '12px' }}>
+                    Nenhum item encontrado para &quot;{query}&quot;
+                  </div>
+                ) : visibleIndices.map(idx => {
+                  const entry = entries[idx];
+                  const isSelected = selectable ? selSet.has(idx) : false;
+                  return (
+                    <div
+                      key={idx}
+                      style={{
+                        display: 'flex', alignItems: 'center', padding: '4px 10px', gap: '8px',
+                        cursor: 'pointer', borderBottom: '1px solid #1e293b',
+                        background: isSelected ? '#1e3a5f' : 'transparent',
+                        color: entry.d ? '#e2e8f0' : '#cbd5e1'
+                      }}
+                      onClick={(e) => {
+                        if (!selectable) return;
+                        const sel = new Set(selSet);
+                        if (e.ctrlKey || e.metaKey) {
+                          if (sel.has(idx)) sel.delete(idx); else sel.add(idx);
+                        } else {
+                          sel.clear(); sel.add(idx);
+                        }
+                        onSelect(sel);
+                      }}
+                      onDoubleClick={() => {
+                        if (entry.d) {
+                          onNavigate(isLocal ? path.replace(/\\$/, '') + '\\' + entry.n : (path.endsWith('\\') ? path : path + '\\') + entry.n);
+                          if (selectable) onSelect(new Set());
+                        }
+                      }}
+                    >
+                      {/* Checkbox (selectable) */}
+                      {selectable && (
+                        <span style={{ width: '22px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                          <input
+                            type="checkbox"
+                            checked={isSelected}
+                            onChange={() => {}}
+                            style={{ cursor: 'pointer', accentColor: '#3b82f6' }}
+                            onClick={(e) => { e.stopPropagation(); const sel = new Set(selSet); if (sel.has(idx)) sel.delete(idx); else sel.add(idx); onSelect(sel); }}
+                          />
+                        </span>
+                      )}
+                      {/* Icon */}
+                      <span style={{ width: '18px', textAlign: 'center', fontSize: '14px', opacity: 0.7 }}>
+                        {entry.d ? '\uD83D\uDCC1' : '\uD83D\uDCC4'}
+                      </span>
+                      {/* Name */}
+                      <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: '13px' }}>
+                        {entry.n}
+                      </span>
+                      {/* Size */}
+                      <span style={{ width: '80px', textAlign: 'right', color: '#64748b', fontSize: '11px', whiteSpace: 'nowrap' }}>
+                        {entry.d ? '' : formatSize(entry.s)}
+                      </span>
+                      {/* Date */}
+                      <span style={{ width: '140px', textAlign: 'right', color: '#64748b', fontSize: '11px', whiteSpace: 'nowrap' }}>
+                        {formatDate(entry.m)}
+                      </span>
+                    </div>
+                  );
+                })}
+              </>
+            )}
+          </>
+        )}
       </div>
     </div>
   );
@@ -565,20 +654,29 @@ export default function FileTransfer() {
     );
   }
 
-  const canSend = connected && localSelected && localSelected.size > 0;
+  const transferActive = transfer && !transfer.done;
+  const canSend = connected && localSelected && localSelected.size > 0 && !transferActive;
   const remoteSelectedItems = remoteSelected ? [...remoteSelected].map(i => remoteEntries[i]).filter(Boolean) : [];
-  const canReceive = connected && remoteSelectedItems.length > 0;
+  const canReceive = connected && remoteSelectedItems.length > 0 && !transferActive;
 
   return (
     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', background: '#0f172a', color: '#e2e8f0', fontSize: '13px', overflow: 'hidden' }}>
-      {/* Progress bar */}
+      {/* Progress block */}
       {transfer && transfer.type && (
-        <div style={{ borderBottom: '1px solid #1e293b' }}>
-          <div style={{ padding: '3px 12px', fontSize: '11px', color: '#94a3b8', display: 'flex', justifyContent: 'space-between' }}>
-            <span>{transfer.fileName || transfer.path?.split('\\').pop() || ''}</span>
-            <span>{transfer.percent || 0}%</span>
+        <div style={{ padding: '6px 12px', background: '#1e293b', borderBottom: '1px solid #334155' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px', fontSize: '12px' }}>
+            <span style={{ fontWeight: 600, color: transfer.type === 'download' ? '#10b981' : '#3b82f6' }}>
+              {transfer.type === 'download' ? '\u2B07 Recebendo' : '\u2B06 Enviando'}
+            </span>
+            <span style={{ color: '#e2e8f0', fontWeight: 600 }}>{transfer.percent || 0}%</span>
           </div>
-          <div style={{ height: '3px', background: '#1e293b', margin: '0 12px 4px', borderRadius: '2px', overflow: 'hidden' }}>
+          <div style={{ fontSize: '11px', color: '#94a3b8', marginTop: '2px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {transfer.fileName || transfer.path?.split('\\').pop() || ''}
+          </div>
+          <div style={{ fontSize: '11px', color: '#64748b', marginTop: '2px' }}>
+            {transferBytesInfo(transfer)}
+          </div>
+          <div style={{ height: '4px', background: '#0f172a', marginTop: '4px', borderRadius: '2px', overflow: 'hidden' }}>
             <div style={{ height: '100%', background: '#3b82f6', width: `${transfer.percent || 0}%`, borderRadius: '2px', transition: 'width 0.2s' }} />
           </div>
         </div>
@@ -607,60 +705,63 @@ export default function FileTransfer() {
           isLocal
           specialDirs={specialDirs}
           onSpecialDir={loadLocalDir}
+          onRefresh={() => loadLocalDir(localPath)}
           selectable
         />
 
         {/* Center action bar */}
         <div style={{
-          width: '80px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+          width: '120px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
           background: '#1e293b', gap: '12px', borderLeft: '1px solid #334155', borderRight: '1px solid #334155'
         }}>
-          <button
-            onClick={handleUploadSelected}
-            disabled={!canSend}
-            title="Enviar selecionados para o remoto"
-            style={{
-              ...btn, padding: '10px 12px', fontSize: '14px', fontWeight: 600,
-              background: canSend ? '#2563eb' : '#1e293b',
-              borderColor: canSend ? '#3b82f6' : '#475569', color: canSend ? '#fff' : '#64748b',
-              cursor: canSend ? 'pointer' : 'default', opacity: canSend ? 1 : 0.4,
-              writingMode: 'vertical-lr', textOrientation: 'mixed', letterSpacing: '2px'
-            }}
-          >Enviar para Remoto</button>
-          {localSelected?.size > 0 && (
-            <span style={{ fontSize: '10px', color: '#94a3b8', textAlign: 'center' }}>
-              {localSelected.size} item(ns)
-            </span>
-          )}
-          <button
-            onClick={handleDownloadSelected}
-            disabled={!canReceive}
-            title={canReceive ? "Receber arquivos e pastas selecionados do remoto" : "Selecione arquivos ou pastas no painel remoto para receber"}
-            style={{
-              ...btn, padding: '10px 12px', fontSize: '14px', fontWeight: 600,
-              background: canReceive ? '#10b981' : '#0f172a',
-              borderColor: canReceive ? '#10b981' : '#334155',
-              color: canReceive ? '#fff' : '#475569',
-              cursor: canReceive ? 'pointer' : 'default',
-              opacity: canReceive ? 1 : 0.55,
-              writingMode: 'vertical-lr', textOrientation: 'mixed', letterSpacing: '2px'
-            }}
-          >Receber do Remoto</button>
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '4px' }}>
+            <button
+              onClick={handleUploadSelected}
+              disabled={!canSend}
+              title="Enviar selecionados para o remoto"
+              style={{
+                ...btn, padding: '8px 14px', fontSize: '13px', fontWeight: 600, whiteSpace: 'nowrap',
+                background: canSend ? '#2563eb' : '#1e293b',
+                borderColor: canSend ? '#3b82f6' : '#475569', color: canSend ? '#fff' : '#64748b',
+                cursor: canSend ? 'pointer' : 'default', opacity: canSend ? 1 : 0.4
+              }}
+            >Enviar <span style={{ fontWeight: 700 }}>→</span></button>
+            {localSelected?.size > 0 && (
+              <span style={{ fontSize: '10px', color: '#94a3b8', textAlign: 'center' }}>
+                {localSelected.size} item(ns) selecionado(s)
+              </span>
+            )}
+          </div>
           {!connected && (
-            <span style={{ fontSize: '9px', color: '#94a3b8', textAlign: 'center', lineHeight: '1.4' }}>
-              Conecte-se<br />ao remoto
+            <span style={{ fontSize: '10px', color: '#94a3b8', textAlign: 'center', lineHeight: '1.4' }}>
+              Conecte-se ao remoto
             </span>
           )}
           {connected && (!remoteSelected || remoteSelected.size === 0) && (
-            <span style={{ fontSize: '9px', color: '#94a3b8', textAlign: 'center', lineHeight: '1.4' }}>
-              Selecione<br />itens remotos
+            <span style={{ fontSize: '10px', color: '#94a3b8', textAlign: 'center', lineHeight: '1.4' }}>
+              Selecione itens remotos
             </span>
           )}
-          {remoteSelected?.size > 0 && (
-            <span style={{ fontSize: '10px', color: '#94a3b8', textAlign: 'center' }}>
-              {remoteSelected.size} item(ns)
-            </span>
-          )}
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '4px' }}>
+            <button
+              onClick={handleDownloadSelected}
+              disabled={!canReceive}
+              title={canReceive ? "Receber arquivos e pastas selecionados do remoto" : "Selecione arquivos ou pastas no painel remoto para receber"}
+              style={{
+                ...btn, padding: '8px 14px', fontSize: '13px', fontWeight: 600, whiteSpace: 'nowrap',
+                background: canReceive ? '#10b981' : '#0f172a',
+                borderColor: canReceive ? '#10b981' : '#334155',
+                color: canReceive ? '#fff' : '#475569',
+                cursor: canReceive ? 'pointer' : 'default',
+                opacity: canReceive ? 1 : 0.55
+              }}
+            ><span style={{ fontWeight: 700 }}>←</span> Receber</button>
+            {remoteSelected?.size > 0 && (
+              <span style={{ fontSize: '10px', color: '#94a3b8', textAlign: 'center' }}>
+                {remoteSelected.size} item(ns) selecionado(s)
+              </span>
+            )}
+          </div>
         </div>
 
         <FilePanel
@@ -674,6 +775,7 @@ export default function FileTransfer() {
           isLocal={false}
           error={remoteError}
           isConnecting={connecting}
+          onRefresh={() => loadRemoteDir(remotePath)}
           selectable
         />
       </div>
