@@ -222,9 +222,11 @@ class FileTransferConnection {
         if (entry && entry.kind === 'get') {
           entry.totalSize = msg.z;
           entry.basename = msg.n;
+          if (typeof entry._restartTimeout === 'function') entry._restartTimeout();
         } else if (this.currentGet) {
           this.currentGet.totalSize = msg.z;
           this.currentGet.basename = msg.n;
+          if (typeof this.currentGet._restartTimeout === 'function') this.currentGet._restartTimeout();
         }
         return;
       }
@@ -288,6 +290,7 @@ class FileTransferConnection {
       if (target && !target.done) {
         target.chunks.push(frame.payload);
         target.receivedSize += frame.payload.length;
+        if (typeof target._restartTimeout === 'function') target._restartTimeout();
         if (target._onProgress) {
           target._onProgress(target.receivedSize, target.totalSize);
         }
@@ -372,9 +375,16 @@ class FileTransferConnection {
           finish(null, Buffer.concat(state.chunks), state.totalSize);
         }
       };
-      state._timeout = setTimeout(() => {
-        finish(new Error(`Timeout aguardando get_res (id=${id})`));
-      }, 30000);
+      // Janela de inatividade: reinicia o timer a cada get_res OK e a cada
+      // MSG_BINARY recebido. O download só aborta se não houver resposta nem
+      // chunk por 30s; finish() é quem garante o clearTimeout final.
+      state._restartTimeout = () => {
+        clearTimeout(state._timeout);
+        state._timeout = setTimeout(() => {
+          finish(new Error(`Timeout sem resposta ou dados (id=${id})`));
+        }, 30000);
+      };
+      state._restartTimeout();
 
       this.pending.set(id, state);
       this._activeGetId = id;

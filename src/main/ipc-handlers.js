@@ -290,6 +290,151 @@ function registerIpcHandlers(mainWindow) {
     }
   });
 
+  // Caminha a árvore remota preservando diretórios (inclusive vazios) e
+  // arquivos, cada um com o caminho relativo à raiz da listagem. Falhas ao
+  // listar uma subpasta (listFiles rejeitado ou s:'err') e entradas com nome
+  // inválido são acumuladas em acc.failedDirs e não abortam a árvore: os
+  // irmãos continuam sendo processados.
+  async function listRemoteTree(conn, remotePath, relBase, acc) {
+    acc = acc || { files: [], directories: [], failedDirs: [] };
+    function failDir(rel, error) {
+      if (!acc.failedDirs.some(f => f.remote === remotePath)) {
+        acc.failedDirs.push({ remote: remotePath, rel, error });
+      }
+    }
+    let res;
+    try {
+      res = await conn.listFiles(remotePath);
+    } catch (err) {
+      console.log(`[ipc] Failed to list dir ${remotePath}: ${err.message}`);
+      failDir(relBase || '', err.message);
+      return acc;
+    }
+    if (res.s !== 'ok') {
+      console.log(`[ipc] Failed to list dir ${remotePath}: ${res.m}`);
+      failDir(relBase || '', res.m || 'Falha ao listar diretorio remoto');
+      return acc;
+    }
+    for (const entry of res.e || []) {
+      const name = String(entry.n || '');
+      if (!name || name === '.' || name === '..' || name.includes('\\') || name.includes('/') || name.includes(':')) {
+        console.log(`[ipc] Invalid remote entry name in ${remotePath}: ${JSON.stringify(name)}`);
+        failDir(relBase || '', `Nome de entrada invalido no servidor remoto: ${JSON.stringify(name)}`);
+        continue;
+      }
+      const childRemote = (remotePath.endsWith('\\') ? remotePath : remotePath + '\\') + name;
+      const childRel = relBase ? relBase + '\\' + name : name;
+      if (entry.d) {
+        acc.directories.push({ remote: childRemote, rel: childRel });
+        await listRemoteTree(conn, childRemote, childRel, acc);
+      } else {
+        acc.files.push({ remote: childRemote, rel: childRel });
+      }
+    }
+    return acc;
+  }
+
+  // Aceita o próprio root e filhos; rejeita traversal (../.. ou caminho
+  // absoluto) usando path.relative, que funciona mesmo quando localRoot
+  // é uma raiz de drive como C:\.
+  function resolveDestInsideRoot(localRoot, relPath) {
+    const rootResolved = path.resolve(localRoot);
+    const dest = path.resolve(rootResolved, ...relPath.split('\\'));
+    const rel = path.relative(rootResolved, dest);
+    if (path.isAbsolute(rel) || rel === '..' || rel.startsWith('..' + path.sep)) {
+      throw new Error('Destino fora do diretorio local');
+    }
+    return dest;
+  }
+
+  ipcMain.handle('ft:downloadFolder', async (_, remotePath, localRoot) => {
+    try {
+      const conn = getActiveConnection();
+      if (!conn) return { s: 'err', m: 'Not connected' };
+
+      await fsp.mkdir(localRoot, { recursive: true });
+
+      const acc = await listRemoteTree(conn, remotePath || '\\');
+      const { files, directories } = acc;
+      const walkFailedDirs = acc.failedDirs || [];
+
+      // Cria todos os diretórios relativos (inclusive vazios) dentro de
+      // localRoot antes do download, para a estrutura local espelhar a remota.
+      // Falhas locais (ex.: colisão com arquivo existente) são contabilizadas
+      // em failedDirs e não abortam a árvore inteira.
+      let dirsCreated = 0;
+      let failedDirs = 0;
+      for (const dir of directories) {
+        try {
+          const localDir = resolveDestInsideRoot(localRoot, dir.rel);
+          await fsp.mkdir(localDir, { recursive: true });
+          dirsCreated++;
+        } catch (err) {
+          failedDirs++;
+          console.log(`[ipc] Failed to create dir ${dir.rel}: ${err.message}`);
+        }
+        send(mainWindow, 'ft:progress', {
+          type: 'download', path: dir.remote, fileName: dir.rel, done: false
+        });
+      }
+      // Integra as falhas de listagem da caminhada ao contador de diretórios.
+      failedDirs += walkFailedDirs.length;
+
+      let downloaded = 0;
+      let failedFiles = 0;
+      for (const file of files) {
+        try {
+          const localFile = resolveDestInsideRoot(localRoot, file.rel);
+          const result = await conn.downloadFile(file.remote, (received, total) => {
+            send(mainWindow, 'ft:progress', {
+              type: 'download', path: file.remote, fileName: file.rel,
+              received, total, percent: total > 0 ? Math.round((received / total) * 100) : 0
+            });
+          });
+          await fsp.mkdir(path.dirname(localFile), { recursive: true });
+          await fsp.writeFile(localFile, result.data);
+          send(mainWindow, 'ft:progress', {
+            type: 'download', path: file.remote, fileName: file.rel,
+            received: result.size, total: result.size, percent: 100, done: false
+          });
+          downloaded++;
+        } catch (err) {
+          failedFiles++;
+          console.log(`[ipc] Download failed ${file.rel}: ${err.message}`);
+        }
+      }
+
+      // Diferencia o resultado: ok sem falhas; partial com falha mas com
+      // processamento; err se nada foi baixado e houve falha (queda total não
+      // é tratada como sucesso).
+      const hadFailure = failedFiles > 0 || failedDirs > 0;
+      const s = hadFailure ? (downloaded > 0 ? 'partial' : 'err') : 'ok';
+
+      // Para s:'err' o evento final carrega a mensagem de erro para a UI não
+      // tratar como sucesso silencioso.
+      const errorMsg = s === 'err'
+        ? (walkFailedDirs[0] && walkFailedDirs[0].error) || 'Falha ao baixar pasta'
+        : '';
+
+      send(mainWindow, 'ft:progress', {
+        type: 'download', path: remotePath, percent: 100, done: true,
+        totalFiles: downloaded, failedFiles, dirs: dirsCreated, failedDirs, s,
+        ...(errorMsg ? { error: errorMsg } : {})
+      });
+
+      return {
+        s, totalFiles: downloaded, failedFiles, dirs: dirsCreated, failedDirs,
+        ...(s === 'err' ? { m: errorMsg } : {})
+      };
+    } catch (err) {
+      // Sem progresso final com done:true, a UI ficaria presa no "Recebendo...".
+      send(mainWindow, 'ft:progress', {
+        type: 'download', path: remotePath, percent: 0, done: true, error: err.message
+      });
+      return { s: 'err', m: err.message };
+    }
+  });
+
   ipcMain.handle('ft:delete', async (_, remotePath) => {
     try {
       const conn = getActiveConnection();

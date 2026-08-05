@@ -30,6 +30,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   ftDownload: (remotePath, options) => ipcRenderer.invoke('ft:download', remotePath, options),
   ftUpload: (remotePath, options) => ipcRenderer.invoke('ft:upload', remotePath, options),
   ftUploadFolder: (localPath, remoteParent) => ipcRenderer.invoke('ft:uploadFolder', localPath, remoteParent),
+  ftDownloadFolder: (remotePath, localRoot) => ipcRenderer.invoke('ft:downloadFolder', remotePath, localRoot),
   ftDelete: (remotePath) => ipcRenderer.invoke('ft:delete', remotePath),
   ftMkdir: (remotePath) => ipcRenderer.invoke('ft:mkdir', remotePath),
 

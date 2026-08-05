@@ -393,26 +393,50 @@ export default function FileTransfer() {
     return b + '\\' + name;
   };
 
+  // Rejeita nomes remotos que poderiam escapar do diretório escolhido
+  // (nomes relativos ou com separadores de caminho) ao compor o destino local.
+  const assertSafeRemoteName = (name) => {
+    const n = String(name || '');
+    if (!n || n === '.' || n === '..' || n.includes('\\') || n.includes('/') || /^[A-Za-z]:/.test(n)) {
+      throw new Error(`Nome remoto invalido: ${JSON.stringify(n)}`);
+    }
+    return n;
+  };
+
   const handleDownloadSelected = async () => {
     if (!remoteSelected || remoteSelected.size === 0) return;
     const items = [...remoteSelected].map(i => remoteEntries[i]).filter(Boolean);
     if (items.length === 0) return;
 
     const fileItems = items.filter(it => !it.d);
-    if (fileItems.length === 0) {
-      addLog('Selecione apenas arquivos para receber (pastas em breve)', 'warn');
-      return;
-    }
+    const folderItems = items.filter(it => it.d);
+    const sep = remotePath.endsWith('\\') ? '' : '\\';
+    const fallbackBase = localPath ? localPath.replace(/\\+$/, '') + '\\' : '';
 
     let downloaded = 0;
     let failed = 0;
-    const fallbackBase = localPath ? localPath.replace(/\\+$/, '') + '\\' : '';
+
+    // Atualiza a listagem local e limpa a seleção antes de sair — inclusive
+    // quando um diálogo é cancelado depois de algum item já ter sido recebido.
+    const finalizeDownload = () => {
+      if ((downloaded > 0 || folderItems.length > 0) && localPath) {
+        loadLocalDir(localPath);
+      }
+      setRemoteSelected(new Set());
+    };
 
     for (const sel of fileItems) {
-      const sep = remotePath.endsWith('\\') ? '' : '\\';
-      const remoteFull = remotePath + sep + sel.n;
+      let name;
+      try {
+        name = assertSafeRemoteName(sel.n);
+      } catch (err) {
+        addLog(`Recebimento cancelado: ${err.message}`, 'error');
+        failed++;
+        continue;
+      }
+      const remoteFull = remotePath + sep + name;
 
-      const defaultPath = fallbackBase ? joinLocalPath(localPath, sel.n) : sel.n;
+      const defaultPath = fallbackBase ? joinLocalPath(localPath, name) : name;
       const dlg = await window.electronAPI.showSaveDialog({
         title: 'Salvar como',
         defaultPath,
@@ -420,6 +444,7 @@ export default function FileTransfer() {
       });
       if (!dlg || dlg.canceled || !dlg.filePath) {
         addLog(`Recebimento cancelado: ${sel.n}`);
+        finalizeDownload();
         return;
       }
 
@@ -439,10 +464,51 @@ export default function FileTransfer() {
       }
     }
 
-    if (downloaded > 0 && localPath) {
-      loadLocalDir(localPath);
+    if (folderItems.length > 0) {
+      const dlg = await window.electronAPI.showOpenDialog({
+        title: 'Escolher pasta de destino',
+        properties: ['openDirectory', 'createDirectory']
+      });
+      if (!dlg || dlg.canceled || !dlg.filePaths || dlg.filePaths.length === 0) {
+        addLog('Recebimento de pastas cancelado');
+        finalizeDownload();
+        return;
+      }
+      const destBase = dlg.filePaths[0].replace(/\\+$/, '');
+
+      for (const sel of folderItems) {
+        let name;
+        try {
+          name = assertSafeRemoteName(sel.n);
+        } catch (err) {
+          addLog(`Recebimento de pasta cancelado: ${err.message}`, 'error');
+          failed++;
+          continue;
+        }
+        const remoteFull = remotePath + sep + name;
+        const localFolder = destBase + '\\' + name;
+
+        addLog(`Recebendo pasta: ${name}...`);
+        try {
+          const res = await window.electronAPI.ftDownloadFolder(remoteFull, localFolder);
+          if (res && res.s === 'ok') {
+            addLog(`Pasta recebida: ${name} (${res.totalFiles || 0} arquivos${res.dirs ? `, ${res.dirs} pastas` : ''})`);
+            downloaded++;
+          } else if (res && res.s === 'partial') {
+            addLog(`Pasta recebida parcialmente: ${name} (${res.totalFiles || 0} arquivos, ${res.failedFiles || 0} falhas de arquivo${res.failedDirs ? `, ${res.failedDirs} falhas de pasta` : ''})`, 'warn');
+            downloaded++;
+          } else {
+            addLog(`Falha ao receber pasta ${name}: ${(res && res.m) || 'erro'}`, 'error');
+            failed++;
+          }
+        } catch (err) {
+          addLog(`Erro ao receber pasta ${name}: ${err.message}`, 'error');
+          failed++;
+        }
+      }
     }
-    setRemoteSelected(new Set());
+
+    finalizeDownload();
   };
 
   const handleUploadSelected = async () => {
@@ -501,7 +567,7 @@ export default function FileTransfer() {
 
   const canSend = connected && localSelected && localSelected.size > 0;
   const remoteSelectedItems = remoteSelected ? [...remoteSelected].map(i => remoteEntries[i]).filter(Boolean) : [];
-  const canReceive = connected && remoteSelectedItems.some(it => !it.d);
+  const canReceive = connected && remoteSelectedItems.length > 0;
 
   return (
     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', background: '#0f172a', color: '#e2e8f0', fontSize: '13px', overflow: 'hidden' }}>
@@ -569,7 +635,7 @@ export default function FileTransfer() {
           <button
             onClick={handleDownloadSelected}
             disabled={!canReceive}
-            title={canReceive ? "Receber arquivos selecionados do remoto" : "Selecione arquivos no painel remoto para receber"}
+            title={canReceive ? "Receber arquivos e pastas selecionados do remoto" : "Selecione arquivos ou pastas no painel remoto para receber"}
             style={{
               ...btn, padding: '10px 12px', fontSize: '14px', fontWeight: 600,
               background: canReceive ? '#10b981' : '#0f172a',
@@ -587,7 +653,7 @@ export default function FileTransfer() {
           )}
           {connected && (!remoteSelected || remoteSelected.size === 0) && (
             <span style={{ fontSize: '9px', color: '#94a3b8', textAlign: 'center', lineHeight: '1.4' }}>
-              Selecione<br />arquivos remotos
+              Selecione<br />itens remotos
             </span>
           )}
           {remoteSelected?.size > 0 && (
