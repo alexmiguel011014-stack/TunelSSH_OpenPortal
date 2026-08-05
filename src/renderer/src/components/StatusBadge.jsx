@@ -8,11 +8,11 @@ export default function StatusBadge({ state }) {
   };
 
   const labels = {
-    connected: 'Connected',
-    connecting: 'Connecting...',
-    credentials: 'Password required',
-    disconnected: 'Disconnected',
-    error: 'Error',
+    connected: 'Conectado',
+    connecting: 'Conectando...',
+    credentials: 'Senha necessária',
+    disconnected: 'Desconectado',
+    error: 'Erro',
   };
 
   const color = colors[state] || colors.disconnected;

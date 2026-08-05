@@ -1,11 +1,34 @@
 import { useContext, useState } from 'react';
 import { MachineContext } from '../App';
 
+const MAX_PORT = 65535;
+
+function isValidHost(host) {
+  const h = (host || '').trim();
+  if (!h) return false;
+  if (/^[A-Za-z0-9.-]+$/.test(h)) return true;
+  return false;
+}
+
 export default function ConfigPanel() {
   const { machines, saveMachines, addMachine, removeMachine, setShowConfig, maxMachines, addLog } = useContext(MachineContext);
 
   const [draft, setDraft] = useState(() => machines.map((m) => ({ ...m })));
   const [saved, setSaved] = useState(false);
+  const [errors, setErrors] = useState({});
+
+  const validate = (list) => {
+    const errs = {};
+    list.forEach((m, i) => {
+      const errorsFor = [];
+      const name = (m.name || '').trim();
+      if (!name) errorsFor.push('Informe um nome');
+      if (m.host && !isValidHost(m.host)) errorsFor.push('IP/host inválido');
+      if (m.port < 1 || m.port > MAX_PORT) errorsFor.push(`Porta entre 1 e ${MAX_PORT}`);
+      if (errorsFor.length) errs[i] = errorsFor;
+    });
+    return errs;
+  };
 
   const updateField = (index, field, value) => {
     setDraft((prev) => {
@@ -14,9 +37,20 @@ export default function ConfigPanel() {
       return next;
     });
     setSaved(false);
+    setErrors((prev) => {
+      const next = { ...prev };
+      delete next[index];
+      return next;
+    });
   };
 
   const handleSave = () => {
+    const errs = validate(draft);
+    if (Object.keys(errs).length > 0) {
+      setErrors(errs);
+      if (addLog) addLog('Configuração não salva: corrija os campos destacados', 'warn');
+      return;
+    }
     saveMachines(draft);
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
@@ -24,7 +58,7 @@ export default function ConfigPanel() {
 
   const handleAddLocal = () => {
     if (draft.length >= maxMachines) {
-      if (addLog) addLog(`Max ${maxMachines} machines reached`, 'warn');
+      if (addLog) addLog(`Máximo de ${maxMachines} PC(s) atingido`, 'warn');
       return;
     }
     const newMachine = { id: 'tmp-' + Date.now(), name: `PC ${draft.length + 1}`, host: '', port: 5900 };
@@ -34,6 +68,14 @@ export default function ConfigPanel() {
   const handleRemoveLocal = (index) => {
     if (draft.length <= 1) return;
     setDraft(prev => prev.filter((_, i) => i !== index));
+    setErrors((prev) => {
+      const next = {};
+      Object.keys(prev).forEach((k) => {
+        const ki = parseInt(k, 10);
+        next[ki > index ? ki - 1 : ki] = prev[k];
+      });
+      return next;
+    });
   };
 
   return (
@@ -41,16 +83,16 @@ export default function ConfigPanel() {
       <div className="max-w-2xl mx-auto">
         <div className="flex items-center justify-between mb-8">
           <div>
-            <h2 className="text-2xl font-semibold text-slate-100">Settings</h2>
+            <h2 className="text-2xl font-semibold text-slate-100">Configurações</h2>
             <p className="text-sm text-slate-400 mt-1">
-              Configure your remote machines ({draft.length}/{maxMachines})
+              Configure os PCs remotos ({draft.length}/{maxMachines})
             </p>
           </div>
           <button
             onClick={() => setShowConfig(false)}
             className="px-4 py-2 text-sm text-slate-400 hover:text-white transition-colors"
           >
-            ← Back
+            ← Voltar
           </button>
         </div>
 
@@ -58,7 +100,7 @@ export default function ConfigPanel() {
           {draft.map((machine, index) => (
             <div
               key={machine.id}
-              className="bg-slate-800 rounded-xl p-5 border border-slate-700 relative"
+              className={`bg-slate-800 rounded-xl p-5 border relative ${errors[index] ? 'border-red-700' : 'border-slate-700'}`}
             >
               <div className="flex items-center justify-between mb-4">
                 <h3 className="text-sm font-medium text-slate-300">{machine.name || `PC ${index + 1}`}</h3>
@@ -67,42 +109,51 @@ export default function ConfigPanel() {
                     onClick={() => handleRemoveLocal(index)}
                     className="text-xs text-red-400 hover:text-red-300 transition-colors bg-transparent border border-red-800/50 rounded px-2 py-1"
                   >
-                    Remove
+                    Remover
                   </button>
                 )}
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                 <div>
-                  <label className="block text-xs text-slate-500 mb-1">Name</label>
+                  <label className="block text-xs text-slate-500 mb-1">Nome</label>
                   <input
                     type="text"
                     value={machine.name}
                     onChange={(e) => updateField(index, 'name', e.target.value)}
-                    className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-100 focus:outline-none focus:border-blue-500 transition-colors"
-                    placeholder="Office PC"
+                    className={`w-full bg-slate-900 border rounded-lg px-3 py-2 text-sm text-slate-100 focus:outline-none focus:border-blue-500 transition-colors ${errors[index] && !machine.name.trim() ? 'border-red-600' : 'border-slate-600'}`}
+                    placeholder="Ex.: PC da Sala"
                   />
                 </div>
                 <div>
-                  <label className="block text-xs text-slate-500 mb-1">Tailscale IP</label>
+                  <label className="block text-xs text-slate-500 mb-1">IP Tailscale</label>
                   <input
                     type="text"
                     value={machine.host}
                     onChange={(e) => updateField(index, 'host', e.target.value)}
-                    className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-100 font-mono focus:outline-none focus:border-blue-500 transition-colors"
+                    className={`w-full bg-slate-900 border rounded-lg px-3 py-2 text-sm text-slate-100 font-mono focus:outline-none focus:border-blue-500 transition-colors ${errors[index] && machine.host && !isValidHost(machine.host) ? 'border-red-600' : 'border-slate-600'}`}
                     placeholder="100.x.x.x"
                   />
                 </div>
                 <div>
-                  <label className="block text-xs text-slate-500 mb-1">VNC Port</label>
+                  <label className="block text-xs text-slate-500 mb-1">Porta VNC</label>
                   <input
                     type="number"
+                    min="1"
+                    max={MAX_PORT}
                     value={machine.port}
                     onChange={(e) => updateField(index, 'port', parseInt(e.target.value) || 5900)}
-                    className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-100 font-mono focus:outline-none focus:border-blue-500 transition-colors"
+                    className={`w-full bg-slate-900 border rounded-lg px-3 py-2 text-sm text-slate-100 font-mono focus:outline-none focus:border-blue-500 transition-colors ${errors[index] && (machine.port < 1 || machine.port > MAX_PORT) ? 'border-red-600' : 'border-slate-600'}`}
                     placeholder="5900"
                   />
                 </div>
               </div>
+              {errors[index] && (
+                <ul className="mt-3 space-y-1">
+                  {errors[index].map((err) => (
+                    <li key={err} className="text-xs text-red-400">• {err}</li>
+                  ))}
+                </ul>
+              )}
             </div>
           ))}
         </div>
@@ -112,7 +163,7 @@ export default function ConfigPanel() {
             onClick={handleAddLocal}
             className="w-full mt-4 p-3 rounded-xl border-2 border-dashed border-slate-700 text-slate-400 text-sm hover:border-slate-500 hover:text-slate-300 transition-colors bg-transparent cursor-pointer"
           >
-            + Add Machine
+            + Adicionar PC
           </button>
         )}
 
@@ -121,17 +172,20 @@ export default function ConfigPanel() {
             onClick={handleSave}
             className="px-6 py-2.5 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-sm font-medium transition-colors"
           >
-            {saved ? '✓ Saved' : 'Save Configuration'}
+            {saved ? '✓ Salvo' : 'Salvar configuração'}
           </button>
           {saved && (
-            <span className="text-sm text-emerald-400">Configuration saved</span>
+            <span className="text-sm text-emerald-400">Configuração salva</span>
+          )}
+          {!saved && Object.keys(errors).length > 0 && (
+            <span className="text-sm text-red-400">Corrija os campos destacados antes de salvar</span>
           )}
         </div>
 
         <div className="mt-6 p-4 bg-slate-800/50 rounded-lg border border-slate-700/50">
           <p className="text-xs text-slate-500">
-            Enter the Tailscale IP address of each remote PC. TightVNC Server
-            must be running on port 5900 (or the port you specify). Max {maxMachines} machines.
+            Informe o IP Tailscale de cada PC remoto. O TightVNC Server deve
+            estar rodando na porta 5900 (ou na porta informada). Máximo de {maxMachines} PC(s).
           </p>
         </div>
       </div>

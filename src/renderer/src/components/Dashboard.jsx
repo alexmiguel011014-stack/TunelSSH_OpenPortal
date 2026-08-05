@@ -3,11 +3,15 @@ import { MachineContext } from '../App';
 
 const card = {
   background: '#1e293b', borderRadius: '8px', border: '1px solid #334155',
-  padding: '20px', marginBottom: '20px'
+  padding: '18px', marginBottom: '16px'
 };
 const btn = {
   padding: '6px 14px', borderRadius: '4px', border: '1px solid #475569',
-  background: '#1e293b', color: '#e2e8f0', cursor: 'pointer', fontSize: '13px'
+  background: '#1e293b', color: '#e2e8f0', cursor: 'pointer', fontSize: '12px'
+};
+const sectionTitle = {
+  fontSize: '12px', fontWeight: 600, marginBottom: '12px', textTransform: 'uppercase',
+  letterSpacing: '0.5px', color: '#94a3b8'
 };
 
 export default function Dashboard({ onConnect }) {
@@ -117,21 +121,18 @@ export default function Dashboard({ onConnect }) {
 
         {/* Minha Maquina card */}
         <div style={card}>
-          <h2 style={{ fontSize: '14px', fontWeight: 600, marginBottom: '12px', textTransform: 'uppercase', letterSpacing: '0.5px', color: '#94a3b8' }}>
+          <h2 style={sectionTitle}>
             Minha Máquina (Agente)
           </h2>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '10px' }}>
-            <span style={{
-              width: '10px', height: '10px', borderRadius: '50%',
-              background: serverStatus.running ? '#22c55e' : '#ef4444',
-              display: 'inline-block'
-            }} />
-            <span style={{ fontSize: '14px', fontWeight: 500 }}>
-              Servidor de Arquivos: {serverStatus.running ? 'ATIVO' : 'INATIVO'}
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '10px' }}>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', fontSize: '14px', fontWeight: 500 }}>
+              <span style={{
+                width: '10px', height: '10px', borderRadius: '50%',
+                background: serverStatus.running ? '#22c55e' : '#ef4444', display: 'inline-block'
+              }} />
+              {serverStatus.running ? 'Servidor ativo' : 'Servidor inativo'}
             </span>
-            {serverStatus.running && (
-              <span style={{ fontSize: '12px', color: '#64748b' }}>porta {serverStatus.port}</span>
-            )}
+            {serverStatus.running && <span style={{ fontSize: '11px', color: '#22c55e', background: '#052e16', border: '1px solid #15803d', padding: '2px 8px', borderRadius: '999px' }}>pronto para receber</span>}
           </div>
           {localIp && (
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px', fontSize: '13px' }}>
@@ -144,16 +145,16 @@ export default function Dashboard({ onConnect }) {
               </button>
             </div>
           )}
-          {serverStatus.rootDir && (
+          {serverStatus.running && (
             <div style={{ fontSize: '12px', color: '#64748b' }}>
-              Raiz: {serverStatus.rootDir}
+              Porta {serverStatus.port}{serverStatus.rootDir ? ` · Raiz: ${serverStatus.rootDir}` : ''}
             </div>
           )}
         </div>
 
         {/* Conectar a um PC card */}
         <div style={card}>
-          <h2 style={{ fontSize: '14px', fontWeight: 600, marginBottom: '12px', textTransform: 'uppercase', letterSpacing: '0.5px', color: '#94a3b8' }}>
+          <h2 style={sectionTitle}>
             Conectar a um PC
           </h2>
           {availableMachines.length === 0 ? (
@@ -169,15 +170,15 @@ export default function Dashboard({ onConnect }) {
                 border: activeMachine?.id === m.id ? '1px solid #3b82f6' : '1px solid #1e293b'
               }}>
                 <span style={{ fontSize: '16px' }}>{'\uD83D\uDDA5\uFE0F'}</span>
-                <div style={{ flex: 1 }}>
-                  <div style={{ fontSize: '14px', fontWeight: 500 }}>{m.name}</div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: '14px', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{m.name}</div>
                   <div style={{ fontSize: '11px', color: '#64748b' }}>{m.host}{m.port !== 5900 ? ':' + m.port : ''}</div>
                 </div>
-                <button style={btn} onClick={() => handleConnectMachine(m)}>
-                  VNC
+                <button style={{ ...btn, background: '#2563eb', borderColor: '#2563eb', color: '#fff' }} onClick={() => handleConnectMachine(m)}>
+                  {activeMachine?.id === m.id ? 'Visualizando' : 'Conectar'}
                 </button>
-                <button style={{ ...btn, borderColor: '#3b82f6' }} onClick={() => handleOpenFiles(m)}>
-                  Files
+                <button style={{ ...btn, borderColor: '#3b82f6', color: '#93c5fd' }} onClick={() => handleOpenFiles(m)}>
+                  Enviar arquivos
                 </button>
               </div>
             ))
@@ -186,7 +187,7 @@ export default function Dashboard({ onConnect }) {
 
         {/* Conectar por IP card */}
         <div style={card}>
-          <h2 style={{ fontSize: '14px', fontWeight: 600, marginBottom: '12px', textTransform: 'uppercase', letterSpacing: '0.5px', color: '#94a3b8' }}>
+          <h2 style={sectionTitle}>
             Conectar por IP
           </h2>
           <div style={{ display: 'flex', gap: '8px', alignItems: 'flex-end' }}>

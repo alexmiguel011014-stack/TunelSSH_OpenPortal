@@ -29,6 +29,8 @@ export default function Sidebar() {
 
   const [showConnectedOpts, setShowConnectedOpts] = useState(false);
   const logContainerRef = useRef(null);
+  const [logLevel, setLogLevel] = useState('all');
+  const [logQuery, setLogQuery] = useState('');
   const [serverStatus, setServerStatus] = useState({ running: false, port: 0 });
   const [localIp, setLocalIp] = useState('');
 
@@ -41,6 +43,29 @@ export default function Sidebar() {
     () => machines.filter(m => m.id !== activeMachineId),
     [machines, activeMachineId]
   );
+
+  const filteredLogs = useMemo(() => {
+    const q = logQuery.trim().toLowerCase();
+    return logs.filter((l) => {
+      const levelOk = logLevel === 'all' || l.type === logLevel || (logLevel === 'error' && l.type === 'warn');
+      if (!levelOk) return false;
+      if (q && !(l.msg || '').toLowerCase().includes(q)) return false;
+      return true;
+    });
+  }, [logs, logLevel, logQuery]);
+
+  const exportLogs = () => {
+    const text = filteredLogs
+      .map((l) => `[${l.time}] [${(l.type || 'info').toUpperCase()}] ${l.msg}`)
+      .join('\n');
+    const blob = new Blob([text || 'Nenhum log'], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `openportal-logs-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}.txt`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
 
   useEffect(() => {
     if (showLogs && logContainerRef.current) {
@@ -87,7 +112,7 @@ export default function Sidebar() {
         <button
           onClick={toggleSidebar}
           style={{ background: 'none', border: 'none', color: '#64748b', cursor: 'pointer', padding: '4px', fontSize: '16px' }}
-          title="Collapse sidebar"
+          title="Recolher barra lateral"
         >
           ◀
         </button>
@@ -155,7 +180,7 @@ export default function Sidebar() {
                   border: 'none', cursor: 'pointer', background: '#2563eb', color: '#fff',
                 }}
               >
-                🔄 Reconnect
+                🔄 Reconectar
               </button>
               <button
                 onClick={handleDisconnect}
@@ -164,7 +189,7 @@ export default function Sidebar() {
                   border: '1px solid #475569', cursor: 'pointer', background: 'transparent', color: '#f87171',
                 }}
               >
-                ⏹ Disconnect
+                ⏹ Desconectar
               </button>
             </div>
           )}
@@ -174,7 +199,7 @@ export default function Sidebar() {
       {/* Machines List */}
       <nav style={{ flex: 1, padding: '12px', overflowY: 'auto' }}>
         <p style={{ fontSize: '11px', fontWeight: 500, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.05em', padding: '0 8px', marginBottom: '8px' }}>
-          Machines ({otherMachines.length}/{maxMachines})
+          PCs ({otherMachines.length}/{maxMachines})
         </p>
         {otherMachines.length === 0 && (
           <div style={{ padding: '12px 8px', fontSize: '12px', color: '#475569', textAlign: 'center' }}>
@@ -221,7 +246,7 @@ export default function Sidebar() {
                   borderRadius: '4px', display: 'none',
                 }}
                 className="remove-machine-btn"
-                title="Remove machine"
+                title="Remover PC"
               >
                 ✕
               </button>
@@ -239,7 +264,7 @@ export default function Sidebar() {
               cursor: 'pointer', background: 'transparent', color: '#64748b',
             }}
           >
-            + Add PC
+            + Adicionar PC
           </button>
         )}
       </nav>
@@ -267,12 +292,44 @@ export default function Sidebar() {
 
         {showLogs && (
           <div style={{ background: '#0f172a', borderBottom: '1px solid #334155' }}>
-            <div style={{ padding: '4px 8px', display: 'flex', gap: '4px', borderBottom: '1px solid #1e293b' }}>
+            <div style={{ padding: '4px 8px', display: 'flex', gap: '4px', borderBottom: '1px solid #1e293b', alignItems: 'center' }}>
+              <select
+                value={logLevel}
+                onChange={(e) => setLogLevel(e.target.value)}
+                style={{
+                  background: '#1e293b', color: '#94a3b8', border: '1px solid #334155',
+                  borderRadius: '4px', paddingLeft: '2px', fontSize: '10px', cursor: 'pointer', outline: 'none'
+                }}
+                title="Filtrar por tipo"
+              >
+                <option value="all">Todos</option>
+                <option value="error">Erros/Avisos</option>
+                <option value="info">Infos</option>
+              </select>
+              <input
+                type="text"
+                value={logQuery}
+                onChange={(e) => setLogQuery(e.target.value)}
+                placeholder="Buscar..."
+                title="Buscar nos logs"
+                style={{
+                  flex: 1, minWidth: 0, background: '#0f172a', border: '1px solid #334155',
+                  borderRadius: '4px', color: '#e2e8f0', fontSize: '10px', padding: '2px 6px', outline: 'none'
+                }}
+              />
+              <button
+                onClick={exportLogs}
+                title="Exportar logs filtrados"
+                style={{ fontSize: '10px', background: '#1e293b', border: '1px solid #334155', color: '#94a3b8', cursor: 'pointer', padding: '2px 6px', borderRadius: '3px' }}
+              >
+                ⬇
+              </button>
               <button
                 onClick={() => setLogs([])}
-                style={{ fontSize: '10px', background: '#1e293b', border: 'none', color: '#64748b', cursor: 'pointer', padding: '2px 6px', borderRadius: '3px' }}
+                title="Limpar logs"
+                style={{ fontSize: '10px', background: '#1e293b', border: 'none', color: '#f87171', cursor: 'pointer', padding: '2px 6px', borderRadius: '3px' }}
               >
-                Clear
+                Limpar
               </button>
             </div>
             <div
@@ -286,10 +343,12 @@ export default function Sidebar() {
                 lineHeight: '1.5',
               }}
             >
-              {logs.length === 0 ? (
-                <div style={{ color: '#475569', padding: '8px', textAlign: 'center' }}>No logs yet</div>
+              {filteredLogs.length === 0 ? (
+                <div style={{ color: '#475569', padding: '8px', textAlign: 'center' }}>
+                  {logs.length === 0 ? 'Nenhum log ainda' : 'Nenhum log corresponde ao filtro'}
+                </div>
               ) : (
-                logs.map((log) => (
+                filteredLogs.map((log) => (
                   <div
                     key={log.id}
                     style={{

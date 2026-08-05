@@ -178,6 +178,21 @@
 
     window.addEventListener('message', (e) => {
       if (e.data?.type === 'resize-viewport') fitScreen();
+      if (e.data?.type === 'set-quality' || e.data?.type === 'set-quality-level') {
+        if (rfb && typeof rfb.setQualityLevel === 'function') {
+          rfb.setQualityLevel(e.data.level);
+        } else if (rfb && rfb._display) {
+          rfb._display.qualityLevel = e.data.level;
+        }
+      }
+      if (e.data?.type === 'set-compression' || e.data?.type === 'set-compression-level') {
+        if (rfb && typeof rfb.setCompressionLevel === 'function') {
+          rfb.setCompressionLevel(e.data.level);
+        }
+      }
+      if (e.data?.type === 'vnc-disconnect') {
+        if (rfb) { try { rfb.disconnect(); } catch (err) {} rfb = null; }
+      }
     });
 
     window.reconnect = () => {
