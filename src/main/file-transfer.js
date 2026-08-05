@@ -192,6 +192,17 @@ class FileTransferConnection {
         return;
       }
 
+      if (msg.t === 'put_res' && msg.s === 'ok') {
+        const entry = this.pendingUploads.get(msg.i);
+        if (entry) {
+          entry.ack = true;
+          if (typeof entry.onAck === 'function') {
+            try { entry.onAck(); } catch {}
+          }
+        }
+        return;
+      }
+
       if (msg.t === 'put_done') {
         const entry = this.pendingUploads.get(msg.i);
         if (entry) {
@@ -219,7 +230,7 @@ class FileTransferConnection {
     }
 
     if (frame.type === MSG_BINARY) {
-      if (this.currentGet) {
+      if (this.currentGet && !this.currentGet.done) {
         this.currentGet.chunks.push(frame.payload);
         this.currentGet.receivedSize += frame.payload.length;
         if (this.currentGet._onProgress) {
@@ -232,8 +243,7 @@ class FileTransferConnection {
     if (frame.type === MSG_BINARY_END) {
       if (this.currentGet) {
         const getCb = this.currentGet;
-        this.currentGet = null;
-        if (getCb._callback) {
+        if (!getCb.done) {
           getCb._callback({ s: 'ok', data: Buffer.concat(getCb.chunks), size: getCb.totalSize });
         }
       }
@@ -301,24 +311,46 @@ class FileTransferConnection {
     console.log(`[file-transfer] uploadFile: path="${remotePath}", size=${totalSize} bytes`);
 
     return new Promise((resolve, reject) => {
-      this.pendingUploads.set(id, { resolve, reject });
+      let offset = 0;
+      const sendChunks = () => {
+        if (offset >= totalSize) {
+          this._sendBinaryEnd();
+          return;
+        }
+        const chunk = data.slice(offset, offset + CHUNK_SIZE);
+        try {
+          this._sendBinary(chunk);
+        } catch (err) {
+          this.pendingUploads.delete(id);
+          reject(err);
+          return;
+        }
+        offset += chunk.length;
+        if (onProgress) onProgress(offset, totalSize);
+        setImmediate(sendChunks);
+      };
+
+      const ackTimeout = setTimeout(() => {
+        if (!entry || !entry.ack) {
+          this.pendingUploads.delete(id);
+          reject(new Error('Timeout aguardando put_res do servidor remoto'));
+        }
+      }, 20000);
+
+      const entry = {
+        resolve: (msg) => { clearTimeout(ackTimeout); resolve(msg); },
+        reject: (err) => { clearTimeout(ackTimeout); reject(err); },
+        ack: false,
+        onAck: () => {
+          setImmediate(sendChunks);
+        }
+      };
+      this.pendingUploads.set(id, entry);
+
       try {
         this._sendJson({ t: 'put', p: remotePath, z: totalSize, i: id });
-
-        let offset = 0;
-        const sendChunks = () => {
-          const chunk = data.slice(offset, offset + CHUNK_SIZE);
-          if (chunk.length === 0) {
-            this._sendBinaryEnd();
-            return;
-          }
-          this._sendBinary(chunk);
-          offset += chunk.length;
-          if (onProgress) onProgress(offset, totalSize);
-          setImmediate(sendChunks);
-        };
-        setImmediate(sendChunks);
       } catch (err) {
+        clearTimeout(ackTimeout);
         this.pendingUploads.delete(id);
         console.error(`[file-transfer] uploadFile ERROR for path="${remotePath}": ${err.message}`);
         reject(err);

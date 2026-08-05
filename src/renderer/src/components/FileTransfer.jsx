@@ -332,9 +332,11 @@ export default function FileTransfer() {
     window.electronAPI.getSpecialDirs().then(setSpecialDirs);
   }, []);
 
-  // Conecta à máquina ativa; limpa o estado anterior ao trocar de máquina e
-  // descarta chamadas duplicadas/simultâneas de conexão (React Strict Mode)
+  // Conecta à máquina ativa; limpa o estado anterior ao trocar de máquina.
+  // Não desconecta no unmount: a sessão do file transfer é independente do
+  // RemoteViewer (VNC) e deve sobreviver a alternar Files <-> Connect.
   useEffect(() => {
+    const host = activeMachine && activeMachine.host;
     connectSeq.current++;
     setConnected(false);
     setConnecting(false);
@@ -342,14 +344,11 @@ export default function FileTransfer() {
     setRemotePath('\\');
     setRemoteEntries([]);
     setRemoteError(null);
+    setRemoteSelected(new Set());
     window.electronAPI.ftDisconnect();
-    if (activeMachine && activeMachine.host) {
-      connect(activeMachine.host);
+    if (host) {
+      connect(host);
     }
-    return () => {
-      connectSeq.current++;
-      window.electronAPI.ftDisconnect();
-    };
   }, [activeMachine && activeMachine.host]);
 
   useEffect(() => {
