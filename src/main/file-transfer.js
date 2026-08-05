@@ -39,6 +39,7 @@ class FileTransferConnection {
     this._resolveConnect = null;
     this._rejectConnect = null;
     this.currentGet = null;
+    this._activeGetId = null;
     this._onStatus = null;
     this._host = '';
     this._port = 0;
@@ -157,14 +158,17 @@ class FileTransferConnection {
 
   _rejectPending(reason) {
     for (const [id, entry] of this.pending) {
+      clearTimeout(entry._timeout);
       entry.reject(new Error(reason));
     }
     this.pending.clear();
     for (const [id, entry] of this.pendingUploads) {
+      clearTimeout(entry._timeout);
       entry.reject(new Error(reason));
     }
     this.pendingUploads.clear();
     this.currentGet = null;
+    this._activeGetId = null;
   }
 
   _handleFrame(frame) {
@@ -177,7 +181,11 @@ class FileTransferConnection {
       }
 
       if (msg.t === 'get_res' && msg.s === 'ok') {
-        if (this.currentGet) {
+        const entry = this.pending.get(msg.i);
+        if (entry && entry.kind === 'get') {
+          entry.totalSize = msg.z;
+          entry.basename = msg.n;
+        } else if (this.currentGet) {
           this.currentGet.totalSize = msg.z;
           this.currentGet.basename = msg.n;
         }
@@ -185,9 +193,10 @@ class FileTransferConnection {
       }
 
       if (msg.t === 'get_done' || (msg.t === 'get_res' && msg.s !== 'ok')) {
-        const getCb = this.currentGet;
-        if (getCb && getCb._callback) {
-          getCb._callback(msg);
+        let entry = this.pending.get(msg.i);
+        if (!entry) entry = this.currentGet;
+        if (entry && entry._callback) {
+          entry._callback(msg);
         }
         return;
       }
@@ -224,28 +233,41 @@ class FileTransferConnection {
       const entry = this.pending.get(msg.i);
       if (entry) {
         this.pending.delete(msg.i);
-        entry.resolve(msg);
+        if (entry._timeout) clearTimeout(entry._timeout);
+        if (entry._callback) {
+          entry._callback(msg);
+        } else if (entry.resolve) {
+          entry.resolve(msg);
+        }
       }
       return;
     }
 
     if (frame.type === MSG_BINARY) {
-      if (this.currentGet && !this.currentGet.done) {
-        this.currentGet.chunks.push(frame.payload);
-        this.currentGet.receivedSize += frame.payload.length;
-        if (this.currentGet._onProgress) {
-          this.currentGet._onProgress(this.currentGet.receivedSize, this.currentGet.totalSize);
+      // Associa o chunk ao get ativo; tenta pelo id atual, depois currentGet
+      let target = null;
+      if (this._activeGetId != null) target = this.pending.get(this._activeGetId);
+      if (!target) target = this.currentGet;
+      if (target && !target.done) {
+        target.chunks.push(frame.payload);
+        target.receivedSize += frame.payload.length;
+        if (target._onProgress) {
+          target._onProgress(target.receivedSize, target.totalSize);
         }
+      } else {
+        console.warn('[file-transfer] MSG_BINARY orphan: dropping chunk');
       }
       return;
     }
 
     if (frame.type === MSG_BINARY_END) {
-      if (this.currentGet) {
-        const getCb = this.currentGet;
-        if (!getCb.done) {
-          getCb._callback({ s: 'ok', data: Buffer.concat(getCb.chunks), size: getCb.totalSize });
-        }
+      let target = null;
+      if (this._activeGetId != null) target = this.pending.get(this._activeGetId);
+      if (!target) target = this.currentGet;
+      if (target && !target.done) {
+        target._callback({ s: 'ok', data: Buffer.concat(target.chunks), size: target.totalSize });
+      } else {
+        console.warn('[file-transfer] MSG_BINARY_END orphan: no active get');
       }
       return;
     }
@@ -253,12 +275,18 @@ class FileTransferConnection {
 
   async listFiles(remotePath) {
     const id = ++this.idCounter;
-    console.log(`[file-transfer] listFiles: path="${remotePath}"`);
+    console.log(`[file-transfer] listFiles: path="${remotePath}", id=${id}`);
     return new Promise((resolve, reject) => {
-      this.pending.set(id, { resolve, reject });
+      const entry = { resolve, reject, _timeout: null };
+      entry._timeout = setTimeout(() => {
+        this.pending.delete(id);
+        reject(new Error(`Timeout aguardando list_res (id=${id})`));
+      }, 30000);
+      this.pending.set(id, entry);
       try {
         this._sendJson({ t: 'list', p: remotePath, i: id });
       } catch (err) {
+        clearTimeout(entry._timeout);
         this.pending.delete(id);
         console.error(`[file-transfer] listFiles ERROR for path="${remotePath}": ${err.message}`);
         reject(err);
@@ -268,20 +296,31 @@ class FileTransferConnection {
 
   async downloadFile(remotePath, onProgress) {
     const id = ++this.idCounter;
+    console.log(`[file-transfer] downloadFile: path="${remotePath}", id=${id}`);
     return new Promise((resolve, reject) => {
       const state = {
+        kind: 'get',
         chunks: [],
         totalSize: 0,
         receivedSize: 0,
+        basename: '',
         done: false,
         _onProgress: onProgress
       };
       const finish = (err, data, size) => {
         if (state.done) return;
         state.done = true;
+        clearTimeout(state._timeout);
+        if (this._activeGetId === id) this._activeGetId = null;
         if (this.currentGet === state) this.currentGet = null;
-        if (err) reject(err);
-        else resolve({ data, size: size || data.length });
+        this.pending.delete(id);
+        if (err) {
+          console.error(`[file-transfer] downloadFile ERROR id=${id}: ${err.message}`);
+          reject(err);
+        } else {
+          console.log(`[file-transfer] downloadFile OK id=${id}: ${data.length} bytes (expected ${size})`);
+          resolve({ data, size: size || data.length });
+        }
       };
       state._callback = (msg) => {
         if (msg.s === 'err') {
@@ -296,6 +335,12 @@ class FileTransferConnection {
           finish(null, Buffer.concat(state.chunks), state.totalSize);
         }
       };
+      state._timeout = setTimeout(() => {
+        finish(new Error(`Timeout aguardando get_res (id=${id})`));
+      }, 30000);
+
+      this.pending.set(id, state);
+      this._activeGetId = id;
       this.currentGet = state;
       try {
         this._sendJson({ t: 'get', p: remotePath, i: id });
@@ -361,10 +406,16 @@ class FileTransferConnection {
   async deleteFile(remotePath) {
     const id = ++this.idCounter;
     return new Promise((resolve, reject) => {
-      this.pending.set(id, { resolve, reject });
+      const entry = { resolve, reject, _timeout: null };
+      entry._timeout = setTimeout(() => {
+        this.pending.delete(id);
+        reject(new Error(`Timeout aguardando delete_res (id=${id})`));
+      }, 30000);
+      this.pending.set(id, entry);
       try {
         this._sendJson({ t: 'delete', p: remotePath, i: id });
       } catch (err) {
+        clearTimeout(entry._timeout);
         this.pending.delete(id);
         reject(err);
       }
@@ -374,10 +425,16 @@ class FileTransferConnection {
   async createDirectory(remotePath) {
     const id = ++this.idCounter;
     return new Promise((resolve, reject) => {
-      this.pending.set(id, { resolve, reject });
+      const entry = { resolve, reject, _timeout: null };
+      entry._timeout = setTimeout(() => {
+        this.pending.delete(id);
+        reject(new Error(`Timeout aguardando mkdir_res (id=${id})`));
+      }, 30000);
+      this.pending.set(id, entry);
       try {
         this._sendJson({ t: 'mkdir', p: remotePath, i: id });
       } catch (err) {
+        clearTimeout(entry._timeout);
         this.pending.delete(id);
         reject(err);
       }
