@@ -1,6 +1,6 @@
 const { ipcMain, app, dialog } = require('electron');
 const { readConfig, writeConfig } = require('./config-manager');
-const { connectFileTransfer, disconnectFileTransfer, getActiveConnection } = require('./file-transfer');
+const { connectFileTransfer, disconnectFileTransfer, getActiveConnection, setStatusListener } = require('./file-transfer');
 const { getFileServerStatus } = require('./file-server');
 const { sendConnectRequest, SIGNAL_PORT } = require('./connection-request');
 const { execSync } = require('child_process');
@@ -18,6 +18,10 @@ function send(mainWindow, channel, data) {
 }
 
 function registerIpcHandlers(mainWindow) {
+  setStatusListener((evt) => {
+    send(mainWindow, 'ft:status', { state: evt.state, host: evt.host, message: evt.message, code: evt.code });
+  });
+
   ipcMain.handle('config:get', () => {
     return readConfig();
   });
@@ -141,6 +145,7 @@ function registerIpcHandlers(mainWindow) {
       });
 
       if (options && options.savePath) {
+        await fsp.mkdir(path.dirname(options.savePath), { recursive: true });
         await fsp.writeFile(options.savePath, result.data);
         send(mainWindow, 'ft:progress', {
           type: 'download',
@@ -154,8 +159,17 @@ function registerIpcHandlers(mainWindow) {
         return { s: 'ok', size: result.size, savePath: options.savePath };
       }
 
-      return { s: 'ok', size: result.size, data: result.data };
+      return { s: 'ok', size: result.size };
     } catch (err) {
+      send(mainWindow, 'ft:progress', {
+        type: 'download',
+        path: remotePath,
+        received: 0,
+        total: 0,
+        percent: 0,
+        done: true,
+        error: err.message
+      });
       return { s: 'err', m: err.message };
     }
   });

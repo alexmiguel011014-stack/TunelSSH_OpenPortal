@@ -25,7 +25,7 @@ const formatDate = (iso) => {
   }
 };
 
-function FilePanel({ title, path, entries, selected, onSelect, onNavigate, loading, drives, onDriveChange, isLocal, specialDirs, onSpecialDir, error, isConnecting }) {
+function FilePanel({ title, path, entries, selected, onSelect, onNavigate, loading, drives, onDriveChange, isLocal, specialDirs, onSpecialDir, error, isConnecting, selectable }) {
   const pathParts = path ? path.split('\\').filter(Boolean) : [];
 
   return (
@@ -125,7 +125,7 @@ function FilePanel({ title, path, entries, selected, onSelect, onNavigate, loadi
             display: 'flex', alignItems: 'center', padding: '4px 10px', gap: '8px',
             borderBottom: '1px solid #1e293b', fontSize: '11px', color: '#64748b', fontWeight: 600
           }}>
-            {isLocal && <span style={{ width: '22px' }}></span>}
+            {selectable && <span style={{ width: '22px' }}></span>}
             <span style={{ flex: 1 }}>Nome</span>
             <span style={{ width: '80px', textAlign: 'right' }}>Tamanho</span>
             <span style={{ width: '140px', textAlign: 'right' }}>Modificado</span>
@@ -157,7 +157,7 @@ function FilePanel({ title, path, entries, selected, onSelect, onNavigate, loadi
 
         {/* File entries */}
         {!loading && !error && !isConnecting && entries.map((entry, i) => {
-          const isSelected = isLocal ? selected?.has(i) : false;
+          const isSelected = selectable ? selected?.has(i) : false;
           return (
             <div
               key={i}
@@ -168,25 +168,24 @@ function FilePanel({ title, path, entries, selected, onSelect, onNavigate, loadi
                 color: entry.d ? '#e2e8f0' : '#cbd5e1'
               }}
               onClick={(e) => {
-                if (isLocal) {
-                  const sel = new Set(selected || []);
-                  if (e.ctrlKey || e.metaKey) {
-                    if (sel.has(i)) sel.delete(i); else sel.add(i);
-                  } else {
-                    sel.clear(); sel.add(i);
-                  }
-                  onSelect(sel);
+                if (!selectable) return;
+                const sel = new Set(selected || []);
+                if (e.ctrlKey || e.metaKey) {
+                  if (sel.has(i)) sel.delete(i); else sel.add(i);
+                } else {
+                  sel.clear(); sel.add(i);
                 }
+                onSelect(sel);
               }}
               onDoubleClick={() => {
                 if (entry.d) {
                   onNavigate(isLocal ? path.replace(/\\$/, '') + '\\' + entry.n : (path.endsWith('\\') ? path : path + '\\') + entry.n);
-                  if (isLocal) onSelect(new Set());
+                  if (selectable) onSelect(new Set());
                 }
               }}
             >
-              {/* Checkbox (local only) */}
-              {isLocal && (
+              {/* Checkbox (selectable) */}
+              {selectable && (
                 <span style={{ width: '22px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                   <input
                     type="checkbox"
@@ -241,6 +240,7 @@ export default function FileTransfer() {
   const [remoteEntries, setRemoteEntries] = useState([]);
   const [remoteLoading, setRemoteLoading] = useState(false);
   const [remoteError, setRemoteError] = useState(null);
+  const [remoteSelected, setRemoteSelected] = useState(new Set());
 
   const loadLocalDir = useCallback(async (dirPath) => {
     if (!dirPath) return;
@@ -264,6 +264,7 @@ export default function FileTransfer() {
       if (res.s === 'ok') {
         setRemoteEntries(res.e || []);
         setRemotePath(dirPath);
+        setRemoteSelected(new Set());
       } else {
         setRemoteError(res.m || 'Falha ao listar diretorio remoto');
         addLog(`Erro ao listar remoto: ${res.m}`, 'error');
@@ -357,12 +358,88 @@ export default function FileTransfer() {
       if (data.done) {
         setTimeout(() => {
           setTransfer(null);
-          loadRemoteDir(remotePath);
+          if (data.type !== 'download' || data.error) {
+            loadRemoteDir(remotePath);
+          }
         }, 1500);
       }
     });
     return unsub;
   }, [remotePath, loadRemoteDir]);
+
+  useEffect(() => {
+    const unsub = window.electronAPI?.onFtStatus((status) => {
+      if (!status) return;
+      if (status.state === 'disconnected' || status.state === 'error') {
+        setConnected(false);
+        const detail = status.message ? `: ${status.message}` : '';
+        addLog(`Desconectado do servidor de arquivos${detail}`, status.state === 'error' ? 'error' : 'info');
+        setRemoteEntries([]);
+        setRemoteSelected(new Set());
+        if (status.state === 'error') {
+          setError(status.message || 'Conexao perdida');
+        }
+      }
+    });
+    return unsub;
+  }, [addLog]);
+
+  const joinLocalPath = (base, name) => {
+    const b = (base || '').replace(/\\+$/, '');
+    return b + '\\' + name;
+  };
+
+  const handleDownloadSelected = async () => {
+    if (!remoteSelected || remoteSelected.size === 0) return;
+    const items = [...remoteSelected].map(i => remoteEntries[i]).filter(Boolean);
+    if (items.length === 0) return;
+
+    const fileItems = items.filter(it => !it.d);
+    if (fileItems.length === 0) {
+      addLog('Selecione apenas arquivos para baixar (pastas em breve)', 'warn');
+      return;
+    }
+
+    let downloaded = 0;
+    let failed = 0;
+    const fallbackBase = localPath ? localPath.replace(/\\+$/, '') + '\\' : '';
+
+    for (const sel of fileItems) {
+      const sep = remotePath.endsWith('\\') ? '' : '\\';
+      const remoteFull = remotePath + sep + sel.n;
+
+      const defaultPath = fallbackBase ? joinLocalPath(localPath, sel.n) : sel.n;
+      const dlg = await window.electronAPI.showSaveDialog({
+        title: 'Salvar como',
+        defaultPath,
+        filters: []
+      });
+      if (!dlg || dlg.canceled || !dlg.filePath) {
+        addLog(`Download cancelado: ${sel.n}`);
+        return;
+      }
+
+      addLog(`Baixando: ${sel.n}...`);
+      try {
+        const res = await window.electronAPI.ftDownload(remoteFull, { savePath: dlg.filePath });
+        if (res && res.s === 'ok') {
+          addLog(`Arquivo baixado: ${sel.n} (${formatSize(res.size || sel.s)}) -> ${dlg.filePath}`);
+          downloaded++;
+        } else {
+          addLog(`Falha ao baixar ${sel.n}: ${(res && res.m) || 'erro'}`, 'error');
+          failed++;
+        }
+      } catch (err) {
+        addLog(`Erro ao baixar ${sel.n}: ${err.message}`, 'error');
+        failed++;
+      }
+    }
+
+    if (downloaded > 0 && localPath) {
+      loadLocalDir(localPath);
+    }
+    setRemoteSelected(new Set());
+  };
 
   const handleUploadSelected = async () => {
     if (!localSelected || localSelected.size === 0) return;
@@ -482,17 +559,39 @@ export default function FileTransfer() {
               {localSelected.size} item(ns)
             </span>
           )}
+          <button
+            onClick={handleDownloadSelected}
+            disabled={!connected || !remoteSelected || remoteSelected.size === 0}
+            title="Baixar arquivos selecionados do remoto"
+            style={{
+              ...btn, padding: '10px 12px', fontSize: '14px', fontWeight: 600,
+              background: (connected && remoteSelected && remoteSelected.size > 0) ? '#10b981' : '#1e293b',
+              borderColor: (connected && remoteSelected && remoteSelected.size > 0) ? '#10b981' : '#475569',
+              color: (connected && remoteSelected && remoteSelected.size > 0) ? '#fff' : '#64748b',
+              cursor: (connected && remoteSelected && remoteSelected.size > 0) ? 'pointer' : 'default',
+              opacity: (connected && remoteSelected && remoteSelected.size > 0) ? 1 : 0.4,
+              writingMode: 'vertical-lr', textOrientation: 'mixed', letterSpacing: '2px'
+            }}
+          >Baixar do Remoto</button>
+          {remoteSelected?.size > 0 && (
+            <span style={{ fontSize: '10px', color: '#94a3b8', textAlign: 'center' }}>
+              {remoteSelected.size} item(ns)
+            </span>
+          )}
         </div>
 
         <FilePanel
           title="Computador Remoto"
           path={remotePath}
           entries={remoteEntries}
+          selected={remoteSelected}
+          onSelect={setRemoteSelected}
           onNavigate={loadRemoteDir}
           loading={remoteLoading}
           isLocal={false}
           error={remoteError}
           isConnecting={connecting}
+          selectable
         />
       </div>
 
@@ -500,7 +599,10 @@ export default function FileTransfer() {
       <div style={{ padding: '3px 10px', background: '#1e293b', borderTop: '1px solid #334155', fontSize: '11px', color: '#64748b', display: 'flex', gap: '16px' }}>
         <span style={{ color: connected ? '#22c55e' : '#f87171' }}>{connected ? 'Conectado' : 'Desconectado'}</span>
         {localSelected?.size > 0 && <span>{localSelected.size} selecionado(s)</span>}
-        {transfer?.percent != null && <span>Enviando... {transfer.percent}%</span>}
+        {remoteSelected?.size > 0 && <span>{remoteSelected.size} remoto(s)</span>}
+        {transfer?.percent != null && (
+          <span>{transfer.type === 'download' ? `Baixando... ${transfer.percent}%` : `Enviando... ${transfer.percent}%`}</span>
+        )}
       </div>
     </div>
   );

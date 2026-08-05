@@ -144,6 +144,11 @@ async function finalizePut(socket) {
 async function handleDelete(socket, msg) {
   try {
     const targetPath = resolveSafePath(msg.p);
+    const rootResolved = path.resolve(serverRootDir);
+    if (targetPath === rootResolved) {
+      sendJson(socket, { t: 'delete_res', i: msg.i, s: 'err', m: 'Cannot delete root directory' });
+      return;
+    }
     await fsp.rm(targetPath, { recursive: true, force: true });
     sendJson(socket, { t: 'delete_res', i: msg.i, s: 'ok' });
   } catch (err) {

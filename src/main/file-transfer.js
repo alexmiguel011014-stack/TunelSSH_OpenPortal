@@ -39,6 +39,9 @@ class FileTransferConnection {
     this._resolveConnect = null;
     this._rejectConnect = null;
     this.currentGet = null;
+    this._onStatus = null;
+    this._host = '';
+    this._port = 0;
   }
 
   connect(proxyUrl) {
@@ -64,16 +67,19 @@ class FileTransferConnection {
         }
       });
 
-      this.ws.on('close', () => {
+      this.ws.on('close', (code, reason) => {
+        const reasonStr = (reason && reason.toString()) || 'Connection closed';
         this.connected = false;
-        this._rejectPending('Connection closed');
-        this._failConnect(new Error('Connection closed'));
+        this._rejectPending(reasonStr);
+        this._failConnect(new Error(reasonStr));
+        this._notifyStatus('disconnected', reasonStr, code);
       });
 
       this.ws.on('error', (err) => {
         this.connected = false;
         this._rejectPending(err.message);
         this._failConnect(err);
+        this._notifyStatus('error', err.message);
       });
     });
   }
@@ -104,11 +110,22 @@ class FileTransferConnection {
   disconnect() {
     this._failConnect(new Error('Disconnected'));
     if (this.ws) {
-      this.ws.close();
+      try { this.ws.close(); } catch {}
       this.ws = null;
     }
     this.connected = false;
     this._rejectPending('Disconnected');
+    this._notifyStatus('disconnected', 'Disconnected by client');
+  }
+
+  setStatusListener(cb) {
+    this._onStatus = typeof cb === 'function' ? cb : null;
+  }
+
+  _notifyStatus(state, message, code) {
+    if (this._onStatus) {
+      try { this._onStatus({ state, message, host: this._host, port: this._port, code }); } catch {}
+    }
   }
 
   _sendJson(obj) {
@@ -160,20 +177,15 @@ class FileTransferConnection {
       }
 
       if (msg.t === 'get_res' && msg.s === 'ok') {
-        const prev = this.currentGet || {};
-        this.currentGet = {
-          chunks: [],
-          totalSize: msg.z,
-          receivedSize: 0,
-          _callback: prev._callback,
-          _onProgress: prev._onProgress
-        };
+        if (this.currentGet) {
+          this.currentGet.totalSize = msg.z;
+          this.currentGet.basename = msg.n;
+        }
         return;
       }
 
       if (msg.t === 'get_done' || (msg.t === 'get_res' && msg.s !== 'ok')) {
         const getCb = this.currentGet;
-        this.currentGet = null;
         if (getCb && getCb._callback) {
           getCb._callback(msg);
         }
@@ -247,28 +259,38 @@ class FileTransferConnection {
   async downloadFile(remotePath, onProgress) {
     const id = ++this.idCounter;
     return new Promise((resolve, reject) => {
-      this.currentGet = {
+      const state = {
         chunks: [],
         totalSize: 0,
         receivedSize: 0,
-        _callback: (msg) => {
-          if (msg.s === 'ok' && msg.data) {
-            resolve({ data: msg.data, size: msg.size });
-          } else if (msg.s === 'err') {
-            reject(new Error(msg.m || 'Download failed'));
-          } else if (msg.s === 'ok' && !msg.data) {
-            resolve({ data: Buffer.concat(this.currentGet.chunks), size: this.currentGet.totalSize });
-          }
+        done: false,
+        _onProgress: onProgress
+      };
+      const finish = (err, data, size) => {
+        if (state.done) return;
+        state.done = true;
+        if (this.currentGet === state) this.currentGet = null;
+        if (err) reject(err);
+        else resolve({ data, size: size || data.length });
+      };
+      state._callback = (msg) => {
+        if (msg.s === 'err') {
+          finish(new Error(msg.m || 'Download failed'));
+          return;
+        }
+        if (msg.s === 'ok' && msg.data) {
+          finish(null, msg.data, msg.size);
+          return;
+        }
+        if (msg.s === 'ok') {
+          finish(null, Buffer.concat(state.chunks), state.totalSize);
         }
       };
-      if (onProgress) {
-        this.currentGet._onProgress = onProgress;
-      }
+      this.currentGet = state;
       try {
         this._sendJson({ t: 'get', p: remotePath, i: id });
       } catch (err) {
-        this.currentGet = null;
-        reject(err);
+        finish(err);
       }
     });
   }
@@ -332,12 +354,16 @@ class FileTransferConnection {
 }
 
 let activeConnection = null;
+let activeStatusListener = null;
 
 async function connectFileTransfer(host, port) {
   if (activeConnection) {
     activeConnection.disconnect();
   }
   const conn = new FileTransferConnection();
+  conn._host = host;
+  conn._port = port || 5001;
+  if (activeStatusListener) conn.setStatusListener(activeStatusListener);
   const targetPort = port || 5001;
   const proxyUrl = `ws://127.0.0.1:18901?host=${host}&port=${targetPort}`;
   console.log(`[file-transfer] connectFileTransfer -> proxy ws://127.0.0.1:18901, target host=${host}, port=${targetPort}`);
@@ -346,6 +372,7 @@ async function connectFileTransfer(host, port) {
     console.log(`[file-transfer] connectFileTransfer: CONNECTED to ${host}:${targetPort}`);
   } catch (err) {
     console.error(`[file-transfer] connectFileTransfer FAILED to ${host}:${targetPort}: ${err.message}`);
+    activeConnection = null;
     throw err;
   }
   activeConnection = conn;
@@ -359,6 +386,11 @@ function disconnectFileTransfer() {
   }
 }
 
+function setStatusListener(cb) {
+  activeStatusListener = typeof cb === 'function' ? cb : null;
+  if (activeConnection) activeConnection.setStatusListener(activeStatusListener);
+}
+
 function getActiveConnection() {
   return activeConnection;
 }
@@ -367,5 +399,6 @@ module.exports = {
   FileTransferConnection,
   connectFileTransfer,
   disconnectFileTransfer,
-  getActiveConnection
+  getActiveConnection,
+  setStatusListener
 };
