@@ -1,4 +1,4 @@
-import { useContext, useState, useMemo, useEffect, useRef } from 'react';
+import { useContext, useMemo, useEffect, useState } from 'react';
 import { MachineContext } from '../App';
 import StatusBadge from './StatusBadge';
 
@@ -6,31 +6,17 @@ export default function Sidebar() {
   const {
     machines,
     activeMachineId,
-    activeMachine,
-    statuses,
     connectMachine,
-    disconnectMachine,
     addMachine,
     removeMachine,
-    triggerReconnect,
-    showConfig,
-    setShowConfig,
     showFiles,
     setShowFiles,
     sidebarCollapsed,
     toggleSidebar,
     maxMachines,
-    logs,
-    setLogs,
-    showLogs,
-    setShowLogs,
     addLog,
   } = useContext(MachineContext);
 
-  const [showConnectedOpts, setShowConnectedOpts] = useState(false);
-  const logContainerRef = useRef(null);
-  const [logLevel, setLogLevel] = useState('all');
-  const [logQuery, setLogQuery] = useState('');
   const [serverStatus, setServerStatus] = useState({ running: false, port: 0 });
   const [localIp, setLocalIp] = useState('');
 
@@ -44,35 +30,6 @@ export default function Sidebar() {
     [machines, activeMachineId]
   );
 
-  const filteredLogs = useMemo(() => {
-    const q = logQuery.trim().toLowerCase();
-    return logs.filter((l) => {
-      const levelOk = logLevel === 'all' || l.type === logLevel || (logLevel === 'error' && l.type === 'warn');
-      if (!levelOk) return false;
-      if (q && !(l.msg || '').toLowerCase().includes(q)) return false;
-      return true;
-    });
-  }, [logs, logLevel, logQuery]);
-
-  const exportLogs = () => {
-    const text = filteredLogs
-      .map((l) => `[${l.time}] [${(l.type || 'info').toUpperCase()}] ${l.msg}`)
-      .join('\n');
-    const blob = new Blob([text || 'Nenhum log'], { type: 'text/plain;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `openportal-logs-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}.txt`;
-    a.click();
-    URL.revokeObjectURL(url);
-  };
-
-  useEffect(() => {
-    if (showLogs && logContainerRef.current) {
-      logContainerRef.current.scrollTop = logContainerRef.current.scrollHeight;
-    }
-  }, [logs, showLogs]);
-
   if (sidebarCollapsed) return null;
 
   const handleClickMachine = (machine) => {
@@ -83,17 +40,6 @@ export default function Sidebar() {
     }
     if (addLog) addLog(`Sidebar: connecting to ${machine.host}:${machine.port}`);
     connectMachine(machine);
-  };
-
-  const handleReconnect = () => {
-    if (addLog) addLog('Sidebar: reconnecting');
-    triggerReconnect();
-  };
-
-  const handleDisconnect = () => {
-    if (addLog) addLog('Sidebar: disconnecting');
-    setShowConnectedOpts(false);
-    disconnectMachine();
   };
 
   const handleRemove = (id, name) => {
@@ -136,65 +82,6 @@ export default function Sidebar() {
           </div>
         )}
       </div>
-
-      {/* Connected PC Section */}
-      {activeMachine && (
-        <>
-          <div
-            style={{ padding: '12px', borderBottom: '1px solid #334155', cursor: 'pointer' }}
-            onClick={() => setShowConnectedOpts(!showConnectedOpts)}
-          >
-            <div style={{ fontSize: '11px', fontWeight: 500, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '8px' }}>
-              Conectado
-            </div>
-            <div style={{
-              padding: '10px 12px',
-              borderRadius: '8px',
-              background: '#1e3a5f',
-              border: '1px solid #2563eb',
-            }}>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                <div style={{ fontSize: '14px', fontWeight: 500, color: '#e2e8f0' }}>
-                  {activeMachine.name}
-                </div>
-                <span style={{ fontSize: '10px', color: '#64748b' }}>{showConnectedOpts ? '▲' : '▼'}</span>
-              </div>
-              {activeMachine.host && (
-                <div style={{ fontSize: '12px', color: '#94a3b8', fontFamily: 'monospace', marginTop: '2px' }}>
-                  {activeMachine.host}:{activeMachine.port}
-                </div>
-              )}
-              <div style={{ marginTop: '4px' }}>
-                <StatusBadge state={statuses[activeMachine.id] || 'connecting'} />
-              </div>
-            </div>
-          </div>
-
-          {/* Connected PC Options (expandable) */}
-          {showConnectedOpts && (
-            <div style={{ padding: '0 12px 12px', borderBottom: '1px solid #334155', display: 'flex', flexDirection: 'column', gap: '6px' }}>
-              <button
-                onClick={handleReconnect}
-                style={{
-                  width: '100%', padding: '8px', fontSize: '13px', borderRadius: '6px',
-                  border: 'none', cursor: 'pointer', background: '#2563eb', color: '#fff',
-                }}
-              >
-                🔄 Reconectar
-              </button>
-              <button
-                onClick={handleDisconnect}
-                style={{
-                  width: '100%', padding: '8px', fontSize: '13px', borderRadius: '6px',
-                  border: '1px solid #475569', cursor: 'pointer', background: 'transparent', color: '#f87171',
-                }}
-              >
-                ⏹ Desconectar
-              </button>
-            </div>
-          )}
-        </>
-      )}
 
       {/* Machines List */}
       <nav style={{ flex: 1, padding: '12px', overflowY: 'auto' }}>
@@ -269,106 +156,10 @@ export default function Sidebar() {
         )}
       </nav>
 
-      {/* Logs section */}
-      <div style={{ borderTop: '1px solid #334155' }}>
-        <button
-          onClick={() => setShowLogs(!showLogs)}
-          style={{
-            width: '100%',
-            padding: '8px 12px',
-            fontSize: '12px',
-            border: 'none',
-            cursor: 'pointer',
-            background: showLogs ? '#1e3a5f' : 'transparent',
-            color: showLogs ? '#93c5fd' : '#64748b',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-          }}
-        >
-          <span>📋 Logs ({logs.length})</span>
-          <span style={{ fontSize: '10px' }}>{showLogs ? '▼' : '▲'}</span>
-        </button>
-
-        {showLogs && (
-          <div style={{ background: '#0f172a', borderBottom: '1px solid #334155' }}>
-            <div style={{ padding: '4px 8px', display: 'flex', gap: '4px', borderBottom: '1px solid #1e293b', alignItems: 'center' }}>
-              <select
-                value={logLevel}
-                onChange={(e) => setLogLevel(e.target.value)}
-                style={{
-                  background: '#1e293b', color: '#94a3b8', border: '1px solid #334155',
-                  borderRadius: '4px', paddingLeft: '2px', fontSize: '10px', cursor: 'pointer', outline: 'none'
-                }}
-                title="Filtrar por tipo"
-              >
-                <option value="all">Todos</option>
-                <option value="error">Erros/Avisos</option>
-                <option value="info">Infos</option>
-              </select>
-              <input
-                type="text"
-                value={logQuery}
-                onChange={(e) => setLogQuery(e.target.value)}
-                placeholder="Buscar..."
-                title="Buscar nos logs"
-                style={{
-                  flex: 1, minWidth: 0, background: '#0f172a', border: '1px solid #334155',
-                  borderRadius: '4px', color: '#e2e8f0', fontSize: '10px', padding: '2px 6px', outline: 'none'
-                }}
-              />
-              <button
-                onClick={exportLogs}
-                title="Exportar logs filtrados"
-                style={{ fontSize: '10px', background: '#1e293b', border: '1px solid #334155', color: '#94a3b8', cursor: 'pointer', padding: '2px 6px', borderRadius: '3px' }}
-              >
-                ⬇
-              </button>
-              <button
-                onClick={() => setLogs([])}
-                title="Limpar logs"
-                style={{ fontSize: '10px', background: '#1e293b', border: 'none', color: '#f87171', cursor: 'pointer', padding: '2px 6px', borderRadius: '3px' }}
-              >
-                Limpar
-              </button>
-            </div>
-            <div
-              ref={logContainerRef}
-              style={{
-                maxHeight: '150px',
-                overflowY: 'auto',
-                padding: '4px 8px',
-                fontFamily: 'monospace',
-                fontSize: '10px',
-                lineHeight: '1.5',
-              }}
-            >
-              {filteredLogs.length === 0 ? (
-                <div style={{ color: '#475569', padding: '8px', textAlign: 'center' }}>
-                  {logs.length === 0 ? 'Nenhum log ainda' : 'Nenhum log corresponde ao filtro'}
-                </div>
-              ) : (
-                filteredLogs.map((log) => (
-                  <div
-                    key={log.id}
-                    style={{
-                      color: log.type === 'error' ? '#f87171' : log.type === 'warn' ? '#fbbf24' : '#94a3b8',
-                      wordBreak: 'break-all',
-                    }}
-                  >
-                    <span style={{ color: '#475569' }}>[{log.time}]</span> {log.msg}
-                  </div>
-                ))
-              )}
-            </div>
-          </div>
-        )}
-      </div>
-
       {/* Files button */}
       <div style={{ padding: '0 12px', borderTop: '1px solid #334155' }}>
         <button
-          onClick={() => { setShowFiles(!showFiles); if (showConfig) setShowConfig(false); }}
+          onClick={() => setShowFiles(!showFiles)}
           style={{
             width: '100%',
             padding: '8px 12px',
@@ -382,25 +173,6 @@ export default function Sidebar() {
           }}
         >
           📁 Files
-        </button>
-      </div>
-
-      {/* Settings at bottom */}
-      <div style={{ padding: '12px', borderTop: '1px solid #334155' }}>
-        <button
-          onClick={() => { setShowConfig(!showConfig); if (showFiles) setShowFiles(false); }}
-          style={{
-            width: '100%',
-            padding: '8px 12px',
-            borderRadius: '8px',
-            fontSize: '14px',
-            border: 'none',
-            cursor: 'pointer',
-            background: showConfig ? '#475569' : 'transparent',
-            color: showConfig ? '#ffffff' : '#94a3b8',
-          }}
-        >
-          ⚙️ Settings
         </button>
       </div>
     </aside>
