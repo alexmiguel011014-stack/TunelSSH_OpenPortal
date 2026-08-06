@@ -171,6 +171,18 @@ function registerIpcHandlers(mainWindow) {
       const conn = getActiveConnection();
       if (!conn) throw new Error('Not connected');
 
+      const savePath = options && options.savePath;
+      const partPath = options && options.partPath;
+
+      let start = 0;
+      if (partPath) {
+        try {
+          const st = await fsp.stat(partPath);
+          if (st.isFile()) start = st.size;
+        } catch {}
+      }
+
+      const writeTarget = partPath || savePath || null;
       const result = await conn.downloadFile(remotePath, (received, total) => {
         send(mainWindow, 'ft:progress', {
           type: 'download',
@@ -179,11 +191,15 @@ function registerIpcHandlers(mainWindow) {
           total,
           percent: total > 0 ? Math.round((received / total) * 100) : 0
         });
-      });
+      }, { start, filePath: writeTarget });
 
-      if (options && options.savePath) {
-        await fsp.mkdir(path.dirname(options.savePath), { recursive: true });
-        await fsp.writeFile(options.savePath, result.data);
+      if (partPath && savePath) {
+        try {
+          await fsp.mkdir(path.dirname(savePath), { recursive: true });
+          await fsp.rename(partPath, savePath);
+        } catch (err) {
+          console.error(`[ipc] ft:download finalize rename ERROR: ${err.message}`);
+        }
         send(mainWindow, 'ft:progress', {
           type: 'download',
           path: remotePath,
@@ -191,9 +207,24 @@ function registerIpcHandlers(mainWindow) {
           total: result.size,
           percent: 100,
           done: true,
-          savePath: options.savePath
+          savePath
         });
-        return { s: 'ok', size: result.size, savePath: options.savePath };
+        return { s: 'ok', size: result.size, savePath };
+      }
+
+      if (savePath) {
+        await fsp.mkdir(path.dirname(savePath), { recursive: true });
+        await fsp.writeFile(savePath, result.data);
+        send(mainWindow, 'ft:progress', {
+          type: 'download',
+          path: remotePath,
+          received: result.size,
+          total: result.size,
+          percent: 100,
+          done: true,
+          savePath
+        });
+        return { s: 'ok', size: result.size, savePath };
       }
 
       return { s: 'ok', size: result.size };

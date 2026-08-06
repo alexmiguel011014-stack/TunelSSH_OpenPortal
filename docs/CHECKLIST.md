@@ -41,7 +41,7 @@
 
 - [x] **Retry automático VNC** na `RemoteViewer` ao detectar `vnc-status:'disconnected'|'error'`: backoff exponencial (3s→5s→10s, até ~5 tentativas) + opção manual "Reconectar".
 - [x] **Detecção de rede Tailscale** antes de conectar: avisar se o IP não for 100.x.x.x / 10.x.x.x / 172.x.x.x (evita erro comum).
-- [ ] **Resume de transferência** interrompida (download retomando de um byte offset / upload do último chunk confirmado) — esforço alto; validar protocolo.
+- [x] **Resume de transferência** interrompida (download retomando de um byte offset / upload do último chunk confirmado) — esforço alto; validar protocolo.
 
 ### 🟢 Baixa
 

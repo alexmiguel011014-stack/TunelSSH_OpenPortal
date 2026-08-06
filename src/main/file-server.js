@@ -87,16 +87,17 @@ async function handleGet(socket, msg) {
       return;
     }
     const totalSize = stat.size;
-    sendJson(socket, { t: 'get_res', i: msg.i, s: 'ok', z: totalSize, n: path.basename(filePath) });
+    const offset = Math.min(Math.max(0, parseInt(msg.o, 10) || 0), totalSize);
+    sendJson(socket, { t: 'get_res', i: msg.i, s: 'ok', z: totalSize, o: offset, n: path.basename(filePath) });
     const fd = await fsp.open(filePath, 'r');
     try {
-      let bytesSent = 0;
       const buffer = Buffer.alloc(CHUNK_SIZE);
-      while (bytesSent < totalSize) {
-        const { bytesRead } = await fd.read(buffer, 0, CHUNK_SIZE, bytesSent);
+      let pos = offset;
+      while (pos < totalSize) {
+        const { bytesRead } = await fd.read(buffer, 0, CHUNK_SIZE, pos);
         if (bytesRead <= 0) break;
         sendBinary(socket, buffer.slice(0, bytesRead));
-        bytesSent += bytesRead;
+        pos += bytesRead;
       }
     } finally {
       await fd.close();

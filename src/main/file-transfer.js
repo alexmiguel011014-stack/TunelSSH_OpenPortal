@@ -222,10 +222,20 @@ class FileTransferConnection {
         if (entry && entry.kind === 'get') {
           entry.totalSize = msg.z;
           entry.basename = msg.n;
+          if (typeof msg.o === 'number' && msg.o > 0) entry.startOffset = msg.o;
+          entry.receivedSize = entry.startOffset || 0;
+          if (entry.filePath && typeof entry._openWrite === 'function') {
+            entry._openWrite().catch(() => {});
+          }
           if (typeof entry._restartTimeout === 'function') entry._restartTimeout();
         } else if (this.currentGet) {
           this.currentGet.totalSize = msg.z;
           this.currentGet.basename = msg.n;
+          if (typeof msg.o === 'number' && msg.o > 0) this.currentGet.startOffset = msg.o;
+          this.currentGet.receivedSize = this.currentGet.startOffset || 0;
+          if (this.currentGet.filePath && typeof this.currentGet._openWrite === 'function') {
+            this.currentGet._openWrite().catch(() => {});
+          }
           if (typeof this.currentGet._restartTimeout === 'function') this.currentGet._restartTimeout();
         }
         return;
@@ -288,7 +298,11 @@ class FileTransferConnection {
       if (this._activeGetId != null) target = this.pending.get(this._activeGetId);
       if (!target) target = this.currentGet;
       if (target && !target.done) {
-        target.chunks.push(frame.payload);
+        if (target._writeChunk && target.filePath) {
+          target._writeChunk(frame.payload);
+        } else {
+          target.chunks.push(frame.payload);
+        }
         target.receivedSize += frame.payload.length;
         if (typeof target._restartTimeout === 'function') target._restartTimeout();
         if (target._onProgress) {
@@ -305,7 +319,7 @@ class FileTransferConnection {
       if (this._activeGetId != null) target = this.pending.get(this._activeGetId);
       if (!target) target = this.currentGet;
       if (target && !target.done) {
-        target._callback({ s: 'ok', data: Buffer.concat(target.chunks), size: target.totalSize });
+        target._callback({ s: 'ok', data: target.filePath ? null : Buffer.concat(target.chunks), size: target.totalSize });
       } else {
         console.warn('[file-transfer] MSG_BINARY_END orphan: no active get');
       }
@@ -334,19 +348,39 @@ class FileTransferConnection {
     });
   }
 
-  async downloadFile(remotePath, onProgress) {
+  async downloadFile(remotePath, onProgress, opts) {
     const id = ++this.idCounter;
-    console.log(`[file-transfer] downloadFile: path="${remotePath}", id=${id}`);
+    opts = opts || {};
+    const startOffset = Math.max(0, parseInt(opts.start, 10) || 0);
+    const filePath = opts.filePath || null;
+    console.log(`[file-transfer] downloadFile: path="${remotePath}", start=${startOffset}, filePath=${filePath || '(memoria)'}, id=${id}`);
+
     return new Promise((resolve, reject) => {
       const state = {
         kind: 'get',
         chunks: [],
         totalSize: 0,
-        receivedSize: 0,
+        receivedSize: startOffset,
+        startOffset,
+        filePath,
         basename: '',
         done: false,
+        writeFd: null,
+        writeChain: null,
         _onProgress: onProgress
       };
+
+      const cleanupFile = async () => {
+        if (state.writeChain) {
+          try { await state.writeChain; } catch {}
+          state.writeChain = null;
+        }
+        if (state.writeFd) {
+          try { await state.writeFd.close(); } catch {}
+          state.writeFd = null;
+        }
+      };
+
       const finish = (err, data, size) => {
         if (state.done) return;
         state.done = true;
@@ -354,14 +388,32 @@ class FileTransferConnection {
         if (this._activeGetId === id) this._activeGetId = null;
         if (this.currentGet === state) this.currentGet = null;
         this.pending.delete(id);
-        if (err) {
-          console.error(`[file-transfer] downloadFile ERROR id=${id}: ${err.message}`);
-          reject(err);
-        } else {
-          console.log(`[file-transfer] downloadFile OK id=${id}: ${data.length} bytes (expected ${size})`);
-          resolve({ data, size: size || data.length });
-        }
+        cleanupFile().then(() => {
+          if (err) {
+            console.error(`[file-transfer] downloadFile ERROR id=${id}: ${err.message}`);
+            reject(err);
+          } else {
+            const finalSize = size || (data ? data.length : state.receivedSize);
+            console.log(`[file-transfer] downloadFile OK id=${id}: ${finalSize} bytes`);
+            resolve({ data, size: finalSize, filePath });
+          }
+        });
       };
+
+      state._openWrite = async () => {
+        if (!state.filePath || state.writeFd) return;
+        state.writeFd = await fsp.open(state.filePath, state.startOffset > 0 ? 'a' : 'w');
+      };
+
+      state._writeChunk = (chunk) => {
+        if (!state.writeFd) return false;
+        const fd = state.writeFd;
+        state.writeChain = (state.writeChain || Promise.resolve())
+          .then(() => fd.write(chunk))
+          .catch(() => {});
+        return true;
+      };
+
       state._callback = (msg) => {
         if (msg.s === 'err') {
           finish(new Error(msg.m || 'Download failed'));
@@ -372,12 +424,9 @@ class FileTransferConnection {
           return;
         }
         if (msg.s === 'ok') {
-          finish(null, Buffer.concat(state.chunks), state.totalSize);
+          finish(null, state.filePath ? null : Buffer.concat(state.chunks), state.totalSize);
         }
       };
-      // Janela de inatividade: reinicia o timer a cada get_res OK e a cada
-      // MSG_BINARY recebido. O download só aborta se não houver resposta nem
-      // chunk por 30s; finish() é quem garante o clearTimeout final.
       state._restartTimeout = () => {
         clearTimeout(state._timeout);
         state._timeout = setTimeout(() => {
@@ -390,7 +439,7 @@ class FileTransferConnection {
       this._activeGetId = id;
       this.currentGet = state;
       try {
-        this._sendJson({ t: 'get', p: remotePath, i: id });
+        this._sendJson({ t: 'get', p: remotePath, i: id, o: startOffset });
       } catch (err) {
         finish(err);
       }

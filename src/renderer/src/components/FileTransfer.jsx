@@ -539,7 +539,8 @@ export default function FileTransfer() {
 
       addLog(`Recebendo: ${sel.n}...`);
       try {
-        const res = await window.electronAPI.ftDownload(remoteFull, { savePath: dlg.filePath });
+        const partPath = dlg.filePath + '.part';
+        const res = await window.electronAPI.ftDownload(remoteFull, { savePath: dlg.filePath, partPath });
         if (res && res.s === 'ok') {
           addLog(`Arquivo recebido: ${sel.n} (${formatSize(res.size || sel.s)}) -> ${dlg.filePath}`);
           downloaded++;
