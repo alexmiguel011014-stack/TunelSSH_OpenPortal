@@ -142,30 +142,23 @@ export default function RemoteViewer({ machine, reconnectFlag }) {
   return (
     <div
       ref={containerRef}
-      style={{ flex: 1, position: 'relative', background: '#000', overflow: 'hidden' }}
+      style={{ flex: 1, display: 'flex', flexDirection: 'column', background: '#000', overflow: 'hidden' }}
     >
-      <iframe
-        key={iframeKey}
-        ref={iframeRef}
-        src={viewerUrl}
-        style={{ width: '100%', height: '100%', border: 'none', display: 'block' }}
-        title={`VNC - ${machine.name}`}
-      />
-
-      {/* Toolbar */}
+      {/* Control bar (top) */}
       <div
         style={{
-          position: 'absolute', top: '8px', left: '50%', transform: 'translateX(-50%)',
-          zIndex: 20, display: 'flex', gap: '6px', alignItems: 'center', flexWrap: 'wrap',
-          background: '#0f172a', border: '1px solid #334155', borderRadius: '8px',
-          padding: '6px', boxShadow: '0 4px 14px rgba(0,0,0,0.5)',
-          maxWidth: '96%',
+          display: 'flex', gap: '6px', alignItems: 'center', flexWrap: 'wrap',
+          background: '#0f172a', borderBottom: '1px solid #334155', padding: '6px 10px',
         }}
       >
-        {remoteRes && <span style={ctrlLabel}>{remoteRes.w}×{remoteRes.h}</span>}
+        {remoteRes && (
+          <span style={{ ...ctrlLabel, background: '#1e293b', border: '1px solid #334155', borderRadius: '4px', padding: '4px 8px' }}>
+            Dimensão: {remoteRes.w}×{remoteRes.h}
+          </span>
+        )}
         <button style={ctrlBtn} onClick={handleReconnect} title="Reconectar">🔄 Reconectar</button>
         <button style={ctrlBtn} onClick={toggleFullscreen} title={isFullscreen ? 'Sair da tela cheia' : 'Tela cheia'}>
-          {isFullscreen ? '⛶ Sair' : '⛶ Tela cheia'}
+          {isFullscreen ? '⛶ Sair da tela' : '⛶ Tela cheia'}
         </button>
         <select
           title="Qualidade"
@@ -178,6 +171,19 @@ export default function RemoteViewer({ machine, reconnectFlag }) {
           ))}
         </select>
         <button style={{ ...ctrlBtn, color: '#f87171', borderColor: '#7f1d1d' }} onClick={handleDisconnect} title="Desconectar">⏹ Desconectar</button>
+        <span style={{ flex: 1 }} />
+        <span style={ctrlLabel}>{machine.name} · {machine.host}:{machine.port}</span>
+      </div>
+
+      {/* Canvas viewport */}
+      <div style={{ flex: 1, position: 'relative' }}>
+        <iframe
+          key={iframeKey}
+          ref={iframeRef}
+          src={viewerUrl}
+          style={{ width: '100%', height: '100%', border: 'none', display: 'block' }}
+          title={`VNC - ${machine.name}`}
+        />
       </div>
     </div>
   );

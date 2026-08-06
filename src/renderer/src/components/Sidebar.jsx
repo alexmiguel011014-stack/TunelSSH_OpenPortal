@@ -47,6 +47,18 @@ export default function Sidebar() {
     removeMachine(id);
   };
 
+  const handleCheckUpdate = async () => {
+    if (addLog) addLog('Verificando atualizações...');
+    try {
+      const res = await window.electronAPI?.checkForUpdates?.();
+      if (res && res.checking === false && res.message) {
+        if (addLog) addLog(res.message, 'warn');
+      }
+    } catch (err) {
+      if (addLog) addLog(`Erro ao verificar atualizações: ${err.message}`, 'error');
+    }
+  };
+
   return (
     <aside style={{ width: '256px', minWidth: '256px', background: '#1e293b', borderRight: '1px solid #334155', display: 'flex', flexDirection: 'column' }}>
       {/* Header with collapse */}
@@ -173,6 +185,26 @@ export default function Sidebar() {
           }}
         >
           📁 Files
+        </button>
+      </div>
+
+      {/* Atualizações button */}
+      <div style={{ padding: '0 12px', borderTop: '1px solid #334155' }}>
+        <button
+          onClick={handleCheckUpdate}
+          style={{
+            width: '100%',
+            padding: '8px 12px',
+            borderRadius: '8px',
+            fontSize: '14px',
+            border: 'none',
+            cursor: 'pointer',
+            background: 'transparent',
+            color: '#94a3b8',
+          }}
+          title="Verificar atualizações"
+        >
+          🔄 Atualizações
         </button>
       </div>
     </aside>

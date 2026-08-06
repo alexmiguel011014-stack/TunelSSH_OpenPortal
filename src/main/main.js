@@ -73,6 +73,7 @@ function createWindow() {
     minHeight: 600,
     title: 'OpenPortal Remote',
     backgroundColor: '#0f172a',
+    autoHideMenuBar: true,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -80,6 +81,7 @@ function createWindow() {
       enableRemoteModule: false,
     },
   });
+  mainWindow.setMenuBarVisibility(false);
 
   if (isDev) {
     mainWindow.loadURL('http://127.0.0.1:5173');
@@ -238,30 +240,6 @@ function buildAppMenu() {
       ]
     },
     {
-      label: 'Atualizações',
-      submenu: [
-        {
-          label: 'Verificar atualizações...',
-          accelerator: 'CmdOrCtrl+U',
-          click: () => {
-            if (isDev) {
-              dialog.showMessageBox(mainWindow, {
-                type: 'info',
-                title: 'Atualizações',
-                message: 'Modo de desenvolvimento: as atualizações só funcionam no app instalado.',
-                buttons: ['OK']
-              });
-            } else {
-              isUserTriggeredUpdate = true;
-              createUpdateProgressWindow();
-              updateWinJS("addLog('Verificando atualizações...')");
-              autoUpdater.checkForUpdates();
-            }
-          }
-        }
-      ]
-    },
-    {
       label: 'Help',
       submenu: [
         {
@@ -306,11 +284,17 @@ app.whenReady().then(() => {
   registerIpcHandlers(mainWindow);
 
   ipcMain.handle('app:checkUpdate', () => {
-    if (!isDev) {
-      autoUpdater.checkForUpdates();
-      return { checking: true };
+    if (isDev) {
+      return { checking: false, message: 'Auto-update only in production' };
     }
-    return { checking: false, message: 'Auto-update only in production' };
+    isUserTriggeredUpdate = true;
+    if (!updateProgressWindow || updateProgressWindow.isDestroyed()) {
+      createUpdateProgressWindow();
+    }
+    updateWinJS("addLog('Verificando atualizações...')");
+    updateWinJS("setStatus('Verificando...')");
+    autoUpdater.checkForUpdates();
+    return { checking: true };
   });
 
   globalShortcut.register('F12', () => {
