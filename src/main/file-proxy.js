@@ -5,6 +5,8 @@ const isDev = process.env.NODE_ENV === 'development';
 
 const CONNECT_TIMEOUT = 10000;
 const IDLE_TIMEOUT = 30 * 60 * 1000;
+// Acima deste volume enfileirado no WebSocket, a leitura do TCP é pausada.
+const WS_BUFFER_HIGH = 4 * 1024 * 1024;
 
 function isAllowedHost(host) {
   if (!host) return false;
@@ -79,15 +81,39 @@ function startFileProxy(port = 18901) {
       if (!tcpSocket.destroyed) tcpSocket.destroy(new Error('Idle timeout'));
     });
 
+    // Backpressure TCP -> WS (downloads): se o WebSocket acumula, para de ler
+    // do socket TCP em vez de bufferizar o arquivo inteiro na ponte.
+    let resumeTimer = null;
+    const resumeTcpWhenDrained = () => {
+      resumeTimer = null;
+      if (!tcpSocket || tcpSocket.destroyed) return;
+      if (ws.readyState !== WebSocket.OPEN) return;
+      if (ws.bufferedAmount > WS_BUFFER_HIGH) {
+        resumeTimer = setTimeout(resumeTcpWhenDrained, 50);
+      } else {
+        tcpSocket.resume();
+      }
+    };
+
     tcpSocket.on('data', (chunk) => {
-      if (ws.readyState === WebSocket.OPEN) {
-        ws.send(chunk);
+      if (ws.readyState !== WebSocket.OPEN) return;
+      ws.send(chunk);
+      if (ws.bufferedAmount > WS_BUFFER_HIGH && !resumeTimer) {
+        tcpSocket.pause();
+        resumeTimer = setTimeout(resumeTcpWhenDrained, 50);
       }
     });
 
+    // Backpressure WS -> TCP (uploads): pausa o socket do WebSocket enquanto o
+    // TCP não drena.
     ws.on('message', (data) => {
-      if (tcpSocket && !tcpSocket.destroyed) {
-        tcpSocket.write(Buffer.from(data));
+      if (!tcpSocket || tcpSocket.destroyed) return;
+      const flushed = tcpSocket.write(Buffer.from(data));
+      if (!flushed && ws._socket && !ws._socket.destroyed) {
+        ws._socket.pause();
+        tcpSocket.once('drain', () => {
+          if (ws._socket && !ws._socket.destroyed) ws._socket.resume();
+        });
       }
     });
 
@@ -107,19 +133,16 @@ function startFileProxy(port = 18901) {
       }
     });
 
-    ws.on('close', () => {
+    const teardown = () => {
       clearTimeout(connectTimer);
+      if (resumeTimer) { clearTimeout(resumeTimer); resumeTimer = null; }
       if (tcpSocket && !tcpSocket.destroyed) {
         tcpSocket.destroy();
       }
-    });
+    };
 
-    ws.on('error', () => {
-      clearTimeout(connectTimer);
-      if (tcpSocket && !tcpSocket.destroyed) {
-        tcpSocket.destroy();
-      }
-    });
+    ws.on('close', teardown);
+    ws.on('error', teardown);
   });
 
   console.log(`[file-proxy] File WebSocket proxy listening on ws://localhost:${port}`);

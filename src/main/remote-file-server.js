@@ -1,13 +1,17 @@
 #!/usr/bin/env node
-const { startFileServer } = require('./file-server');
+// Agente autônomo (sem Electron): expõe a pasta do usuário na porta 5001.
+// Uso: node remote-file-server.js [porta] [raiz]
+const os = require('os');
+const { startFileServer, PROTOCOL_VERSION } = require('./file-server');
 
 const PORT = parseInt(process.argv[2] || '5001', 10);
-const ROOT_DIR = process.argv[3] || process.env.USERPROFILE || process.env.HOME || '.';
+// os.homedir() cobre Windows, Linux e macOS sem depender de variável de ambiente.
+const ROOT_DIR = process.argv[3] || os.homedir() || process.cwd();
 
 startFileServer(PORT, ROOT_DIR).then(({ port, rootDir }) => {
-  console.log(`[remote-file-server] Listening on port ${port}`);
-  console.log(`[remote-file-server] Root directory: ${rootDir}`);
+  console.log(`[remote-file-server] Ouvindo na porta ${port} (protocolo v${PROTOCOL_VERSION}, ${process.platform})`);
+  console.log(`[remote-file-server] Raiz: ${rootDir}`);
 }).catch((err) => {
-  console.error(`[remote-file-server] Failed to start: ${err.message}`);
+  console.error(`[remote-file-server] Falha ao iniciar: ${err.message}`);
   process.exit(1);
 });

@@ -20,8 +20,26 @@ const errLogPath = path.join(logsDir, 'electron-err.log');
 console.log('[main] Log files:', outLogPath);
 console.error('[main] Log files:', errLogPath);
 
+// Rotação simples: acima de 5 MB o log vira .1 e recomeça, para o diretório de
+// dados do usuário não crescer sem limite em produção.
+const MAX_LOG_BYTES = 5 * 1024 * 1024;
+
+function rotateIfNeeded(filePath) {
+  try {
+    if (fs.existsSync(filePath) && fs.statSync(filePath).size > MAX_LOG_BYTES) {
+      fs.rmSync(filePath + '.1', { force: true });
+      fs.renameSync(filePath, filePath + '.1');
+    }
+  } catch {}
+}
+
+rotateIfNeeded(outLogPath);
+rotateIfNeeded(errLogPath);
+
 const outStream = fs.createWriteStream(outLogPath, { flags: 'a' });
 const errStream = fs.createWriteStream(errLogPath, { flags: 'a' });
+outStream.on('error', () => {});
+errStream.on('error', () => {});
 
 function writeLog(stream, prefix, args) {
   const msg = args.map(arg => {
@@ -29,8 +47,10 @@ function writeLog(stream, prefix, args) {
     return typeof arg === 'object' ? JSON.stringify(arg, null, 2) : arg;
   }).join(' ');
   const formatted = `[${new Date().toISOString()}] ${prefix}: ${msg}\n`;
-  stream.write(formatted);
-  process.stdout.write(formatted);
+  // Em app empacotado no Windows não há console anexado: escrever em
+  // process.stdout pode lançar EPIPE/EBADF e derrubar o processo.
+  try { stream.write(formatted); } catch {}
+  try { process.stdout.write(formatted); } catch {}
 }
 
 console.log = (...args) => writeLog(outStream, 'INFO', args);
@@ -271,8 +291,17 @@ app.whenReady().then(() => {
   wss = startWebSocketProxy(PROXY_PORT);
   fileWss = startFileProxy(18901);
 
-  startFileServer(FILE_SERVER_PORT).then(({ port, rootDir }) => {
-    console.log(`[main] File server (agente) listening on TCP ${port}, root: ${rootDir}`);
+  // Raiz do agente = pasta do usuário, resolvida pelo Electron em qualquer SO.
+  // Os atalhos vêm de app.getPath, que respeita pastas localizadas
+  // ("Área de Trabalho") e redirecionadas.
+  const agentRoot = app.getPath('home');
+  const agentQuickDirs = {};
+  for (const [key, name] of [['desktop', 'desktop'], ['downloads', 'downloads'], ['documents', 'documents']]) {
+    try { agentQuickDirs[key] = app.getPath(name); } catch {}
+  }
+
+  startFileServer(FILE_SERVER_PORT, agentRoot, { quickDirs: agentQuickDirs }).then(({ port, rootDir }) => {
+    console.log(`[main] File server (agente) listening on TCP ${port}, root: ${rootDir}, platform: ${process.platform}`);
   }).catch(err => {
     console.error(`[main] Failed to start file server: ${err.message}`);
   });

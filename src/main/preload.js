@@ -23,14 +23,18 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Connection request (Conectar por IP)
   requestConnection: (host, opts) => ipcRenderer.invoke('connect:request', host, opts),
 
-  // File transfer API
-  ftConnect: (host, port) => ipcRenderer.invoke('ft:connect', host, port),
-  ftDisconnect: () => ipcRenderer.invoke('ft:disconnect'),
+  // --- File transfer -------------------------------------------------------
+  // Caminhos remotos são sempre virtuais estilo POSIX ("/", "/Documentos/a.txt").
+  // Caminhos locais são sempre nativos do SO e vêm prontos do main.
+  ftConnect: (host, port, opts) => ipcRenderer.invoke('ft:connect', host, port, opts),
+  ftDisconnect: (sessionId) => ipcRenderer.invoke('ft:disconnect', sessionId),
+  ftInfo: () => ipcRenderer.invoke('ft:info'),
   ftList: (path) => ipcRenderer.invoke('ft:list', path),
+  ftStat: (path) => ipcRenderer.invoke('ft:stat', path),
   ftDownload: (remotePath, options) => ipcRenderer.invoke('ft:download', remotePath, options),
   ftUpload: (remotePath, options) => ipcRenderer.invoke('ft:upload', remotePath, options),
   ftUploadFolder: (localPath, remoteParent) => ipcRenderer.invoke('ft:uploadFolder', localPath, remoteParent),
-  ftDownloadFolder: (remotePath, localRoot) => ipcRenderer.invoke('ft:downloadFolder', remotePath, localRoot),
+  ftDownloadFolder: (remotePath, localRoot, options) => ipcRenderer.invoke('ft:downloadFolder', remotePath, localRoot, options),
   ftDelete: (remotePath) => ipcRenderer.invoke('ft:delete', remotePath),
   ftMkdir: (remotePath) => ipcRenderer.invoke('ft:mkdir', remotePath),
 
@@ -58,9 +62,20 @@ contextBridge.exposeInMainWorld('electronAPI', {
   writeLocalFile: (filePath, data) => ipcRenderer.invoke('fs:writeFile', filePath, data),
   statLocal: (filePath) => ipcRenderer.invoke('fs:stat', filePath),
 
-  // Local file system browsing
+  // --- Navegação local (multiplataforma) -----------------------------------
+  // getRoots: drives no Windows, "/" + volumes montados no Linux/macOS.
+  // getQuickAccess: Início / Área de Trabalho / Downloads / Documentos
+  //   resolvidos pelo Electron, respeitando pastas localizadas.
+  // pathInfo: pai, migalhas de pão e separador de um caminho local.
+  // listLocalDir: entradas + navegação pronta, sem concatenar caminho na UI.
+  joinPath: (base, ...parts) => ipcRenderer.invoke('fs:joinPath', base, ...parts),
+  getRoots: () => ipcRenderer.invoke('fs:getRoots'),
+  getQuickAccess: () => ipcRenderer.invoke('fs:getQuickAccess'),
+  getPathInfo: (dirPath) => ipcRenderer.invoke('fs:pathInfo', dirPath),
   getHomeDir: () => ipcRenderer.invoke('fs:getHomeDir'),
+  listLocalDir: (dirPath) => ipcRenderer.invoke('fs:listDir', dirPath),
+
+  // Compatibilidade com a API anterior.
   getDrives: () => ipcRenderer.invoke('fs:getDrives'),
   getSpecialDirs: () => ipcRenderer.invoke('fs:getSpecialDirs'),
-  listLocalDir: (dirPath) => ipcRenderer.invoke('fs:listDir', dirPath),
 });

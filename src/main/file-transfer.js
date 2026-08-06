@@ -2,6 +2,7 @@ const WebSocket = require('ws');
 const fs = require('fs');
 const fsp = require('fs/promises');
 const path = require('path');
+const vpath = require('./vpath');
 
 const CHUNK_SIZE = 64 * 1024;
 const MSG_JSON = 0;
@@ -31,6 +32,8 @@ class FrameDecoder {
   }
 }
 
+let sessionCounter = 0;
+
 class FileTransferConnection {
   constructor() {
     this.ws = null;
@@ -48,6 +51,18 @@ class FileTransferConnection {
     this._connectAcknowledged = false;
     this._host = '';
     this._port = 0;
+    // Identidade da sessão: acompanha todo evento `ft:status` para que o
+    // renderer descarte avisos de conexões que não são mais a dele.
+    this.sessionId = 'ft-' + (++sessionCounter);
+    this.info = null;
+  }
+
+  // Conexão utilizável agora (handshake TCP confirmado e socket aberto).
+  isAlive() {
+    return this.connected
+      && this._connectAcknowledged
+      && !!this.ws
+      && this.ws.readyState === WebSocket.OPEN;
   }
 
   connect(proxyUrl) {
@@ -151,7 +166,14 @@ class FileTransferConnection {
   _notifyStatus(state, message, code) {
     if (this._suppressStatus) return;
     if (this._onStatus) {
-      try { this._onStatus({ state, message, host: this._host, port: this._port, code }); } catch {}
+      try {
+        this._onStatus({
+          state, message, code,
+          host: this._host,
+          port: this._port,
+          sessionId: this.sessionId,
+        });
+      } catch {}
     }
   }
 
@@ -330,29 +352,67 @@ class FileTransferConnection {
     }
   }
 
-  async listFiles(remotePath) {
+  // Requisição JSON simples: envia e resolve com a resposta correlacionada por
+  // `i`. Usado por list/stat/info/delete/mkdir.
+  _request(type, payload, timeoutMs, label) {
     const id = ++this.idCounter;
-    console.log(`[file-transfer] listFiles: path="${remotePath}", id=${id}`);
     return new Promise((resolve, reject) => {
       const entry = { resolve, reject, _timeout: null };
       entry._timeout = setTimeout(() => {
         this.pending.delete(id);
-        reject(new Error(`Timeout aguardando list_res (id=${id})`));
-      }, 30000);
+        reject(new Error(`Timeout aguardando ${label || type + '_res'} (id=${id})`));
+      }, timeoutMs || 30000);
       this.pending.set(id, entry);
       try {
-        this._sendJson({ t: 'list', p: remotePath, i: id });
+        this._sendJson({ ...payload, t: type, i: id });
       } catch (err) {
         clearTimeout(entry._timeout);
         this.pending.delete(id);
-        console.error(`[file-transfer] listFiles ERROR for path="${remotePath}": ${err.message}`);
+        console.error(`[file-transfer] ${type} ERROR: ${err.message}`);
         reject(err);
       }
     });
   }
 
-  async downloadFile(remotePath, onProgress, opts) {
+  async listFiles(remotePath) {
+    const p = vpath.toVirtual(remotePath);
+    console.log(`[file-transfer] listFiles: path="${p}"`);
+    return this._request('list', { p }, 30000, 'list_res');
+  }
+
+  async statFile(remotePath) {
+    return this._request('stat', { p: vpath.toVirtual(remotePath) }, 15000, 'stat_res');
+  }
+
+  // Metadados do agente (plataforma, raiz nativa, atalhos). Agentes antigos não
+  // conhecem `info`: o timeout curto degrada sem travar a UI e o resultado
+  // fica em cache para a sessão.
+  async getInfo() {
+    if (this.info) return this.info;
+    try {
+      const res = await this._request('info', {}, 6000, 'info_res');
+      if (res && res.s === 'ok') {
+        this.info = {
+          proto: res.proto || 1,
+          platform: res.platform || 'unknown',
+          sep: res.sep || '/',
+          host: res.host || '',
+          root: res.root || '',
+          quick: res.quick || {},
+        };
+      } else {
+        this.info = { proto: 1, platform: 'unknown', sep: '\\', host: '', root: '', quick: {} };
+      }
+    } catch (err) {
+      console.log(`[file-transfer] getInfo indisponivel (agente antigo?): ${err.message}`);
+      this.info = { proto: 1, platform: 'unknown', sep: '\\', host: '', root: '', quick: {} };
+    }
+    return this.info;
+  }
+
+  async downloadFile(remotePathRaw, onProgress, opts) {
     const id = ++this.idCounter;
+    const remotePath = vpath.toVirtual(remotePathRaw);
     opts = opts || {};
     const startOffset = Math.max(0, parseInt(opts.start, 10) || 0);
     const filePath = opts.filePath || null;
@@ -449,8 +509,9 @@ class FileTransferConnection {
     });
   }
 
-  async uploadFile(remotePath, data, onProgress) {
+  async uploadFile(remotePathRaw, data, onProgress) {
     const id = ++this.idCounter;
+    const remotePath = vpath.toVirtual(remotePathRaw);
     const totalSize = data.length;
     console.log(`[file-transfer] uploadFile: path="${remotePath}", size=${totalSize} bytes`);
 
@@ -506,8 +567,9 @@ class FileTransferConnection {
   // O stream é pausado quando o buffer do WebSocket passa de
   // BACKPRESSURE_HIGH e retomado quando ele drena, evitando acumular o
   // arquivo inteiro em memória. A leitura só começa após o put_res do servidor.
-  async uploadFileFromPath(remotePath, filePath, onProgress) {
+  async uploadFileFromPath(remotePathRaw, filePath, onProgress) {
     const id = ++this.idCounter;
+    const remotePath = vpath.toVirtual(remotePathRaw);
     let totalSize = 0;
     try {
       const st = await fsp.stat(filePath);
@@ -624,41 +686,11 @@ class FileTransferConnection {
   }
 
   async deleteFile(remotePath) {
-    const id = ++this.idCounter;
-    return new Promise((resolve, reject) => {
-      const entry = { resolve, reject, _timeout: null };
-      entry._timeout = setTimeout(() => {
-        this.pending.delete(id);
-        reject(new Error(`Timeout aguardando delete_res (id=${id})`));
-      }, 30000);
-      this.pending.set(id, entry);
-      try {
-        this._sendJson({ t: 'delete', p: remotePath, i: id });
-      } catch (err) {
-        clearTimeout(entry._timeout);
-        this.pending.delete(id);
-        reject(err);
-      }
-    });
+    return this._request('delete', { p: vpath.toVirtual(remotePath) }, 30000, 'delete_res');
   }
 
   async createDirectory(remotePath) {
-    const id = ++this.idCounter;
-    return new Promise((resolve, reject) => {
-      const entry = { resolve, reject, _timeout: null };
-      entry._timeout = setTimeout(() => {
-        this.pending.delete(id);
-        reject(new Error(`Timeout aguardando mkdir_res (id=${id})`));
-      }, 30000);
-      this.pending.set(id, entry);
-      try {
-        this._sendJson({ t: 'mkdir', p: remotePath, i: id });
-      } catch (err) {
-        clearTimeout(entry._timeout);
-        this.pending.delete(id);
-        reject(err);
-      }
-    });
+    return this._request('mkdir', { p: vpath.toVirtual(remotePath) }, 30000, 'mkdir_res');
   }
 }
 
@@ -666,8 +698,43 @@ let activeConnection = null;
 let connectingConnection = null;
 let activeStatusListener = null;
 let connectionGen = 0;
+// Conexão em andamento compartilhada: chamadas concorrentes para o mesmo
+// destino aguardam esta promise em vez de abrir um segundo socket.
+let pendingConnect = null;
 
-async function connectFileTransfer(host, port) {
+// Estabelece (ou reaproveita) a conexão com o agente remoto.
+//
+// É IDEMPOTENTE por destino: se já existe uma conexão viva — ou uma em
+// andamento — para o mesmo host:porta, ela é reaproveitada. É isso que torna a
+// dupla montagem do React StrictMode inofensiva: os dois `ft:connect` disparados
+// pelo mesmo efeito recebem a MESMA sessão, sem derrubar socket nenhum.
+// `opts.force` ignora o cache e refaz a conexão (usado pelo botão "Tentar
+// novamente").
+async function connectFileTransfer(host, port, opts) {
+  const targetPort = port || 5001;
+  const force = !!(opts && opts.force);
+
+  if (!force && activeConnection && activeConnection.isAlive()
+      && activeConnection._host === host && activeConnection._port === targetPort) {
+    console.log(`[file-transfer] connectFileTransfer: reutilizando sessao ${activeConnection.sessionId} (${host}:${targetPort})`);
+    return activeConnection;
+  }
+
+  if (!force && pendingConnect && pendingConnect.host === host && pendingConnect.port === targetPort) {
+    console.log(`[file-transfer] connectFileTransfer: aguardando conexao em andamento (${host}:${targetPort})`);
+    return pendingConnect.promise;
+  }
+
+  const promise = doConnect(host, targetPort);
+  pendingConnect = { host, port: targetPort, promise };
+  try {
+    return await promise;
+  } finally {
+    if (pendingConnect && pendingConnect.promise === promise) pendingConnect = null;
+  }
+}
+
+async function doConnect(host, targetPort) {
   const gen = ++connectionGen;
   // Desconecta qualquer conexão anterior (ativa ou ainda em andamento)
   // para que somente a mais recente possa se tornar a conexão ativa.
@@ -683,10 +750,9 @@ async function connectFileTransfer(host, port) {
 
   const conn = new FileTransferConnection();
   conn._host = host;
-  conn._port = port || 5001;
+  conn._port = targetPort;
   if (activeStatusListener) conn.setStatusListener(activeStatusListener);
-  const targetPort = port || 5001;
-  const proxyUrl = `ws://127.0.0.1:18901?host=${host}&port=${targetPort}`;
+  const proxyUrl = `ws://127.0.0.1:18901?host=${encodeURIComponent(host)}&port=${targetPort}`;
   console.log(`[file-transfer] connectFileTransfer -> proxy ws://127.0.0.1:18901, target host=${host}, port=${targetPort} (gen=${gen})`);
   connectingConnection = conn;
   try {
@@ -714,8 +780,23 @@ async function connectFileTransfer(host, port) {
   return conn;
 }
 
-function disconnectFileTransfer() {
+// Encerra a sessão de arquivos.
+//
+// Com `sessionId`, só desconecta se a sessão ativa for exatamente aquela — um
+// pedido de saída atrasado (unmount, troca de máquina) nunca derruba uma
+// conexão mais nova. Sem `sessionId`, desconecta incondicionalmente.
+// Retorna se algo foi de fato encerrado.
+function disconnectFileTransfer(sessionId) {
+  if (sessionId) {
+    const matchesActive = activeConnection && activeConnection.sessionId === sessionId;
+    const matchesPending = connectingConnection && connectingConnection.sessionId === sessionId;
+    if (!matchesActive && !matchesPending) {
+      console.log(`[file-transfer] disconnect ignorado: sessao ${sessionId} nao e a atual`);
+      return false;
+    }
+  }
   connectionGen++;
+  pendingConnect = null;
   if (connectingConnection) {
     connectingConnection.disconnect();
     connectingConnection = null;
@@ -725,6 +806,7 @@ function disconnectFileTransfer() {
   if (prev) {
     prev.disconnect();
   }
+  return true;
 }
 
 function setStatusListener(cb) {
