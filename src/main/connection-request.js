@@ -2,6 +2,8 @@ const net = require('net');
 
 const SIGNAL_PORT = 18902;
 const REQUEST_TIMEOUT = 15000;
+const MAX_ATTEMPTS = 3;
+const RETRY_DELAY = 5000;
 
 class ConnectionRequestServer {
   constructor(onRequest) {
@@ -68,7 +70,7 @@ class ConnectionRequestServer {
   }
 }
 
-function sendConnectRequest(host, fromName, fromIp, port = SIGNAL_PORT) {
+function sendConnectRequestOnce(host, fromName, fromIp, port = SIGNAL_PORT) {
   return new Promise((resolve, reject) => {
     let socket;
     try {
@@ -127,6 +129,25 @@ function sendConnectRequest(host, fromName, fromIp, port = SIGNAL_PORT) {
       fail(new Error('Conexão encerrada pelo PC remoto'));
     });
   });
+}
+
+function sendConnectRequest(host, fromName, fromIp, port = SIGNAL_PORT) {
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  return (async () => {
+    let lastError = null;
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+      if (attempt > 1) await sleep(RETRY_DELAY);
+      try {
+        const res = await sendConnectRequestOnce(host, fromName, fromIp, port);
+        return res;
+      } catch (err) {
+        lastError = err;
+        console.error(`[connection-request] Tentativa ${attempt}/${MAX_ATTEMPTS} falhou para ${host}:${port}: ${err.message}`);
+      }
+    }
+    throw lastError || new Error('Falha ao contactar o PC remoto');
+  })();
 }
 
 module.exports = { ConnectionRequestServer, sendConnectRequest, SIGNAL_PORT };

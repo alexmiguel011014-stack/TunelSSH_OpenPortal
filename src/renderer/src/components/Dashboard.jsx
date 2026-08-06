@@ -1,5 +1,6 @@
 import { useState, useEffect, useContext } from 'react';
 import { MachineContext } from '../App';
+import { isPrivateNetworkHost } from '../lib/net';
 
 const card = {
   background: '#1e293b', borderRadius: '8px', border: '1px solid #334155',
@@ -55,6 +56,9 @@ export default function Dashboard({ onConnect }) {
     if (!ip) {
       addLog('Digite um IP para conectar', 'warn');
       return;
+    }
+    if (!isPrivateNetworkHost(ip)) {
+      addLog(`Aviso: ${ip} não parece ser da rede Tailscale. A conexão pode falhar.`, 'warn');
     }
     if (connecting) return;
     setConnecting(true);

@@ -1,6 +1,7 @@
 import { useContext, useMemo, useEffect, useState } from 'react';
 import { MachineContext } from '../App';
 import StatusBadge from './StatusBadge';
+import { isPrivateNetworkHost } from '../lib/net';
 
 export default function Sidebar() {
   const {
@@ -37,6 +38,9 @@ export default function Sidebar() {
     if (!isConfigured) {
       if (addLog) addLog('Sidebar: machine not configured (no host)', 'warn');
       return;
+    }
+    if (!isPrivateNetworkHost(machine.host)) {
+      if (addLog) addLog(`Aviso: ${machine.host} não parece ser da rede Tailscale. A conexão pode falhar.`, 'warn');
     }
     if (addLog) addLog(`Sidebar: connecting to ${machine.host}:${machine.port}`);
     connectMachine(machine);

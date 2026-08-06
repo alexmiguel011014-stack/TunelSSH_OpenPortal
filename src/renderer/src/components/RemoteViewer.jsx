@@ -13,6 +13,9 @@ const QUALITY_LEVELS = [
   { label: 'Máxima', level: 9 },
 ];
 
+const MAX_VNC_RETRIES = 5;
+const VNC_RETRY_DELAYS = [3000, 5000, 10000, 15000, 20000];
+
 export default function RemoteViewer({ machine, reconnectFlag }) {
   const iframeRef = useRef(null);
   const containerRef = useRef(null);
@@ -20,7 +23,35 @@ export default function RemoteViewer({ machine, reconnectFlag }) {
   const [remoteRes, setRemoteRes] = useState(null);
   const [quality, setQuality] = useState(3);
   const [isFullscreen, setIsFullscreen] = useState(false);
-  const { addLog, setStatuses, disconnectMachine } = useContext(MachineContext);
+  const { addLog, setStatuses, disconnectMachine, statuses } = useContext(MachineContext);
+
+  const vncState = statuses[machine.id] || 'connecting';
+  const healthMap = {
+    connected: { color: '#22c55e', label: 'Conectado' },
+    connecting: { color: '#f59e0b', label: 'Conectando...' },
+    error: { color: '#ef4444', label: 'Erro' },
+    disconnected: { color: '#94a3b8', label: 'Desconectado' },
+  };
+  const health = healthMap[vncState] || healthMap.disconnected;
+
+  const retryCountRef = useRef(0);
+  const reconnectTimerRef = useRef(null);
+  const mountedRef = useRef(true);
+
+  const scheduleReconnect = useCallback((why) => {
+    if (!mountedRef.current) return;
+    if (retryCountRef.current >= MAX_VNC_RETRIES) {
+      if (addLog) addLog(`Conexão perdida e não reconectou após ${MAX_VNC_RETRIES} tentativas. Use "Reconectar".`, 'warn');
+      return;
+    }
+    retryCountRef.current++;
+    const delay = VNC_RETRY_DELAYS[Math.min(retryCountRef.current - 1, VNC_RETRY_DELAYS.length - 1)];
+    if (addLog) addLog(`Conexão perdida (${why}). Reconectando em ${delay / 1000}s (tentativa ${retryCountRef.current}).`, 'warn');
+    if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
+    reconnectTimerRef.current = setTimeout(() => {
+      if (mountedRef.current) setIframeKey((k) => k + 1);
+    }, delay);
+  }, [addLog]);
 
   const proxyUrl = `ws://127.0.0.1:18900`;
   const password = VNC_PASSWORDS[machine.host] || '';
@@ -99,10 +130,16 @@ export default function RemoteViewer({ machine, reconnectFlag }) {
   useEffect(() => {
     function handleMessage(event) {
       if (event.data?.type === 'vnc-status') {
+        const st = event.data.state;
         setStatuses((prev) => ({
           ...prev,
-          [machine.id]: event.data.state,
+          [machine.id]: st,
         }));
+        if (st === 'connected' || st === 'connecting') {
+          retryCountRef.current = 0;
+        } else if (st === 'disconnected' || st === 'error') {
+          scheduleReconnect(st);
+        }
       }
       if (event.data?.type === 'vnc-resolution') {
         setRemoteRes({ w: event.data.width, h: event.data.height });
@@ -110,7 +147,15 @@ export default function RemoteViewer({ machine, reconnectFlag }) {
     }
     window.addEventListener('message', handleMessage);
     return () => window.removeEventListener('message', handleMessage);
-  }, [machine.id, setStatuses]);
+  }, [machine.id, setStatuses, scheduleReconnect]);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
+    };
+  }, []);
 
   useEffect(() => {
     window.addEventListener('resize', sendResize);
@@ -172,6 +217,10 @@ export default function RemoteViewer({ machine, reconnectFlag }) {
         </select>
         <button style={{ ...ctrlBtn, color: '#f87171', borderColor: '#7f1d1d' }} onClick={handleDisconnect} title="Desconectar">⏹ Desconectar</button>
         <span style={{ flex: 1 }} />
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '5px', ...ctrlLabel }}>
+          <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: health.color, display: 'inline-block' }} />
+          {health.label}
+        </span>
         <span style={ctrlLabel}>{machine.name} · {machine.host}:{machine.port}</span>
       </div>
 
