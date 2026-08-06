@@ -48,6 +48,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   checkForUpdates: () => ipcRenderer.invoke('app:checkUpdate'),
 
+  notify: (opts) => ipcRenderer.invoke('app:notify', opts),
+
+  testConnection: (host, port) => ipcRenderer.invoke('net:test', { host, port }),
+
   showOpenDialog: (options) => ipcRenderer.invoke('dialog:open', options),
   showSaveDialog: (options) => ipcRenderer.invoke('dialog:save', options),
   readLocalFile: (filePath) => ipcRenderer.invoke('fs:readFile', filePath),

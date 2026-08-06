@@ -1,4 +1,4 @@
-const { ipcMain, app, dialog } = require('electron');
+const { ipcMain, app, dialog, Notification } = require('electron');
 const { readConfig, writeConfig } = require('./config-manager');
 const { connectFileTransfer, disconnectFileTransfer, getActiveConnection, setStatusListener } = require('./file-transfer');
 const { getFileServerStatus } = require('./file-server');
@@ -8,6 +8,7 @@ const os = require('os');
 const fs = require('fs');
 const fsp = require('fs/promises');
 const path = require('path');
+const net = require('net');
 
 const PROXY_PORT = 18900;
 
@@ -77,6 +78,39 @@ function registerIpcHandlers(mainWindow) {
     } catch (err) {
       return { success: false, approved: false, message: err.message };
     }
+  });
+
+  ipcMain.handle('app:notify', (_, { title, body, silent }) => {
+    try {
+      if (Notification.isSupported()) {
+        const n = new Notification({ title: title || 'OpenPortal', body: body || '', silent: !!silent });
+        n.show();
+      }
+    } catch (err) {
+      console.error('Notification error:', err);
+    }
+  });
+
+  ipcMain.handle('net:test', async (_, { host, port, timeoutMs }) => {
+    const target = String(host || '').trim();
+    if (!target) return { ok: false, error: 'Sem host' };
+    const p = parseInt(port, 10) || 5900;
+    const timeout = timeoutMs || 4000;
+    return await new Promise((resolve) => {
+      const begin = Date.now();
+      const socket = net.connect({ host: target, port: p });
+      let settled = false;
+      const done = (result) => {
+        if (settled) return;
+        settled = true;
+        socket.destroy();
+        resolve({ ...result, host: target, port: p, ms: Date.now() - begin });
+      };
+      socket.setTimeout(timeout);
+      socket.on('connect', () => done({ ok: true }));
+      socket.on('timeout', () => done({ ok: false, error: 'Timeout' }));
+      socket.on('error', (err) => done({ ok: false, error: err.code || err.message }));
+    });
   });
 
   ipcMain.handle('app:version', () => {

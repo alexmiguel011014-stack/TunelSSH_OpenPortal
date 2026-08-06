@@ -16,6 +16,9 @@ export default function Sidebar() {
     toggleSidebar,
     maxMachines,
     addLog,
+    statuses,
+    theme,
+    toggleTheme,
   } = useContext(MachineContext);
 
   const [serverStatus, setServerStatus] = useState({ running: false, port: 0 });
@@ -137,7 +140,7 @@ export default function Sidebar() {
                       </div>
                     )}
                   </div>
-                  <StatusBadge state={'disconnected'} />
+                  <StatusBadge state={statuses[machine.id] || 'disconnected'} />
                 </div>
               </button>
               <button
@@ -209,6 +212,26 @@ export default function Sidebar() {
           title="Verificar atualizações"
         >
           🔄 Atualizações
+        </button>
+      </div>
+
+      {/* Tema button */}
+      <div style={{ padding: '0 12px', borderTop: '1px solid #334155' }}>
+        <button
+          onClick={toggleTheme}
+          style={{
+            width: '100%',
+            padding: '8px 12px',
+            borderRadius: '8px',
+            fontSize: '14px',
+            border: 'none',
+            cursor: 'pointer',
+            background: 'transparent',
+            color: '#94a3b8',
+          }}
+          title="Alternar tema claro/escuro"
+        >
+          {theme === 'dark' ? '☀️ Tema claro' : '🌙 Tema escuro'}
         </button>
       </div>
     </aside>

@@ -16,7 +16,7 @@ const sectionTitle = {
 };
 
 export default function Dashboard({ onConnect }) {
-  const { machines, activeMachine, setActiveMachine, setShowFiles, setShowConfig, addLog } = useContext(MachineContext);
+  const { machines, activeMachine, setActiveMachine, setShowFiles, setShowConfig, addLog, connHistory } = useContext(MachineContext);
   const [serverStatus, setServerStatus] = useState({ running: false, port: 0, rootDir: '' });
   const [localIp, setLocalIp] = useState('');
   const [copied, setCopied] = useState(false);
@@ -231,6 +231,32 @@ export default function Dashboard({ onConnect }) {
           {serverStatus.running
             ? `Pronto para receber conexões na porta ${serverStatus.port}`
             : 'Servidor de arquivos não disponível'}
+        </div>
+
+        {/* Histórico de conexões */}
+        <div style={{ ...card, marginTop: '20px' }}>
+          <h2 style={sectionTitle}>
+            Histórico de Conexões
+          </h2>
+          {!connHistory || connHistory.length === 0 ? (
+            <div style={{ color: '#64748b', fontSize: '12px' }}>Nenhuma conexão registrada ainda.</div>
+          ) : (
+            <div style={{ maxHeight: '220px', overflow: 'auto' }}>
+              {connHistory.slice().reverse().map((c) => (
+                <div key={c.id} style={{
+                  display: 'flex', alignItems: 'center', gap: '8px',
+                  fontSize: '12px', padding: '5px 4px',
+                  borderBottom: '1px solid #1e293b'
+                }}>
+                  <span style={{ width: '8px', height: '8px', borderRadius: '50%', display: 'inline-block', flexShrink: 0,
+                    background: c.state === 'connect' ? '#22c55e' : c.state === 'error' ? '#ef4444' : '#94a3b8' }} />
+                  <span style={{ color: '#94a3b8', flexShrink: 0 }}>{c.date} {c.time}</span>
+                  <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.name} · {c.host || '-'}</span>
+                  <span style={{ color: '#64748b' }}>{c.message || c.state}</span>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       </div>
     </div>

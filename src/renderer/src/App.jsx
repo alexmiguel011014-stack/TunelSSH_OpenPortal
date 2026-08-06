@@ -30,13 +30,40 @@ export default function App() {
   const [reconnectFlag, setReconnectFlag] = useState(0);
   const [logs, setLogs] = useState([]);
   const [showLogs, setShowLogs] = useState(false);
+  const [connHistory, setConnHistory] = useState([]);
+  const [theme, setTheme] = useState(() => localStorage.getItem('openportal-theme') || 'dark');
   const logIdRef = useRef(0);
+
+  const toggleTheme = useCallback(() => {
+    setTheme((prev) => {
+      const next = prev === 'dark' ? 'light' : 'dark';
+      localStorage.setItem('openportal-theme', next);
+      return next;
+    });
+  }, []);
+
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', theme);
+  }, [theme]);
 
   const addLog = useCallback((msg, type = 'info') => {
     const id = logIdRef.current++;
     const time = new Date().toLocaleTimeString();
     setLogs((prev) => [...prev.slice(-50), { id, time, msg, type }]);
     console.log(`[app][${type}] ${msg}`);
+  }, []);
+
+  const recordConn = useCallback((info) => {
+    const entry = {
+      id: Date.now() + '-' + Math.random().toString(16).slice(2, 6),
+      time: new Date().toLocaleTimeString(),
+      date: new Date().toLocaleDateString(),
+      name: info.name || 'Conexão Direta',
+      host: info.host || '',
+      state: info.state || 'info',
+      message: info.message || '',
+    };
+    setConnHistory((prev) => [...prev.slice(-49), entry]);
   }, []);
 
   useEffect(() => {
@@ -54,9 +81,19 @@ export default function App() {
         ...prev,
         [status.machineId || 'global']: status.state,
       }));
+      const m = machines.find((x) => x.id === status.machineId);
+      const stateLabel = status.state === 'connected' ? 'connect' : status.state;
+      if (m && (status.state === 'connected' || status.state === 'error' || status.state === 'disconnected')) {
+        recordConn({ name: m.name, host: m.host, state: stateLabel, message: status.state });
+      }
+      if (status.state === 'connected' && m) {
+        window.electronAPI?.notify({ title: 'Conexão estabelecida', body: `${m.name} (${m.host}) conectado.` });
+      } else if (status.state === 'error' && m) {
+        window.electronAPI?.notify({ title: 'Falha na conexão', body: `Não foi possível conectar a ${m.name} (${m.host}).` });
+      }
     });
     return unsub;
-  }, []);
+  }, [machines, recordConn]);
 
   const activeMachine = typeof activeMachineId === 'string'
     ? machines.find((m) => m.id === activeMachineId)
@@ -64,17 +101,21 @@ export default function App() {
 
   const connectMachine = useCallback((machine) => {
     addLog(`Connecting to: ${machine.name} (${machine.host}:${machine.port})`);
+    recordConn({ name: machine.name, host: machine.host, state: 'connecting', message: `Conectando a ${machine.host}` });
     setActiveMachineId(machine.id);
     setShowConfig(false);
     setShowFiles(false);
-  }, [addLog]);
+  }, [addLog, recordConn]);
 
-  const disconnectMachine = useCallback(() => {
+  const disconnectMachine = useCallback(async () => {
     addLog('Disconnected');
     window.electronAPI?.disconnectVnc();
+    if (activeMachine) {
+      recordConn({ name: activeMachine.name, host: activeMachine.host, state: 'disconnect', message: 'Desconectado' });
+    }
     setActiveMachineId(null);
     setStatuses({});
-  }, [addLog]);
+  }, [addLog, activeMachine, recordConn]);
 
   const saveMachines = useCallback((newMachines) => {
     setMachines(newMachines);
@@ -143,6 +184,12 @@ export default function App() {
     showLogs,
     setShowLogs,
     addLog,
+    connHistory,
+    setConnHistory,
+    recordConn,
+    theme,
+    setTheme,
+    toggleTheme,
   };
 
   return (

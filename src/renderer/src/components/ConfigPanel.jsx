@@ -16,6 +16,30 @@ export default function ConfigPanel() {
   const [draft, setDraft] = useState(() => machines.map((m) => ({ ...m })));
   const [saved, setSaved] = useState(false);
   const [errors, setErrors] = useState({});
+  const [testing, setTesting] = useState({});
+  const [testResults, setTestResults] = useState({});
+
+  const handleTest = async (index, machine) => {
+    const host = (machine.host || '').trim();
+    if (!host) {
+      if (addLog) addLog('Informe o IP antes de testar', 'warn');
+      return;
+    }
+    setTesting((prev) => ({ ...prev, [index]: true }));
+    setTestResults((prev) => ({ ...prev, [index]: null }));
+    try {
+      const res = await window.electronAPI.testConnection(host, machine.port || 5900);
+      setTestResults((prev) => ({ ...prev, [index]: res }));
+      if (addLog) addLog(res.ok
+        ? `Teste OK: ${host}:${machine.port} acessível em ${res.ms}ms`
+        : `Teste falhou: ${host}:${machine.port} (${res.error})`, res.ok ? 'info' : 'warn');
+    } catch (err) {
+      setTestResults((prev) => ({ ...prev, [index]: { ok: false, error: err.message } }));
+      if (addLog) addLog(`Erro no teste: ${err.message}`, 'error');
+    } finally {
+      setTesting((prev) => ({ ...prev, [index]: false }));
+    }
+  };
 
   const validate = (list) => {
     const errs = {};
@@ -133,6 +157,25 @@ export default function ConfigPanel() {
                     className={`w-full bg-slate-900 border rounded-lg px-3 py-2 text-sm text-slate-100 font-mono focus:outline-none focus:border-blue-500 transition-colors ${errors[index] && machine.host && !isValidHost(machine.host) ? 'border-red-600' : 'border-slate-600'}`}
                     placeholder="100.x.x.x"
                   />
+                  {testResults[index] && (
+                    <div className={`text-xs mt-1 ${testResults[index].ok ? 'text-green-400' : 'text-red-400'}`}>
+                      {testResults[index].ok
+                        ? `✓ Acessível em ${testResults[index].ms}ms`
+                        : `✗ Falhou: ${testResults[index].error}`}
+                    </div>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => handleTest(index, machine)}
+                    disabled={testing[index] || !(machine.host || '').trim()}
+                    className={`mt-2 text-xs px-3 py-1.5 rounded-lg border transition-colors ${
+                      testing[index]
+                        ? 'border-slate-600 text-slate-400 cursor-wait'
+                        : 'border-slate-600 text-slate-300 hover:border-blue-500 hover:text-blue-400'
+                    }`}
+                  >
+                    {testing[index] ? 'Testando...' : 'Testar conexão'}
+                  </button>
                 </div>
                 <div>
                   <label className="block text-xs text-slate-500 mb-1">Porta VNC</label>

@@ -66,7 +66,7 @@ function startWebSocketProxy(port = 18900) {
           stopHeartbeat();
           return;
         }
-        if (heartbeatMissed >= HEARTBEAT_MAX_MISSED) {
+        if (missedPongs >= HEARTBEAT_MAX_MISSED) {
           console.error(`[proxy] Heartbeat lost for ${targetHost}:${targetPort} (${missedPongs + 1} missed pongs). Closing.`);
           if (tcpSocket && !tcpSocket.destroyed) tcpSocket.destroy();
           ws.close(4004, 'Heartbeat timeout');

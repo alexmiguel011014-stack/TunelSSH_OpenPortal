@@ -3,7 +3,7 @@
 > **Finalidade:** Este arquivo permite retomar o trabalho exatamente onde paramos, mesmo que a conexão caia no meio de uma sessão. Atualize os status (`[ ]`/`[x]`) ao concluir cada item e commite-o junto das mudanças.
 
 Última atualização: 2026-08-05
-Último commit aplicado e enviado: `ed25bf7`
+Último commit aplicado e enviado: `5776276`
 
 ---
 
@@ -33,23 +33,23 @@
 
 ### 🔴 Alta prioridade
 
-- [ ] **Heartbeat / ping periódico** no proxy TCP + WebSocket (ex.: a cada 30s). Detectar desconexão silenciosa (rede cai sem TCP RST) e emitir `vnc:status`/`ft:status` com `state:'disconnected'`. Hoje só existe `IDLE_TIMEOUT=30min` em `proxy.js` e timeouts por operação em `file-transfer.js` — sem heartbeat.
-- [ ] **Retry automático em `connection-request.js`** (timeout 15s): 2–3 tentativas com ~5s de intervalo antes de falhar; expor opção de reenvio.
-- [ ] **Indicador de saúde VNC na Sidebar**: ponto verde/vermelho ao lado do PC com base em `statuses[machine.id]` (reintroduzir um status discreto, sem o painel "Conectado" removido em `f7f4ca1`).
+- [x] **Heartbeat / ping periódico** no proxy TCP + WebSocket (ex.: a cada 30s). Detectar desconexão silenciosa (rede cai sem TCP RST) e emitir `vnc:status`/`ft:status` com `state:'disconnected'`. Hoje só existe `IDLE_TIMEOUT=30min` em `proxy.js` e timeouts por operação em `file-transfer.js` — sem heartbeat.
+- [x] **Retry automático em `connection-request.js`** (timeout 15s): 2–3 tentativas com ~5s de intervalo antes de falhar; expor opção de reenvio.
+- [x] **Indicador de saúde VNC na Sidebar**: ponto verde/vermelho ao lado do PC com base em `statuses[machine.id]` (reintroduzir um status discreto, sem o painel "Conectado" removido em `f7f4ca1`).
 
 ### 🟡 Média
 
-- [ ] **Retry automático VNC** na `RemoteViewer` ao detectar `vnc-status:'disconnected'|'error'`: backoff exponencial (3s→5s→10s, até ~5 tentativas) + opção manual "Reconectar".
-- [ ] **Detecção de rede Tailscale** antes de conectar: avisar se o IP não for 100.x.x.x / 10.x.x.x / 172.x.x.x (evita erro comum).
+- [x] **Retry automático VNC** na `RemoteViewer` ao detectar `vnc-status:'disconnected'|'error'`: backoff exponencial (3s→5s→10s, até ~5 tentativas) + opção manual "Reconectar".
+- [x] **Detecção de rede Tailscale** antes de conectar: avisar se o IP não for 100.x.x.x / 10.x.x.x / 172.x.x.x (evita erro comum).
 - [ ] **Resume de transferência** interrompida (download retomando de um byte offset / upload do último chunk confirmado) — esforço alto; validar protocolo.
 
 ### 🟢 Baixa
 
-- [ ] **Histórico de conexões** (array circular últimas 50) com timestamp e sucesso/falha para diagnóstico.
-- [ ] **Teste de conexão rápido** (tcping/socket probe IP:porta) na tela de configuração / Sidebar.
-- [ ] **Notificações de sistema** (Notification API do renderer): "Download concluído", "Conexão perdida", etc.
-- [ ] **Atalhos de teclado globais**: ex.: F1 tela cheia no VNC (já existe F12 para devtools via `globalShortcut`).
-- [ ] **Tema claro/escuro** alternável.
+- [x] **Histórico de conexões** (array circular últimas 50) com timestamp e sucesso/falha para diagnóstico.
+- [x] **Teste de conexão rápido** (tcping/socket probe IP:porta) na tela de configuração / Sidebar.
+- [x] **Notificações de sistema** (Notification API do renderer): "Download concluído", "Conexão perdida", etc.
+- [x] **Atalhos de teclado globais**: ex.: F1 tela cheia no VNC (já existe F12 para devtools via `globalShortcut`).
+- [x] **Tema claro/escuro** alternável.
 
 ---
 

@@ -307,6 +307,20 @@ app.whenReady().then(() => {
     }
   });
 
+  globalShortcut.register('F11', () => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.setFullScreen(!mainWindow.isFullScreen());
+    }
+  });
+
+  globalShortcut.register('F1', () => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      const bwc = mainWindow.webContents;
+      bwc.sendInputEvent({ type: 'keyDown', keyCode: 'F11' });
+      bwc.sendInputEvent({ type: 'keyUp', keyCode: 'F11' });
+    }
+  });
+
   if (!isDev) {
     autoUpdater.logger = console;
     autoUpdater.autoDownload = false;

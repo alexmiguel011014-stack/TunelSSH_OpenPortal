@@ -1,0 +1,24 @@
+/* Tema claro - overrides sobre os estilos inline escuros */
+html[data-theme="light"] body {
+  background: #eef2f7;
+  color: #0f172a;
+}
+
+html[data-theme="light"] aside {
+  background-color: #e2e8f0 !important;
+  border-color: #cbd5e1 !important;
+}
+
+html[data-theme="light"] .remove-machine-btn,
+html[data-theme="light"] nav button,
+html[data-theme="light"] aside button {
+  color: #334155 !important;
+}
+
+html[data-theme="light"]::-webkit-scrollbar-track {
+  background: #e2e8f0;
+}
+
+html[data-theme="light"]::-webkit-scrollbar-thumb {
+  background: #94a3b8;
+}
