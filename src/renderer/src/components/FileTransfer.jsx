@@ -485,13 +485,6 @@ export default function FileTransfer() {
     return unsub;
   }, [addLog]);
 
-  const joinLocalPath = (base, name) => {
-    const b = (base || '').replace(/\\+$/, '');
-    return b + '\\' + name;
-  };
-
-  // Rejeita nomes remotos que poderiam escapar do diretório escolhido
-  // (nomes relativos ou com separadores de caminho) ao compor o destino local.
   const assertSafeRemoteName = (name) => {
     const n = String(name || '');
     if (!n || n === '.' || n === '..' || n.includes('\\') || n.includes('/') || /^[A-Za-z]:/.test(n)) {
@@ -500,29 +493,57 @@ export default function FileTransfer() {
     return n;
   };
 
-  const handleDownloadSelected = async () => {
-    if (!remoteSelected || remoteSelected.size === 0) return;
-    const items = [...remoteSelected].map(i => remoteEntries[i]).filter(Boolean);
-    if (items.length === 0) return;
+  // Download nativo: abre o diálogo do Windows para escolher a pasta de
+  // destino. Se houver itens remotos selecionados, recebe apenas eles;
+  // caso contrário, recebe a pasta remota atual inteira (preservando a árvore).
+  const handleDownloadClick = async () => {
+    if (!connected) return;
 
-    const fileItems = items.filter(it => !it.d);
-    const folderItems = items.filter(it => it.d);
+    const dlg = await window.electronAPI.showOpenDialog({
+      title: 'Escolher pasta de destino (local)',
+      properties: ['openDirectory', 'createDirectory']
+    });
+    if (!dlg || dlg.canceled || !dlg.filePaths || dlg.filePaths.length === 0) return;
+
+    const destBase = dlg.filePaths[0].replace(/\\+$/, '');
+    const remoteSelectedItems = remoteSelected ? [...remoteSelected].map(i => remoteEntries[i]).filter(Boolean) : [];
     const sep = remotePath.endsWith('\\') ? '' : '\\';
-    const fallbackBase = localPath ? localPath.replace(/\\+$/, '') + '\\' : '';
 
     let downloaded = 0;
     let failed = 0;
 
-    // Atualiza a listagem local e limpa a seleção antes de sair — inclusive
-    // quando um diálogo é cancelado depois de algum item já ter sido recebido.
     const finalizeDownload = () => {
-      if ((downloaded > 0 || folderItems.length > 0) && localPath) {
-        loadLocalDir(localPath);
+      if (destBase && (downloaded > 0 || folderFallback)) {
+        loadLocalDir(destBase + '\\');
       }
       setRemoteSelected(new Set());
     };
+    let folderFallback = false;
 
-    for (const sel of fileItems) {
+    // Sem seleção remota: recebe a pasta atual inteira.
+    if (remoteSelectedItems.length === 0) {
+      folderFallback = true;
+      const folderName = remotePath.split('\\').filter(Boolean).pop() || 'Pasta Remota';
+      const localFolder = destBase + '\\' + folderName;
+      addLog(`Recebendo pasta: ${remotePath} ...`);
+      try {
+        const res = await window.electronAPI.ftDownloadFolder(remotePath, localFolder);
+        if (res && (res.s === 'ok' || res.s === 'partial')) {
+          addLog(`Pasta recebida: ${folderName} (${res.totalFiles || 0} arquivos${res.failedFiles ? `, ${res.failedFiles} falhas` : ''})`);
+          downloaded++;
+        } else {
+          addLog(`Falha ao receber pasta ${folderName}: ${(res && res.m) || 'erro'}`, 'error');
+          failed++;
+        }
+      } catch (err) {
+        addLog(`Erro ao receber pasta ${folderName}: ${err.message}`, 'error');
+        failed++;
+      }
+      finalizeDownload();
+      return;
+    }
+
+    for (const sel of remoteSelectedItems) {
       let name;
       try {
         name = assertSafeRemoteName(sel.n);
@@ -533,67 +554,12 @@ export default function FileTransfer() {
       }
       const remoteFull = remotePath + sep + name;
 
-      const defaultPath = fallbackBase ? joinLocalPath(localPath, name) : name;
-      const dlg = await window.electronAPI.showSaveDialog({
-        title: 'Salvar como',
-        defaultPath,
-        filters: []
-      });
-      if (!dlg || dlg.canceled || !dlg.filePath) {
-        addLog(`Recebimento cancelado: ${sel.n}`);
-        finalizeDownload();
-        return;
-      }
-
-      addLog(`Recebendo: ${sel.n}...`);
-      try {
-        const partPath = dlg.filePath + '.part';
-        const res = await window.electronAPI.ftDownload(remoteFull, { savePath: dlg.filePath, partPath });
-        if (res && res.s === 'ok') {
-          addLog(`Arquivo recebido: ${sel.n} (${formatSize(res.size || sel.s)}) -> ${dlg.filePath}`);
-          downloaded++;
-        } else {
-          addLog(`Falha ao receber ${sel.n}: ${(res && res.m) || 'erro'}`, 'error');
-          failed++;
-        }
-      } catch (err) {
-        addLog(`Erro ao receber ${sel.n}: ${err.message}`, 'error');
-        failed++;
-      }
-    }
-
-    if (folderItems.length > 0) {
-      const dlg = await window.electronAPI.showOpenDialog({
-        title: 'Escolher pasta de destino',
-        properties: ['openDirectory', 'createDirectory']
-      });
-      if (!dlg || dlg.canceled || !dlg.filePaths || dlg.filePaths.length === 0) {
-        addLog('Recebimento de pastas cancelado');
-        finalizeDownload();
-        return;
-      }
-      const destBase = dlg.filePaths[0].replace(/\\+$/, '');
-
-      for (const sel of folderItems) {
-        let name;
-        try {
-          name = assertSafeRemoteName(sel.n);
-        } catch (err) {
-          addLog(`Recebimento de pasta cancelado: ${err.message}`, 'error');
-          failed++;
-          continue;
-        }
-        const remoteFull = remotePath + sep + name;
-        const localFolder = destBase + '\\' + name;
-
+      if (sel.d) {
         addLog(`Recebendo pasta: ${name}...`);
         try {
-          const res = await window.electronAPI.ftDownloadFolder(remoteFull, localFolder);
-          if (res && res.s === 'ok') {
-            addLog(`Pasta recebida: ${name} (${res.totalFiles || 0} arquivos${res.dirs ? `, ${res.dirs} pastas` : ''})`);
-            downloaded++;
-          } else if (res && res.s === 'partial') {
-            addLog(`Pasta recebida parcialmente: ${name} (${res.totalFiles || 0} arquivos, ${res.failedFiles || 0} falhas de arquivo${res.failedDirs ? `, ${res.failedDirs} falhas de pasta` : ''})`, 'warn');
+          const res = await window.electronAPI.ftDownloadFolder(remoteFull, destBase + '\\' + name);
+          if (res && (res.s === 'ok' || res.s === 'partial')) {
+            addLog(`Pasta recebida: ${name} (${res.totalFiles || 0} arquivos${res.failedFiles ? `, ${res.failedFiles} falhas` : ''})`);
             downloaded++;
           } else {
             addLog(`Falha ao receber pasta ${name}: ${(res && res.m) || 'erro'}`, 'error');
@@ -603,66 +569,90 @@ export default function FileTransfer() {
           addLog(`Erro ao receber pasta ${name}: ${err.message}`, 'error');
           failed++;
         }
+      } else {
+        addLog(`Recebendo arquivo: ${name}...`);
+        try {
+          const savePath = destBase + '\\' + name;
+          const res = await window.electronAPI.ftDownload(remoteFull, { savePath });
+          if (res && res.s === 'ok') {
+            addLog(`Arquivo recebido: ${name} (${formatSize(res.size || sel.s)}) -> ${savePath}`);
+            downloaded++;
+          } else {
+            addLog(`Falha ao receber ${name}: ${(res && res.m) || 'erro'}`, 'error');
+            failed++;
+          }
+        } catch (err) {
+          addLog(`Erro ao receber ${name}: ${err.message}`, 'error');
+          failed++;
+        }
       }
     }
 
     finalizeDownload();
   };
 
-  const handleUploadSelected = async () => {
-    if (!localSelected || localSelected.size === 0) return;
+  // Upload nativo: abre o seletor do Windows multi-seleção (arquivos e/ou
+  // pastas) e passa os caminhos escolhidos diretamente ao pipeline.
+  const handleUploadClick = async () => {
+    if (!connected) return;
 
-    const items = [...localSelected].map(i => localEntries[i]).filter(Boolean);
-    if (items.length === 0) return;
+    const dlg = await window.electronAPI.showOpenDialog({
+      title: 'Selecionar arquivos ou pastas para enviar',
+      properties: ['openFile', 'openDirectory', 'multiSelections', 'dontAddToRecent']
+    });
+    if (!dlg || dlg.canceled || !dlg.filePaths || dlg.filePaths.length === 0) return;
 
-    const base = remotePath.endsWith('\\') ? remotePath : remotePath + '\\';
-    const singleFile = items.length === 1 && !items[0].d;
-    const initialPath = singleFile ? base + items[0].n : remotePath;
-    setUploadDialog({ items, initialPath, multiple: !singleFile });
+    const paths = dlg.filePaths;
+    const single = paths.length === 1;
+    setUploadDialog({
+      items: paths,
+      initialPath: remotePath.endsWith('\\') ? remotePath : remotePath + '\\',
+      multiple: !single
+    });
   };
 
   const doUpload = async (destPath) => {
     if (!uploadDialog) return;
-    const items = uploadDialog.items;
+    const paths = uploadDialog.items;
     let uploaded = 0;
     let failed = 0;
 
-    for (const sel of items) {
-      const localFull = localPath.replace(/\\$/, '') + '\\' + sel.n;
+    for (const localPath of paths) {
+      const name = localPath.split(/[\\/]/).filter(Boolean).pop() || 'item';
       const remoteDest = uploadDialog.multiple
-        ? (destPath.endsWith('\\') ? destPath : destPath + '\\') + sel.n
+        ? (destPath.endsWith('\\') ? destPath : destPath + '\\') + name
         : destPath;
 
       try {
-        if (sel.d) {
-          addLog(`Enviando pasta: ${sel.n}...`);
-          const res = await window.electronAPI.ftUploadFolder(localFull, remoteDest);
+        const stat = await window.electronAPI.statLocal(localPath);
+        if (stat && stat.d) {
+          addLog(`Enviando pasta: ${name}...`);
+          const res = await window.electronAPI.ftUploadFolder(localPath, remoteDest);
           if (res.s === 'ok') {
-            addLog(`Pasta enviada: ${sel.n} (${res.totalFiles || 0} arquivos)`);
+            addLog(`Pasta enviada: ${name} (${res.totalFiles || 0} arquivos)`);
             uploaded++;
           } else {
-            addLog(`Falha ao enviar pasta ${sel.n}: ${res.m || 'erro'}`, 'error');
+            addLog(`Falha ao enviar pasta ${name}: ${res.m || 'erro'}`, 'error');
             failed++;
           }
         } else {
-          addLog(`Enviando arquivo: ${sel.n}...`);
-          const res = await window.electronAPI.ftUpload(remoteDest, { filePath: localFull });
+          addLog(`Enviando arquivo: ${name}...`);
+          const res = await window.electronAPI.ftUpload(remoteDest, { filePath: localPath });
           if (res.s === 'ok' || res.s === 'ready') {
-            addLog(`Arquivo enviado: ${sel.n} (${formatSize(sel.s)})`);
+            addLog(`Arquivo enviado: ${name} (${formatSize(stat ? stat.s : 0)})`);
             uploaded++;
           } else {
-            addLog(`Falha ao enviar ${sel.n}: ${res.m || 'erro'}`, 'error');
+            addLog(`Falha ao enviar ${name}: ${res.m || 'erro'}`, 'error');
             failed++;
           }
         }
       } catch (err) {
-        addLog(`Erro ao enviar ${sel.n}: ${err.message}`, 'error');
+        addLog(`Erro ao enviar ${name}: ${err.message}`, 'error');
         failed++;
       }
     }
 
     if (uploaded > 0) loadRemoteDir(remotePath);
-    setLocalSelected(new Set());
     setUploadDialog(null);
   };
 
@@ -675,9 +665,8 @@ export default function FileTransfer() {
   }
 
   const transferActive = transfer && !transfer.done;
-  const canSend = connected && localSelected && localSelected.size > 0 && !transferActive;
-  const remoteSelectedItems = remoteSelected ? [...remoteSelected].map(i => remoteEntries[i]).filter(Boolean) : [];
-  const canReceive = connected && remoteSelectedItems.length > 0 && !transferActive;
+  const canSend = connected && !transferActive;
+  const canReceive = connected && !transferActive;
 
   return (
     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', background: '#0f172a', color: '#e2e8f0', fontSize: '13px', overflow: 'hidden' }}>
@@ -736,9 +725,9 @@ export default function FileTransfer() {
         }}>
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '4px' }}>
             <button
-              onClick={handleUploadSelected}
+              onClick={handleUploadClick}
               disabled={!canSend}
-              title="Enviar selecionados para o remoto"
+              title={canSend ? "Selecionar no Windows os arquivos/pastas para enviar ao remoto" : "Conecte-se ao remoto para enviar"}
               style={{
                 ...btn, padding: '8px 14px', fontSize: '13px', fontWeight: 600, whiteSpace: 'nowrap',
                 background: canSend ? '#2563eb' : '#1e293b',
@@ -746,9 +735,9 @@ export default function FileTransfer() {
                 cursor: canSend ? 'pointer' : 'default', opacity: canSend ? 1 : 0.4
               }}
             >Enviar <span style={{ fontWeight: 700 }}>→</span></button>
-            {localSelected?.size > 0 && (
+            {connected && !transferActive && (
               <span style={{ fontSize: '10px', color: '#94a3b8', textAlign: 'center' }}>
-                {localSelected.size} item(ns) selecionado(s)
+                Escolha os arquivos no seletor do Windows
               </span>
             )}
           </div>
@@ -757,16 +746,16 @@ export default function FileTransfer() {
               Conecte-se ao remoto
             </span>
           )}
-          {connected && (!remoteSelected || remoteSelected.size === 0) && (
+          {connected && !transferActive && (
             <span style={{ fontSize: '10px', color: '#94a3b8', textAlign: 'center', lineHeight: '1.4' }}>
-              Selecione itens remotos
+              Escolha a pasta de destino no Windows
             </span>
           )}
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '4px' }}>
             <button
-              onClick={handleDownloadSelected}
+              onClick={handleDownloadClick}
               disabled={!canReceive}
-              title={canReceive ? "Receber arquivos e pastas selecionados do remoto" : "Selecione arquivos ou pastas no painel remoto para receber"}
+              title={canReceive ? "Escolher no Windows a pasta local onde salvará o recebido" : "Conecte-se ao remoto para receber"}
               style={{
                 ...btn, padding: '8px 14px', fontSize: '13px', fontWeight: 600, whiteSpace: 'nowrap',
                 background: canReceive ? '#10b981' : '#0f172a',
@@ -776,11 +765,6 @@ export default function FileTransfer() {
                 opacity: canReceive ? 1 : 0.55
               }}
             ><span style={{ fontWeight: 700 }}>←</span> Receber</button>
-            {remoteSelected?.size > 0 && (
-              <span style={{ fontSize: '10px', color: '#94a3b8', textAlign: 'center' }}>
-                {remoteSelected.size} item(ns) selecionado(s)
-              </span>
-            )}
           </div>
         </div>
 

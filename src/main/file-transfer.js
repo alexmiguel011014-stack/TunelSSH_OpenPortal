@@ -7,6 +7,9 @@ const CHUNK_SIZE = 64 * 1024;
 const MSG_JSON = 0;
 const MSG_BINARY = 1;
 const MSG_BINARY_END = 2;
+// Limite de bytes enfileirados no WebSocket antes de pausar o read stream
+// durante uploads, evitando picos de memória em arquivos grandes.
+const BACKPRESSURE_HIGH = 4 * 1024 * 1024;
 
 class FrameDecoder {
   constructor() {
@@ -494,6 +497,127 @@ class FileTransferConnection {
         clearTimeout(ackTimeout);
         this.pendingUploads.delete(id);
         console.error(`[file-transfer] uploadFile ERROR for path="${remotePath}": ${err.message}`);
+        reject(err);
+      }
+    });
+  }
+
+  // Upload a partir do disco usando fs.createReadStream (chunks de 64KB).
+  // O stream é pausado quando o buffer do WebSocket passa de
+  // BACKPRESSURE_HIGH e retomado quando ele drena, evitando acumular o
+  // arquivo inteiro em memória. A leitura só começa após o put_res do servidor.
+  async uploadFileFromPath(remotePath, filePath, onProgress) {
+    const id = ++this.idCounter;
+    let totalSize = 0;
+    try {
+      const st = await fsp.stat(filePath);
+      if (st.isDirectory()) throw new Error('Is a directory');
+      totalSize = st.size;
+    } catch (err) {
+      console.error(`[file-transfer] uploadFileFromPath stat ERROR for "${filePath}": ${err.message}`);
+      return Promise.reject(err);
+    }
+    console.log(`[file-transfer] uploadFileFromPath: path="${remotePath}", file="${filePath}", size=${totalSize} bytes, id=${id}`);
+
+    return new Promise((resolve, reject) => {
+      let stream = null;
+      let sent = 0;
+      let finished = false;
+      let ackTimeout = null;
+      let pausePoll = null;
+
+      const cleanup = () => {
+        if (pausePoll) { clearTimeout(pausePoll); pausePoll = null; }
+        if (stream) { try { stream.destroy(); } catch {} stream = null; }
+      };
+
+      const fail = (err) => {
+        cleanup();
+        this.pendingUploads.delete(id);
+        console.error(`[file-transfer] uploadFileFromPath ERROR id=${id}: ${err.message}`);
+        reject(err);
+      };
+
+      const entry = {
+        resolve: (msg) => {
+          clearTimeout(ackTimeout);
+          ackTimeout = null;
+          cleanup();
+          resolve({ s: msg.s, size: msg.s === 'ok' ? totalSize : 0, m: msg.m, path: remotePath });
+        },
+        reject: (err) => {
+          clearTimeout(ackTimeout);
+          ackTimeout = null;
+          cleanup();
+          reject(err);
+        },
+        ack: false,
+        onAck: () => { setImmediate(() => startStream()); }
+      };
+      this.pendingUploads.set(id, entry);
+
+      ackTimeout = setTimeout(() => {
+        if (!entry.ack) {
+          this.pendingUploads.delete(id);
+          cleanup();
+          reject(new Error('Timeout aguardando put_res do servidor remoto'));
+        }
+      }, 20000);
+
+      const maybeResume = () => {
+        if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+          fail(new Error('Connection closed during upload'));
+          return;
+        }
+        if (this.ws.bufferedAmount <= BACKPRESSURE_HIGH) {
+          pausePoll = null;
+          if (stream && !stream.destroyed) stream.resume();
+        } else {
+          pausePoll = setTimeout(maybeResume, 50);
+        }
+      };
+
+      const startStream = () => {
+        stream = fs.createReadStream(filePath, { highWaterMark: CHUNK_SIZE });
+        stream.on('data', (chunk) => {
+          if (finished) return;
+          if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+            fail(new Error('Connection closed during upload'));
+            return;
+          }
+          try {
+            this._sendBinary(chunk);
+          } catch (err) {
+            fail(err);
+            return;
+          }
+          sent += chunk.length;
+          if (onProgress) onProgress(sent, totalSize);
+          if (this.ws.bufferedAmount > BACKPRESSURE_HIGH) stream.pause();
+        });
+        stream.on('end', () => {
+          if (finished) return;
+          finished = true;
+          try {
+            this._sendBinaryEnd();
+          } catch (err) {
+            fail(err);
+          }
+        });
+        stream.on('error', (err) => {
+          if (this.pendingUploads.has(id)) fail(err);
+        });
+        stream.on('pause', () => {
+          if (!finished && !pausePoll) pausePoll = setTimeout(maybeResume, 50);
+        });
+      };
+
+      try {
+        this._sendJson({ t: 'put', p: remotePath, z: totalSize, i: id });
+      } catch (err) {
+        clearTimeout(ackTimeout);
+        this.pendingUploads.delete(id);
+        cleanup();
         reject(err);
       }
     });

@@ -193,12 +193,16 @@ function registerIpcHandlers(mainWindow) {
         });
       }, { start, filePath: writeTarget });
 
-      if (partPath && savePath) {
-        try {
+      const finalizeSave = async () => {
+        if (partPath && savePath) {
           await fsp.mkdir(path.dirname(savePath), { recursive: true });
-          await fsp.rename(partPath, savePath);
-        } catch (err) {
-          console.error(`[ipc] ft:download finalize rename ERROR: ${err.message}`);
+          if (partPath !== savePath) {
+            try {
+              await fsp.rename(partPath, savePath);
+            } catch (err) {
+              console.error(`[ipc] ft:download finalize rename ERROR: ${err.message}`);
+            }
+          }
         }
         send(mainWindow, 'ft:progress', {
           type: 'download',
@@ -207,24 +211,14 @@ function registerIpcHandlers(mainWindow) {
           total: result.size,
           percent: 100,
           done: true,
-          savePath
+          savePath: savePath || partPath || undefined
         });
-        return { s: 'ok', size: result.size, savePath };
-      }
+        return savePath || partPath || null;
+      };
 
-      if (savePath) {
-        await fsp.mkdir(path.dirname(savePath), { recursive: true });
-        await fsp.writeFile(savePath, result.data);
-        send(mainWindow, 'ft:progress', {
-          type: 'download',
-          path: remotePath,
-          received: result.size,
-          total: result.size,
-          percent: 100,
-          done: true,
-          savePath
-        });
-        return { s: 'ok', size: result.size, savePath };
+      if (savePath || partPath) {
+        const finalPath = await finalizeSave();
+        return { s: 'ok', size: result.size, savePath: finalPath };
       }
 
       return { s: 'ok', size: result.size };
@@ -248,34 +242,33 @@ function registerIpcHandlers(mainWindow) {
       const conn = getActiveConnection();
       if (!conn) throw new Error('Not connected');
 
-      let data;
+      let result;
       if (options && options.filePath) {
-        data = await fsp.readFile(options.filePath);
+        // Upload streaming a partir do disco (evita carregar todo o arquivo
+        // em memória via fsp.readFile).
+        result = await conn.uploadFileFromPath(remotePath, options.filePath, (sent, total) => {
+          send(mainWindow, 'ft:progress', {
+            type: 'upload', path: remotePath, sent, total,
+            percent: total > 0 ? Math.round((sent / total) * 100) : 0
+          });
+        });
       } else if (options && options.data) {
-        data = Buffer.from(options.data);
+        const data = Buffer.from(options.data);
+        result = await conn.uploadFile(remotePath, data, (sent, total) => {
+          send(mainWindow, 'ft:progress', {
+            type: 'upload', path: remotePath, sent, total,
+            percent: total > 0 ? Math.round((sent / total) * 100) : 0
+          });
+        });
       } else {
         throw new Error('No file data provided');
       }
-      console.log(`[ipc] ft:upload remotePath="${remotePath}" size=${data.length} bytes`);
-
-      const result = await conn.uploadFile(remotePath, data, (sent, total) => {
-        send(mainWindow, 'ft:progress', {
-          type: 'upload',
-          path: remotePath,
-          sent,
-          total,
-          percent: total > 0 ? Math.round((sent / total) * 100) : 0
-        });
-      });
       console.log(`[ipc] ft:upload remotePath="${remotePath}" -> ${result.s === 'ok' ? 'OK' : result.m}`);
 
       send(mainWindow, 'ft:progress', {
-        type: 'upload',
-        path: remotePath,
-        sent: data.length,
-        total: data.length,
-        percent: 100,
-        done: true
+        type: 'upload', path: remotePath,
+        sent: result.size || 0, total: result.size || 0,
+        percent: 100, done: true
       });
 
       return result;
@@ -327,8 +320,7 @@ function registerIpcHandlers(mainWindow) {
       let failed = 0;
       for (const f of fileEntries) {
         const remoteFile = remoteParent + '\\' + f.relPath;
-        const data = await fsp.readFile(f.path);
-        const upRes = await conn.uploadFile(remoteFile, data, (sent, total) => {
+        const upRes = await conn.uploadFileFromPath(remoteFile, f.path, (sent, total) => {
           const baseProgress = 50;
           const fileProgress = (sent / total) * (50 / fileEntries.length);
           const overall = Math.round(baseProgress + fileProgress + (uploaded / fileEntries.length) * 50);
@@ -450,14 +442,14 @@ function registerIpcHandlers(mainWindow) {
       for (const file of files) {
         try {
           const localFile = resolveDestInsideRoot(localRoot, file.rel);
+          // Download direto para o disco (filePath), sem reter o arquivo em
+          // memória: cada chunk é gravado conforme chega pelo get.
           const result = await conn.downloadFile(file.remote, (received, total) => {
             send(mainWindow, 'ft:progress', {
               type: 'download', path: file.remote, fileName: file.rel,
               received, total, percent: total > 0 ? Math.round((received / total) * 100) : 0
             });
-          });
-          await fsp.mkdir(path.dirname(localFile), { recursive: true });
-          await fsp.writeFile(localFile, result.data);
+          }, { filePath: localFile });
           send(mainWindow, 'ft:progress', {
             type: 'download', path: file.remote, fileName: file.rel,
             received: result.size, total: result.size, percent: 100, done: false

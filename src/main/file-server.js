@@ -112,10 +112,14 @@ async function handlePut(socket, msg) {
   let filePath;
   try {
     filePath = resolveSafePath(msg.p);
-    socket._putState = { filePath, i: msg.i, chunks: [], totalReceived: 0, expectedSize: msg.z || 0, done: false };
     await fsp.mkdir(path.dirname(filePath), { recursive: true });
+    const fd = await fsp.open(filePath, 'w');
+    socket._putState = { filePath, i: msg.i, fd, totalReceived: 0, expectedSize: msg.z || 0, done: false, writeChain: Promise.resolve() };
     sendJson(socket, { t: 'put_res', i: msg.i, s: 'ok' });
   } catch (err) {
+    if (socket._putState && socket._putState.fd) {
+      try { await socket._putState.fd.close(); } catch {}
+    }
     socket._putState = null;
     sendJson(socket, { t: 'put_res', i: msg.i, s: 'err', m: err.message });
   }
@@ -126,15 +130,8 @@ async function finalizePut(socket) {
   if (!state || state.done) return;
   state.done = true;
   try {
-    await fsp.mkdir(path.dirname(state.filePath), { recursive: true });
-    const fd = await fsp.open(state.filePath, 'w');
-    try {
-      for (const chunk of state.chunks) {
-        await fd.write(chunk);
-      }
-    } finally {
-      await fd.close();
-    }
+    if (state.writeChain) await state.writeChain;
+    if (state.fd) { try { await state.fd.close(); } catch {} state.fd = null; }
     sendJson(socket, { t: 'put_done', i: state.i, s: 'ok', p: state.filePath });
   } catch (err) {
     sendJson(socket, { t: 'put_done', i: (state && state.i), s: 'err', m: err.message });
@@ -224,8 +221,12 @@ function startFileServer(port, rootDir) {
             }
           } else if (frame.type === MSG_BINARY) {
             if (socket._putState && !socket._putState.done) {
-              socket._putState.chunks.push(frame.payload);
-              socket._putState.totalReceived += frame.payload.length;
+              const st = socket._putState;
+              st.totalReceived += frame.payload.length;
+              const fd = st.fd;
+              st.writeChain = (st.writeChain || Promise.resolve())
+                .then(() => fd.write(frame.payload))
+                .catch(() => {});
             }
           } else if (frame.type === MSG_BINARY_END) {
             if (socket._putState) finalizePut(socket);
@@ -234,7 +235,12 @@ function startFileServer(port, rootDir) {
       });
 
       socket.on('error', () => {});
-      socket.on('close', () => { socket._putState = null; });
+      socket.on('close', () => {
+        if (socket._putState) {
+          if (socket._putState.fd) { try { socket._putState.fd.close(); } catch {} }
+          socket._putState = null;
+        }
+      });
     });
 
     serverInstance.on('error', (err) => {
