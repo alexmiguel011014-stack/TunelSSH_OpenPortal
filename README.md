@@ -1,7 +1,7 @@
 # OpenPortal Remote
 
 Acesso remoto seguro a PCs Windows via Tailscale + TightVNC + Electron.
-**Modo Hibrido:** este app funciona como cliente (conecta em outros PCs) E como servidor (recebe conexões de arquivos automaticamente).
+**Modo Hibrido:** este app funciona como cliente (conecta em outros PCs) E como servidor.
 
 ---
 
@@ -12,13 +12,13 @@ Acesso remoto seguro a PCs Windows via Tailscale + TightVNC + Electron.
 | **Tailscale** | https://tailscale.com/download | VPN gratuita para conectar os PCs |
 | **TightVNC Server** | https://www.tightvnc.com/download.php | Servidor VNC no PC remoto (apenas no PC alvo) |
 | **Node.js** | https://nodejs.org (v18+) | Para rodar o app |
-| **OpenPortal Remote** | Este repositorio | Interface VNC + transferencia de arquivos |
+| **OpenPortal Remote** | Este repositorio | Interface VNC remota |
 
 ### Dependencias do Node (instaladas via `npm install`)
 
 | Pacote | Versao | Uso |
 |--------|--------|-----|
-| `ws` | ^8.18.0 | Servidor WebSocket para proxy VNC e arquivos |
+| `ws` | ^8.18.0 | Servidor WebSocket para proxy VNC |
 | `electron` | ^33.0.0 | Desktop shell do app |
 | `react` / `react-dom` | ^18.3.0 | Interface grafica |
 | `vite` | ^6.0.0 | Build tool e dev server |
@@ -38,17 +38,15 @@ Acesso remoto seguro a PCs Windows via Tailscale + TightVNC + Electron.
 |                                                                   |
 |  Servicos iniciados automaticamente ao abrir o app:               |
 |                                                                   |
-|  +----------+    +-----------+    +------------------+           |
-|  | VNC Proxy|    |File Proxy |    |File Server (TCP) |           |
-|  | :18900   |    | :18901    |    | :5001            |           |
-|  | WS->TCP  |    | WS->TCP   |    | (agente receptor)|           |
-|  +----+-----+    +----+------+    +--------+---------+           |
-|       |               |                    |                      |
-|       v               v                    v                      |
-|  TightVNC(5900)  File Server(5001)   Recebe conexoes de          |
-|  PC Remoto       PC Remoto           outros PCs na rede          |
-|                                       (sem precisar rodar        |
-|                                        nada no terminal)         |
+|  +----------+                                                     |
+|  | VNC Proxy|                                                     |
+|  | :18900   |                                                     |
+|  | WS->TCP  |                                                     |
+|  +----+-----+                                                     |
+|       |                                                            |
+|       v                                                            |
+|  TightVNC(5900)                                                    |
+|  PC Remoto                                                         |
 +------------------------------------------------------------------+
 ```
 
@@ -57,18 +55,6 @@ Acesso remoto seguro a PCs Windows via Tailscale + TightVNC + Electron.
 2. noVNC (iframe) conecta no proxy local `ws://127.0.0.1:18900`
 3. Proxy abre socket TCP para o TightVNC remoto (porta 5900)
 4. Dados sao bridgeados: video frames + teclado/mouse
-
-### Fluxo File Transfer (upload)
-1. Abre "Files" na sidebar → painel duplo (Local | Remoto)
-2. Seleciona arquivos/pastas no painel local, navega no remoto
-3. "Enviar para Remoto" → main process le os arquivos via `fs`
-4. Conecta no file proxy (18901) → TCP para file server remoto (5001)
-5. Streaming em chunks de 64KB com barra de progresso
-
-### Agente Receptor (novo no Modo Hibrido)
-- O file server TCP (porta 5001) e iniciado automaticamente com o app
-- Outros PCs na Tailscale podem enviar/receber arquivos deste PC
-- **Nao precisa rodar `node remote-file-server.js` no terminal**
 
 ---
 
@@ -95,14 +81,8 @@ npm run dev
 ```
 
 ### 4. Tela inicial (Dashboard)
-- **"Minha Maquina (Agente)"** — mostra o IP Tailscale local, status do servidor de arquivos (ATIVO), botao "Copiar IP"
-- **"Conectar a um PC"** — lista de PCs cadastrados com botoes VNC e Files
-
-### 5. Transferencia de arquivos
-1. Clique em **"Files"** na sidebar
-2. Painel esquerdo: navegue nos arquivos locais (drives C:, D:, atalhos Desktop/Downloads/Documentos)
-3. Painel direito: navegue no PC remoto conectado
-4. Selecione (checkbox ou Ctrl+Click) e clique em **"Enviar para Remoto"**
+- **"Conectar a um PC"** — lista de PCs cadastrados com conexao VNC e conexao rapida por IP
+- **"Conectar por IP"** — dispara um pedido de conexao que o PC remoto precisa aceitar
 
 ---
 
@@ -124,13 +104,9 @@ TunelSSH/
 |   +-- start-vite.ps1       Helper Vite
 +-- src/
 |   +-- main/                Processo principal (Electron + servicos)
-|   |   +-- main.js                     Inicializacao (janela, proxies, file server)
+|   |   +-- main.js                     Inicializacao (janela, proxies)
 |   |   +-- preload.js                  Ponte segura IPC (contextBridge)
 |   |   +-- proxy.js                    WebSocket <-> TCP (VNC, porta 18900)
-|   |   +-- file-proxy.js               WebSocket <-> TCP (arquivos, porta 18901)
-|   |   +-- file-server.js              Servidor TCP de arquivos embutido (porta 5001)
-|   |   +-- file-transfer.js            Gerenciador de transferencia (main)
-|   |   +-- remote-file-server.js       CLI wrapper do file-server (uso opcional)
 |   |   +-- config-manager.js           Leitura/escrita de config em arquivo
 |   |   +-- ipc-handlers.js             Todos os handlers IPC
 |   |
@@ -141,9 +117,8 @@ TunelSSH/
 |           +-- App.jsx                Layout principal + roteamento
 |           +-- main.jsx               Entry point React
 |           +-- components/
-|               +-- Dashboard.jsx      Tela inicial (agente + lista de PCs)
-|               +-- Sidebar.jsx        Barra lateral (status, maquinas, logs)
-|               +-- FileTransfer.jsx   Explorador two-panel (local | remoto)
+|               +-- Dashboard.jsx      Tela inicial (lista de PCs)
+|               +-- Sidebar.jsx        Barra lateral (maquinas, logs)
 |               +-- RemoteViewer.jsx   Iframe noVNC
 |               +-- ConfigPanel.jsx    Gerenciamento de maquinas
 |               +-- StatusBadge.jsx    Indicador de status
@@ -166,14 +141,6 @@ TunelSSH/
 - Tailscale esta rodando? `ping 100.x.x.x`
 - TightVNC esta rodando no PC remoto? `netstat -ano | findstr 5900`
 - Senha VNC correta?
-
-### File Transfer nao conecta no remoto
-- O PC remoto precisa estar com o app OpenPortal Remote **aberto** (o file server TCP :5001 inicia automaticamente)
-- Ou rode `node src/main/remote-file-server.js` manualmente no PC remoto se nao estiver usando o app
-
-### "Servidor: INATIVO" no Dashboard
-- Pode ser conflito de porta. Verifique se outra aplicacao esta usando a porta 5001
-- Reinicie o app
 
 ---
 

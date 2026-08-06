@@ -6,29 +6,10 @@ O React agora funciona. O noVNC foi extraído para iframe isolado (abordagem do 
 
 ---
 
-## O Que Funciona (Modo Hibrido — Agente + Cliente)
+## O Que Funciona (Modo Hibrido)
 
-- [x] **File server embutido** — `file-server.js` inicia automaticamente na porta 5001
-- [x] **Agente receptor** — outras maquinas Tailscale podem enviar arquivos para este PC sem terminal
-- [x] **Dashboard inicial** — mostra status do servidor, IP local, botao "Copiar IP", lista de PCs
-- [x] **Sidebar com status local** — IP e status do servidor visiveis na barra lateral
+- [x] **Dashboard inicial** — mostra IP local, botao "Copiar IP", lista de PCs
 - [x] **IP Tailscale detectado** — via `tailscale ip -4` ou fallback por interfaces de rede
-- [x] **Cleanup automatico** — `stopFileServer()` no fechamento do app
-
-## O Que Funciona (File Transfer)
-
-- [x] **Arquitetura backend completa** — file proxy (18901), file server remoto (5001), streaming chunked
-- [x] **Layout two-panel** — Local (esquerda) + Remoto (direita) com breadcrumbs clicaveis
-- [x] **Multi-selecao local** — checkbox ou Ctrl+Click para selecionar varios itens
-- [x] **Upload unificado** — bota "Enviar para Remoto" envia arquivos E pastas no mesmo clique
-- [x] **Upload de pastas recursivo** — `ft:uploadFolder` caminha na arvore local, cria pastas no remoto
-- [x] **Atalhos rapidos** — botoes Area de Trabalho, Downloads, Documentos no painel local
-- [x] **Colunas** — Nome, Tamanho (KB/MB/GB), Data de Modificacao nos dois paineis
-- [x] **Barra de progresso** — percentual visivel durante transferencia
-- [x] **Drives locais** — botoes C:, D:, etc. detectados via `fs.statSync`
-- [x] **Protecao path traversal** — `resolveSafePath()` no file server remoto
-- [x] **Integracao sidebar** — botao "Files" que abre/fecha o painel
-- [x] **Navegacao "Voltar"** — entry `..` para subir de diretorio
 
 ## O Que Funciona (Geral)
 
@@ -65,21 +46,8 @@ O React agora funciona. O noVNC foi extraído para iframe isolado (abordagem do 
 
 - [x] **Instalador NSIS** — `electron-builder` gera `.exe` instalavel com opcao de pasta, atalhos, desinstalador
 - [x] **Auto-update** — `electron-updater` verifica GitHub Releases e atualiza automaticamente
-- [x] **Firewall rule** — instalador adiciona regra no firewall para porta 5001 (file server)
 - [x] **Icone personalizado** — `resources/icon.ico` usado no exe, instalador e atalhos
 - [x] **Build script** — `BUILD.bat` para gerar instalador facilmente
-
-## Em Andamento (bugs)
-
-- [ ] **File transfer com layout two-panel (AnyDesk style)** — upload funciona, mas:
-  - Download nao implementado (foco em upload)
-  - Drag & drop nao implementado
-  - Renomear nao implementado
-- [ ] **Modo hibrido** — agente receptor funciona, mas:
-  - Nao ha indicacao visual quando outro PC esta enviando arquivos para esta maquina
-  - O agente so aceita conexoes na rede local/Tailscale (sem autenticacao)
-
----
 
 ## Arquivos Principais
 
@@ -101,15 +69,9 @@ O React agora funciona. O noVNC foi extraído para iframe isolado (abordagem do 
 | `src/renderer/src/hooks/useVnc.js` | Stub vazio (removido) |
 | `src/renderer/public/noVNC/vnc.html` | noVNC standalone (iframe) |
 | `src/renderer/public/noVNC/novnc.js` | noVNC bundle (184KB, esbuild) |
-| `src/main/file-proxy.js` | Proxy WebSocket <-> TCP para arquivos (porta 18901) |
-| `src/main/file-transfer.js` | Gerenciador de transferencia (main process) |
-| `src/main/remote-file-server.js` | Servidor TCP de arquivos (CLI wrapper) |
-| `src/main/file-server.js` | Modulo TCP file server (embutido no Electron, auto-start) |
-| `src/renderer/src/components/FileTransfer.jsx` | Interface two-panel de transferencia de arquivos |
 | `src/renderer/src/components/Dashboard.jsx` | Tela inicial com status do agente + lista de PCs |
 | `docs/PROCEDIMENTOS.md` | Regras de desenvolvimento e build |
 | `docs/PLAN.md` | Plano de implementacao e decisoes tecnicas |
-| `scripts/installer.nsh` | Script NSIS para regra de firewall no instalador |
 | `scripts/BUILD.bat` | Script para gerar o instalador |
 | `resources/icon.ico` | Icone do aplicativo |
 
@@ -124,38 +86,28 @@ O React agora funciona. O noVNC foi extraído para iframe isolado (abordagem do 
 |  +----------------------------+  +---------------------------+    |
 |  | React App                  |  | noVNC (iframe)            |    |
 |  |  Dashboard (inicial)       |  | vnc.html + novnc.js       |    |
-|  |    - Minha Maquina (agent) |  | ws://127.0.0.1:18900      |    |
-|  |    - Conectar a um PC      |  +---------------------------+    |
-|  |  Sidebar (colapsavel)      |                                   |
-|  |    - Minha Maquina status  |                                   |
+|  |    - Conectar a um PC      |  | ws://127.0.0.1:18900      |    |
+|  |  Sidebar (colapsavel)      |  +---------------------------+    |
 |  |    - PC Conectado          |                                   |
 |  |    - Lista de PCs          |                                   |
 |  |  ConfigPanel               |                                   |
-|  |  FileTransfer (two-panel)  |                                   |
-|  |    +--------+ +---------+  |                                   |
-|  |    | Local  |>>| Remoto |  |                                   |
-|  |    +--------+ +---------+  |                                   |
 |  +------------+---------------+                                   |
 |               |                                                   |
 |   IPC via preload.js + Main Process Services:                     |
 |   - Proxy VNC (18900)                                             |
-|   - Proxy Files (18901)                                           |
-|   - File Server TCP (5001) <- AUTO-START (agente receptor)       |
 |               |                                                   |
 +---------------+---------------------------------------------------+
                 |
-     +----------+-----------+
-     |                      |
- Proxy VNC               Proxy Files
- ws://:18900              ws://:18901
-     |                      |
- TCP bridge               TCP bridge (file-proxy.js)
- (proxy.js)                |
-     |                      |
- TightVNC(5900)      File Server TCP (5001)
- MAQUINA REMOTA       MAQUINA REMOTA ou LOCAL
-                      (embutido no Electron,
-                       iniciado automaticamente)
+     +----------+----------+
+     |                     |
+Proxy VNC                (VNC remoto)
+  ws://127.0.0.1:18900      TCP :5900
+     |                     |
+ TCP bridge              |
+ (proxy.js)               |
+     |                     |
+  TightVNC(5900)          |
+  MAQUINA REMOTA          |
 ```
 
 ---
@@ -191,4 +143,4 @@ O React agora funciona. O noVNC foi extraído para iframe isolado (abordagem do 
 
 ---
 
-*Ultima atualizacao: 2026-07-30 — instalador NSIS + auto-update + firewall*
+*Ultima atualizacao: 2026-07-30 — instalador NSIS + auto-update*

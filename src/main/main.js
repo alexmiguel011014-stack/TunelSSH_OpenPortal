@@ -3,8 +3,6 @@ const path = require('path');
 const fs = require('fs');
 const { autoUpdater } = require('electron-updater');
 const { startWebSocketProxy } = require('./connection/proxy');
-const { startFileProxy } = require('./file-transfer/file-proxy');
-const { startFileServer, stopFileServer, getFileServerStatus } = require('./file-transfer/file-server');
 const { registerIpcHandlers } = require('./core/ipc-handlers');
 const { ConnectionRequestServer } = require('./connection/connection-request');
 
@@ -66,13 +64,11 @@ process.on('unhandledRejection', (reason, promise) => {
 
 let mainWindow = null;
 let wss = null;
-let fileWss = null;
 let requestServer = null;
 let updateProgressWindow = null;
 let isUserTriggeredUpdate = false;
 let pendingUpdateInfo = null;
 let updateConfirmed = false;
-const FILE_SERVER_PORT = 5001;
 
 const isDev = process.env.NODE_ENV === 'development';
 const PROXY_PORT = 18900;
@@ -289,22 +285,6 @@ app.whenReady().then(() => {
 
   buildAppMenu();
   wss = startWebSocketProxy(PROXY_PORT);
-  fileWss = startFileProxy(18901);
-
-  // Raiz do agente = pasta do usuário, resolvida pelo Electron em qualquer SO.
-  // Os atalhos vêm de app.getPath, que respeita pastas localizadas
-  // ("Área de Trabalho") e redirecionadas.
-  const agentRoot = app.getPath('home');
-  const agentQuickDirs = {};
-  for (const [key, name] of [['desktop', 'desktop'], ['downloads', 'downloads'], ['documents', 'documents']]) {
-    try { agentQuickDirs[key] = app.getPath(name); } catch {}
-  }
-
-  startFileServer(FILE_SERVER_PORT, agentRoot, { quickDirs: agentQuickDirs }).then(({ port, rootDir }) => {
-    console.log(`[main] File server (agente) listening on TCP ${port}, root: ${rootDir}, platform: ${process.platform}`);
-  }).catch(err => {
-    console.error(`[main] Failed to start file server: ${err.message}`);
-  });
 
   requestServer = new ConnectionRequestServer((req, respond) => handleConnectionRequest(req, respond));
   requestServer.start();
@@ -445,9 +425,7 @@ app.whenReady().then(() => {
 app.on('window-all-closed', () => {
   globalShortcut.unregisterAll();
   if (wss) wss.close();
-  if (fileWss) fileWss.close();
   if (requestServer) requestServer.stop();
   if (updateInterval) clearInterval(updateInterval);
-  stopFileServer().then(() => console.log('[main] File server stopped'));
   if (process.platform !== 'darwin') app.quit();
 });

@@ -8,13 +8,9 @@ O Electron agora executa simultaneamente:
 | Servico | Porta | Tipo | Finalidade |
 |---------|-------|------|------------|
 | Proxy VNC | 18900 | WebSocket | Bridge noVNC ↔ TightVNC remoto |
-| Proxy Files | 18901 | WebSocket | Bridge FileTransfer ↔ File Server remoto |
-| File Server (Agente) | 5001 | TCP | Receber conexoes de arquivos de OUTRAS maquinas |
 
 Na inicializacao:
-- `file-server.js` e importado e iniciado automaticamente via `startFileServer(5001)`
-- `remote-file-server.js` agora e um wrapper CLI que usa o mesmo modulo
-- Nao precisa mais rodar scripts manualmente no terminal
+- `main.js` e o entry point iniciado pelo Electron via `app.whenReady()`
 
 ```
 +-------------------------------------------------------------+
@@ -23,12 +19,11 @@ Na inicializacao:
 |  +-------------------------------------+   +--------------+ |
 |  |     MAIN PROCESS (main.js)          |   |  RENDERER    | |
 |  |                                      |   |  (React)     | |
-|  |  +-------------------+  +---------+ |   |              | |
-|  |  | WebSocket Server  |  |File Srv | |IPC| +----------+ | |
-|  |  | (ws library)      |  |TCP:5001 |<-+-->| Dashboard | | |
-|  |  | port: 18900       |  |(embutido)| |   | Sidebar   | | |
-|  |  +--------+----------+  +---------+ |   | FileTrans | | |
-|  |           |                         |   | RemoteView| | |
+|  |  +-------------------+             |   |              | |
+|  |  | WebSocket Server  |             |IPC| +----------+ | |
+|  |  | (ws library)      |             |   | Dashboard | | |
+|  |  | port: 18900       |             |   | Sidebar   | | |
+|  |  +--------+----------+             |   | RemoteView| | |
 |  |  +--------v----------+             |   +----------+ | |
 |  |  | TCP Proxy         |             |              | |
 |  |  | (Node.js net)     |             |              | |
@@ -43,8 +38,7 @@ Na inicializacao:
                |
      +---------+---------+
      |                   |
- TCP :5900           TCP :5001
- (VNC remoto)        (file server local/remoto)
+ TCP :5900   (VNC remoto)
 ```
 
 **Servicos iniciados automaticamente no main.js:**
@@ -52,8 +46,6 @@ Na inicializacao:
 | Servico | Tipo | Porta | Descricao |
 |---------|------|-------|-----------|
 | VNC Proxy | WebSocket | 18900 | Bridge noVNC ↔ TightVNC remoto |
-| File Proxy | WebSocket | 18901 | Bridge FileTransfer ↔ File Server |
-| File Server | TCP | 5001 | Agente receptor (embutido, auto-start) |
 
 **Data flow for a VNC session:**
 
@@ -61,22 +53,6 @@ Na inicializacao:
 2. Renderer creates a noVNC instance pointed at `ws://127.0.0.1:18900?host=100.x.x.x&port=5900`
 3. WebSocket server reads query params, opens TCP socket to remote VNC
 4. WebSocket server bridges data: `noVNC <WS> Main <TCP> TightVNC`
-
-**Data flow for File Transfer (upload):**
-
-1. User opens "Files" in sidebar, selects items on the left (local) panel
-2. User navigates to destination on the right (remote) panel
-3. Click "Enviar para Remoto" → main process reads local files via `fs`
-4. Main process connects to file proxy (18901) with remote host param
-5. Proxy bridges WebSocket ↔ TCP to remote machine's file server (5001)
-6. Files are streamed in 64KB chunks with progress reporting
-
-**Data flow for receiving files (this PC as agent):**
-
-1. Another machine connects to this PC's Tailscale IP on port 5001
-2. `file-server.js` (embutido) recebe a conexao TCP diretamente
-3. Comandos LIST/GET/PUT/DELETE/MKDIR sao processados localmente
-4. Acesso restrito ao diretorio do usuario via `resolveSafePath()`
 
 ---
 
@@ -359,14 +335,7 @@ This is a transparent proxy - noVNC connects directly with VNC protocol, no JSON
 | `vnc:proxyUrl` | R->M->R | invoke | none | `ws://127.0.0.1:18900` |
 | `vnc:status` | M->R | send | none | `{ state, machineId? }` |
 | `app:version` | R->M->R | invoke | none | `string` |
-| `server:status` | R->M->R | invoke | none | `{ running, port, rootDir }` |
 | `server:localIp` | R->M->R | invoke | none | `{ ip }` |
-| `fs:listDir` | R->M->R | invoke | `dirPath` | `[{ n, d, s, m }]` |
-| `fs:getDrives` | R->M->R | invoke | none | `[string]` |
-| `fs:getHomeDir` | R->M->R | invoke | none | `string` |
-| `fs:getSpecialDirs` | R->M->R | invoke | none | `{ desktop, downloads, documents, home }` |
-| `fs:stat` | R->M->R | invoke | `filePath` | `{ d, s }` |
-| `ft:uploadFolder` | R->M->R | invoke | `localPath, remoteParent` | `{ s, totalFiles, failedFiles }` |
 
 ---
 
@@ -488,41 +457,6 @@ Config file location: `C:\Users\beatl\AppData\Roaming\openportal-remote\config.j
 - [x] **Compression level aumentado** — compressionLevel:3 (era 2) para melhor compressao
 - [x] **Keyboard delay reduzido** — keyboardDelay:20 (era 50) para resposta mais rapida
 
-### Phase 8a: Transferencia de Arquivos — Backend (2026-07-29)
-- [x] **Pesquisar abordagens** — arquitetura para envio/recebimento de arquivos e pastas
-- [x] **Escolher metodo** — proxy dedicado WebSocket <-> TCP (porta 18901)
-- [x] **Protocolo binario** — mensagens length-prefixed (8 byte header: type + len)
-- [x] **Implementar file server remoto** — remote-file-server.js (Node.js TCP, port 5001)
-- [x] **File proxy** — file-proxy.js (WebSocket bridge, mesma validacao de host do VNC)
-- [x] **File transfer manager** — file-transfer.js (main process, streaming chunked 64KB)
-- [x] **Barra de progresso** — percentual visivel durante transferencia
-- [x] **Protecao path traversal** — resolveSafePath() que valida diretorio raiz
-
-### Phase 8b: File Transfer — UI Two-Panel (AnyDesk Style)
-- [x] **Layout dual-pane** — Local (esquerda) + Remoto (direita) com breadcrumbs clicaveis
-- [x] **Navegacao local** — `fs:listDir`, `fs:getDrives`, `fs:getHomeDir`, `fs:getSpecialDirs`, `fs:stat`
-- [x] **Atalhos rapidos** — botoes Area de Trabalho, Downloads, Documentos
-- [x] **Multi-selecao** — checkbox ou Ctrl+Click, upload em lote
-- [x] **Upload unificado** — botao "Enviar para Remoto" envia arquivos e pastas no mesmo clique
-- [x] **Upload de pastas recursivo** — `ft:uploadFolder` com walkDir() e criacao de diretorios
-- [x] **Coluna Data de Modificacao** — mtime formatado nos dois paineis
-- [x] **Mensagem de espera** — "Aguardando resposta do remote-file-server..." enquanto conecta
-- [x] **Drives locais** — botoes C:, D:, etc. com `fs.statSync` (sem `wmic`)
-- [ ] **Download** — nao implementado (foco em upload)
-- [ ] **Drag & drop** — nao implementado
-- [ ] **Renomear** — nao implementado
-
-### Phase 8c: Modo Hibrido — Agente Receptor Embutido (2026-07-29)
-- [x] **Modulo file-server.js** — extraido do remote-file-server.js para inicio programatico
-- [x] **Auto-start no main.js** — `startFileServer(5001)` chamado no `app.whenReady()`
-- [x] **Cleanup no quit** — `stopFileServer()` no `window-all-closed`
-- [x] **CLI wrapper** — `remote-file-server.js` vira 3 linhas que chamam o modulo
-- [x] **IPC server:status** — retorna running, port, rootDir
-- [x] **IPC server:localIp** — detecta IP Tailscale via `tailscale ip -4` ou interfaces de rede
-- [x] **Dashboard** — tela inicial com card "Minha Maquina (Agente)" + lista "Conectar a um PC"
-- [x] **Sidebar** — indicador de status do servidor local + IP
-- [x] **Novos arquivos:** `src/main/file-server.js`, `src/renderer/src/components/Dashboard.jsx`
-
 ### Phase 8d: Testing
 - [ ] Real VNC connection test with remote machines
 - [x] TightVNC authentication handling (password dialog)
@@ -532,7 +466,6 @@ Config file location: `C:\Users\beatl\AppData\Roaming\openportal-remote\config.j
 - [x] **electron-builder configurado** — NSIS installer com licenca, pasta, atalhos
 - [x] **Icone do app** — `resources/icon.ico` (PNG 256x256 convertido para ICO)
 - [x] **Auto-update** — `electron-updater` com GitHub Releases
-- [x] **Firewall rule** — script NSIS customizado (`scripts/installer.nsh`) para porta 5001
 - [x] **Build script** — `BUILD.bat` para gerar instalador com um clique
 - [x] **Instalador gerado** — `OpenPortal Remote Setup 1.0.0.exe` (78 MB)
 - [ ] Publicar primeira Release no GitHub (manual)
@@ -552,10 +485,7 @@ Config file location: `C:\Users\beatl\AppData\Roaming\openportal-remote\config.j
 | noVNC integration | Isolated iframe (`public/noVNC/`) | Avoids Vite bundler conflicts with @novnc/novnc |
 | **IPv4 binding** | **host: 127.0.0.1** | **Windows Vite defaults to IPv6; Electron expects IPv4** |
 | **VNC scaling** | **Manual fitScreen() + _display.scale** | scaleViewport:true conflita com CSS; _display.scale corrige mouse tracking |
-| **File transfer** | **Proxy dedicado (porta 18901) + file server remoto** | Mesma arquitetura do VNC; protocolo length-prefixed binario |
-| **Modo Hibrido** | **File server embutido no Electron (auto-start)** | Nao precisa rodar script externo; app e cliente e servidor |
 | **Auto-update** | **electron-updater + GitHub Releases** | Gratuito, integrado ao workflow de desenvolvimento |
-| **Firewall rule** | **NSIS custom script (netsh advfirewall)** | Porta 5001 liberada automaticamente na instalacao |
 
 ---
 

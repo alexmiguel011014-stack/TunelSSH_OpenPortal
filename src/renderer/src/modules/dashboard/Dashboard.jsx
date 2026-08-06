@@ -1,4 +1,4 @@
-import { useState, useEffect, useContext } from 'react';
+import { useState, useContext } from 'react';
 import { MachineContext } from '../../App';
 import { isPrivateNetworkHost } from '../../shared/lib/net';
 
@@ -16,26 +16,9 @@ const sectionTitle = {
 };
 
 export default function Dashboard({ onConnect }) {
-  const { machines, activeMachine, setActiveMachine, setShowFiles, setShowConfig, addLog, connHistory } = useContext(MachineContext);
-  const [serverStatus, setServerStatus] = useState({ running: false, port: 0, rootDir: '' });
-  const [localIp, setLocalIp] = useState('');
-  const [copied, setCopied] = useState(false);
+  const { machines, activeMachine, setActiveMachine, addLog, connHistory } = useContext(MachineContext);
   const [quickIp, setQuickIp] = useState('');
   const [connecting, setConnecting] = useState(false);
-
-  useEffect(() => {
-    window.electronAPI.getServerStatus().then(setServerStatus);
-    window.electronAPI.getLocalIp().then(res => setLocalIp(res.ip || ''));
-  }, []);
-
-  const handleCopyIp = () => {
-    if (localIp) {
-      navigator.clipboard.writeText(localIp).then(() => {
-        setCopied(true);
-        setTimeout(() => setCopied(false), 2000);
-      });
-    }
-  };
 
   const handleConnectMachine = async (machine) => {
     if (activeMachine && activeMachine.id === machine.id) return;
@@ -102,14 +85,6 @@ export default function Dashboard({ onConnect }) {
     }
   };
 
-  const handleOpenFiles = async (machine) => {
-    if (!activeMachine || activeMachine.id !== machine.id) {
-      await handleConnectMachine(machine);
-    }
-    setShowFiles(true);
-    if (setShowConfig) setShowConfig(false);
-  };
-
   const availableMachines = machines ? machines.filter(m => m.host) : [];
 
   return (
@@ -122,39 +97,6 @@ export default function Dashboard({ onConnect }) {
         <p style={{ fontSize: '14px', color: '#64748b', marginBottom: '24px' }}>
           Acesso remoto seguro via Tailscale
         </p>
-
-        {/* Minha Maquina card */}
-        <div style={card}>
-          <h2 style={sectionTitle}>
-            Minha Máquina (Agente)
-          </h2>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '10px' }}>
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', fontSize: '14px', fontWeight: 500 }}>
-              <span style={{
-                width: '10px', height: '10px', borderRadius: '50%',
-                background: serverStatus.running ? '#22c55e' : '#ef4444', display: 'inline-block'
-              }} />
-              {serverStatus.running ? 'Servidor ativo' : 'Servidor inativo'}
-            </span>
-            {serverStatus.running && <span style={{ fontSize: '11px', color: '#22c55e', background: '#052e16', border: '1px solid #15803d', padding: '2px 8px', borderRadius: '999px' }}>pronto para receber</span>}
-          </div>
-          {localIp && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px', fontSize: '13px' }}>
-              <span style={{ color: '#94a3b8' }}>IP Tailscale:</span>
-              <code style={{ background: '#0f172a', padding: '3px 8px', borderRadius: '4px', fontSize: '13px', color: '#3b82f6' }}>
-                {localIp}
-              </code>
-              <button onClick={handleCopyIp} style={{ ...btn, padding: '3px 10px', fontSize: '11px' }}>
-                {copied ? 'Copiado!' : 'Copiar IP'}
-              </button>
-            </div>
-          )}
-          {serverStatus.running && (
-            <div style={{ fontSize: '12px', color: '#64748b' }}>
-              Porta {serverStatus.port}{serverStatus.rootDir ? ` · Raiz: ${serverStatus.rootDir}` : ''}
-            </div>
-          )}
-        </div>
 
         {/* Conectar a um PC card */}
         <div style={card}>
@@ -180,9 +122,6 @@ export default function Dashboard({ onConnect }) {
                 </div>
                 <button style={{ ...btn, background: '#2563eb', borderColor: '#2563eb', color: '#fff' }} onClick={() => handleConnectMachine(m)}>
                   {activeMachine?.id === m.id ? 'Visualizando' : 'Conectar'}
-                </button>
-                <button style={{ ...btn, borderColor: '#3b82f6', color: '#93c5fd' }} onClick={() => handleOpenFiles(m)}>
-                  Enviar arquivos
                 </button>
               </div>
             ))
@@ -224,13 +163,6 @@ export default function Dashboard({ onConnect }) {
           <div style={{ fontSize: '11px', color: '#64748b', marginTop: '8px' }}>
             O PC remoto receberá um pedido de conexão e precisa aceitar.
           </div>
-        </div>
-
-        {/* Status row */}
-        <div style={{ fontSize: '12px', color: '#475569', textAlign: 'center', marginTop: '8px' }}>
-          {serverStatus.running
-            ? `Pronto para receber conexões na porta ${serverStatus.port}`
-            : 'Servidor de arquivos não disponível'}
         </div>
 
         {/* Histórico de conexões */}

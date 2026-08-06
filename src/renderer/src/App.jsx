@@ -2,7 +2,6 @@ import { useState, useEffect, createContext, useCallback, useRef } from 'react';
 import Sidebar from './shared/Sidebar';
 import RemoteViewer from './modules/connection/RemoteViewer';
 import ConfigPanel from './modules/config/ConfigPanel';
-import FileTransfer from './modules/file-transfer/FileTransfer';
 import Dashboard from './modules/dashboard/Dashboard';
 
 export const MachineContext = createContext(null);
@@ -25,7 +24,6 @@ export default function App() {
   const [activeMachineId, setActiveMachineId] = useState(null);
   const [statuses, setStatuses] = useState({});
   const [showConfig, setShowConfig] = useState(false);
-  const [showFiles, setShowFiles] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [reconnectFlag, setReconnectFlag] = useState(0);
   const [logs, setLogs] = useState([]);
@@ -104,7 +102,6 @@ export default function App() {
     recordConn({ name: machine.name, host: machine.host, state: 'connecting', message: `Conectando a ${machine.host}` });
     setActiveMachineId(machine.id);
     setShowConfig(false);
-    setShowFiles(false);
   }, [addLog, recordConn]);
 
   const disconnectMachine = useCallback(async () => {
@@ -174,8 +171,6 @@ export default function App() {
     triggerReconnect,
     showConfig,
     setShowConfig,
-    showFiles,
-    setShowFiles,
     sidebarCollapsed,
     toggleSidebar,
     maxMachines: MAX_MACHINES,
@@ -199,8 +194,6 @@ export default function App() {
         <main style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
           {showConfig ? (
             <ConfigPanel />
-          ) : showFiles ? (
-            <FileTransfer />
           ) : activeMachine ? (
             <RemoteViewer machine={activeMachine} reconnectFlag={reconnectFlag} />
           ) : (

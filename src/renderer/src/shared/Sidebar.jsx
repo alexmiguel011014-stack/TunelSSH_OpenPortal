@@ -1,4 +1,4 @@
-import { useContext, useMemo, useEffect, useState } from 'react';
+import { useContext, useMemo } from 'react';
 import { MachineContext } from '../App';
 import StatusBadge from './StatusBadge';
 import { isPrivateNetworkHost } from './lib/net';
@@ -10,8 +10,6 @@ export default function Sidebar() {
     connectMachine,
     addMachine,
     removeMachine,
-    showFiles,
-    setShowFiles,
     sidebarCollapsed,
     toggleSidebar,
     maxMachines,
@@ -20,14 +18,6 @@ export default function Sidebar() {
     theme,
     toggleTheme,
   } = useContext(MachineContext);
-
-  const [serverStatus, setServerStatus] = useState({ running: false, port: 0 });
-  const [localIp, setLocalIp] = useState('');
-
-  useEffect(() => {
-    window.electronAPI?.getServerStatus?.().then(s => setServerStatus(s || { running: false, port: 0 }));
-    window.electronAPI?.getLocalIp?.().then(res => setLocalIp(res?.ip || ''));
-  }, []);
 
   const otherMachines = useMemo(
     () => machines.filter(m => m.id !== activeMachineId),
@@ -81,25 +71,6 @@ export default function Sidebar() {
         >
           ◀
         </button>
-      </div>
-
-      {/* Minha Maquina (Agent) Section */}
-      <div style={{ padding: '12px', borderBottom: '1px solid #334155' }}>
-        <div style={{ fontSize: '11px', fontWeight: 500, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '8px' }}>
-          Minha Maquina
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '4px' }}>
-          <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: serverStatus.running ? '#22c55e' : '#ef4444', display: 'inline-block' }} />
-          <span style={{ fontSize: '12px', color: serverStatus.running ? '#22c55e' : '#f87171' }}>
-            Servidor: {serverStatus.running ? 'ATIVO' : 'INATIVO'}
-          </span>
-          {serverStatus.running && <span style={{ fontSize: '11px', color: '#64748b' }}>:{serverStatus.port}</span>}
-        </div>
-        {localIp && (
-          <div style={{ fontSize: '11px', color: '#94a3b8', fontFamily: 'monospace' }}>
-            {localIp}
-          </div>
-        )}
       </div>
 
       {/* Machines List */}
@@ -174,26 +145,6 @@ export default function Sidebar() {
           </button>
         )}
       </nav>
-
-      {/* Files button */}
-      <div style={{ padding: '0 12px', borderTop: '1px solid #334155' }}>
-        <button
-          onClick={() => setShowFiles(!showFiles)}
-          style={{
-            width: '100%',
-            padding: '8px 12px',
-            borderRadius: '8px',
-            fontSize: '14px',
-            border: 'none',
-            cursor: 'pointer',
-            background: showFiles ? '#475569' : 'transparent',
-            color: showFiles ? '#ffffff' : '#94a3b8',
-            marginTop: '8px',
-          }}
-        >
-          📁 Files
-        </button>
-      </div>
 
       {/* Atualizações button */}
       <div style={{ padding: '0 12px', borderTop: '1px solid #334155' }}>

@@ -205,153 +205,7 @@ dinamicamente:
 
 ---
 
-## [2026-07-29] File Transfer: Envio e Recebimento de Arquivos
-
-### Problema
-App permitia apenas visualizar o desktop remoto (VNC), sem capacidade de transferir arquivos entre o PC local e remoto.
-
-### Solucao
-Implementado sistema completo de transferencia de arquivos com 3 componentes:
-
-**1. Remote File Server (`remote-file-server.js`)**
-- Servidor TCP standalone que roda no PC remoto
-- Comandos: LIST, GET (download), PUT (upload), DELETE, MKDIR
-- Protecao contra path traversal (resolveSafePath)
-- Streaming chunked (64KB) para arquivos grandes
-- Dependencia zero (apenas Node.js nativo: fs, net, path)
-
-**2. File Proxy (`file-proxy.js`)**
-- WebSocket Server na porta 18901 (mesma arquitetura do proxy VNC)
-- Bridge transparente WebSocket <-> TCP
-- Mesma validacao de host (Tailscale IPs 100.x.x.x)
-
-**3. File Transfer Manager (`file-transfer.js`)**
-- Roda no processo main do Electron
-- Conecta ao file proxy via biblioteca `ws`
-- Protocolo length-prefixed binario (8 byte header: type + payload length)
-- Suporta transferencias simultaneas
-
-**4. Interface React (`FileTransfer.jsx`)**
-- Navegador de arquivos com path bar clicavel
-- Upload (seleciona arquivos locais, envia para remoto)
-- Download (seleciona destino, recebe do remoto)
-- Delete (arquivos e pastas)
-- New Folder
-- Barra de progresso com percentual
-- Botao de retry na tela de erro
-- Integrado na sidebar como botao "Files"
-
-### Arquivos Criados
-| Arquivo | Descricao |
-|---------|-----------|
-| `src/main/remote-file-server.js` | Servidor TCP de arquivos (roda no PC remoto) |
-| `src/main/file-proxy.js` | Proxy WebSocket para arquivos (porta 18901) |
-| `src/main/file-transfer.js` | Gerenciador de transferencia (main process) |
-| `src/renderer/src/components/FileTransfer.jsx` | Interface de transferencia |
-
-### Arquivos Modificados
-| Arquivo | Mudanca |
-|---------|---------|
-| `src/main/main.js` | Inicia file proxy (18901) + limpeza |
-| `src/main/preload.js` | API de arquivos: ftConnect, ftList, ftUpload, ftDownload, ftDelete, ftMkdir + dialog |
-| `src/main/ipc-handlers.js` | Handlers IPC para todas operacoes de arquivo |
-| `src/renderer/src/App.jsx` | showFiles state + FileTransfer rendering |
-| `src/renderer/src/components/Sidebar.jsx` | Botao "Files" na sidebar |
-
-### Como Usar
-1. No PC remoto, execute: `node remote-file-server.js` (requer Node.js)
-2. No app Electron, clique em "Files" na sidebar
-3. O file browser conecta automaticamente ao PC ativo
-4. Navegue, faça upload/download de arquivos e pastas
-
----
-
-## [2026-07-29] Modo Hibrido: Agente Receptor Embutido no Electron
-
-### Problema
-O `remote-file-server.js` precisava ser executado manualmente no terminal do PC remoto (`node remote-file-server.js`). Isso exigia acesso SSH ou remote desktop adicional para transferir arquivos — um paradoxo: precisava de conexao para transferir arquivos, mas precisava transferir o script antes.
-
-Nao havia distincao na UI entre "Minha Maquina" (que pode receber arquivos) e "Maquinas Remotas" (para conectar). O usuario nao via o proprio IP Tailscale nem sabia se o servidor de arquivos local estava rodando.
-
-### Solucao
-
-**1. file-server.js (novo modulo)**
-- Extraido do `remote-file-server.js` em um modulo importavel
-- Exporta `startFileServer(port)`, `stopFileServer()`, `getFileServerStatus()`
-- Mesmo protocolo, mesma seguranca (resolveSafePath)
-
-**2. main.js — auto-start do agente**
-- `startFileServer(5001)` chamado automaticamente no `app.whenReady()`
-- `stopFileServer()` chamado no `window-all-closed`
-- O app agora funciona como cliente E servidor simultaneamente
-
-**3. remote-file-server.js (refatorado)**
-- Agora e um wrapper CLI de 3 linhas que chama `startFileServer()` do modulo
-- Mantido para compatibilidade (uso direto via terminal)
-
-**4. Dashboard.jsx (nova tela inicial)**
-- Substitui a tela "Selecione um PC" por um dashboard informativo
-- Card "Minha Maquina (Agente)": status do servidor (ATIVO/INATIVO), IP Tailscale com botao "Copiar IP", porta e raiz
-- Card "Conectar a um PC": lista de maquinas cadastradas com botoes VNC e Files
-
-**5. Sidebar — status do agente**
-- Seção "Minha Maquina" no topo: bolinha verde/vermelha, "Servidor: ATIVO", IP Tailscale
-
-**6. IPCs novos**
-- `server:status` — retorna estado atual do file server embutido
-- `server:localIp` — detecta IP Tailscale via `tailscale ip -4` ou fallback por interfaces de rede
-
-### Arquivos Criados
-| Arquivo | Descricao |
-|---------|-----------|
-| `src/main/file-server.js` | Modulo TCP file server (importavel, auto-start) |
-| `src/renderer/src/components/Dashboard.jsx` | Tela inicial com status do agente + lista de PCs |
-
-### Arquivos Modificados
-| Arquivo | Mudanca |
-|---------|---------|
-| `src/main/main.js` | Importa file-server, start/stop no lifecycle |
-| `src/main/remote-file-server.js` | Refatorado para usar o modulo file-server |
-| `src/main/ipc-handlers.js` | Adicionado server:status, server:localIp |
-| `src/main/preload.js` | Exposto getServerStatus, getLocalIp |
-| `src/renderer/src/App.jsx` | Dashboard como tela inicial padrao |
-| `src/renderer/src/components/Sidebar.jsx` | Seção "Minha Maquina" com status e IP |
-
----
-
-## [2026-07-29] File Transfer UI: Two-Panel Layout (AnyDesk Style)
-
-### Problema
-Interface anterior usava upload/download/delete/mkdir como botoes separados, sem exploracao de arquivos local. Upload exigia escolher entre arquivo ou pasta (dialogos separados). `window.prompt()` crashava no Electron com contextIsolation.
-
-### Mudancas
-
-**FileTransfer.jsx — refatoracao completa:**
-- Layout dual-pane: Local (esquerda) + Remoto (direita) lado a lado
-- Painel local: explorador completo com drives (C:, D:), atalhos (Desktop, Downloads, Documentos), breadcrumbs, colunas Nome/Tamanho/Modificado
-- Painel remoto: mesma estrutura usando `ftList` existente, com mensagem de espera enquanto conecta
-- Multi-selecao via checkbox ou Ctrl+Click; upload em lote
-- Botao central "Enviar para Remoto" (vertical, destaque azul) — envia arquivos E pastas simultaneamente
-- Upload de pastas recursivo via novo handler `ft:uploadFolder`
-
-**ipc-handlers.js:**
-- `fs:listDir` agora retorna `m` (mtime) em cada entry
-- Novo `fs:getSpecialDirs` — retorna paths de Desktop, Downloads, Documents
-- `getDrives()` trocado de `wmic` (deprecado) para `fs.statSync` em letras A-Z
-
-**preload.js:**
-- Exposto `getSpecialDirs` no `window.electronAPI`
-
-### Arquivos Modificados
-| Arquivo | Mudanca |
-|---------|---------|
-| `src/renderer/src/components/FileTransfer.jsx` | Refatorado para two-panel com multi-select, shortcuts, coluna data |
-| `src/main/ipc-handlers.js` | Adicionado mtime + getSpecialDirs; removido wmic |
-| `src/main/preload.js` | Exposto getSpecialDirs |
-
----
-
-## [2026-07-30] Instalador NSIS + Auto-update + Firewall
+## [2026-07-30] Instalador NSIS + Auto-update
 
 ### Problema
 O app so rodava via `npm run dev`, exigindo Node.js + terminal. Nao havia
@@ -369,12 +223,7 @@ instalador para distribuicao, nem mecanismo de atualizacao.
 - Dialogos nativos: "Nova versao disponivel" / "Reiniciar agora?"
 - IPC handler `app:checkUpdate` + preload exposto `checkForUpdates()`
 
-**3. Firewall rule no instalador**
-- `scripts/installer.nsh` adiciona regra para porta 5001 (file server)
-- Removida automaticamente na desinstalacao
-- Usa `netsh advfirewall firewall add rule`
-
-**4. Script de build**
+**3. Script de build**
 - `BUILD.bat` — um clique para gerar o instalador
 - Roda `npm run build` + `electron-builder --win nsis`
 
@@ -383,12 +232,11 @@ instalador para distribuicao, nem mecanismo de atualizacao.
 |---------|-----------|
 | `docs/LICENSE.txt` | Licenca MIT para o instalador |
 | `resources/icon.ico` | Icone do app (formato Windows ICO) |
-| `scripts/installer.nsh` | Script NSIS para regra de firewall |
 | `BUILD.bat` | Script para gerar o instalador |
 
 ### Arquivos Modificados
 | Arquivo | Mudanca |
 |---------|---------|
-| `package.json` | Adicionado electron-updater; config NSIS completa (licenca, icone, atalhos, firewall); publish GitHub |
+| `package.json` | Adicionado electron-updater; config NSIS completa (licenca, icone, atalhos); publish GitHub |
 | `src/main/main.js` | Import e setup do autoUpdater; dialogo de atualizacao; IPC app:checkUpdate |
 | `src/main/preload.js` | Exposto `checkForUpdates()` no electronAPI |

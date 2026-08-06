@@ -8,5 +8,6 @@
 - Run `/bootstrap` to initialize the project environment.
 
 ## Workflow (importante)
-- Após cada mudança implementada e validada: **comitar e dar push** para você testar nos dois PCs.
+- Após cada mudança implementada e validada: **comitar** localmente.
+- **Dar push** apenas quando você pedir explicitamente.
 - **NÃO** criar release nova (bump de versão + instalador + `latest.yml`) a menos que você ordene explicitamente.
