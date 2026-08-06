@@ -2,11 +2,11 @@ const { app, BrowserWindow, Menu, ipcMain, globalShortcut, dialog } = require('e
 const path = require('path');
 const fs = require('fs');
 const { autoUpdater } = require('electron-updater');
-const { startWebSocketProxy } = require('./proxy');
-const { startFileProxy } = require('./file-proxy');
-const { startFileServer, stopFileServer, getFileServerStatus } = require('./file-server');
-const { registerIpcHandlers } = require('./ipc-handlers');
-const { ConnectionRequestServer } = require('./connection-request');
+const { startWebSocketProxy } = require('./connection/proxy');
+const { startFileProxy } = require('./file-transfer/file-proxy');
+const { startFileServer, stopFileServer, getFileServerStatus } = require('./file-transfer/file-server');
+const { registerIpcHandlers } = require('./core/ipc-handlers');
+const { ConnectionRequestServer } = require('./connection/connection-request');
 
 // Configuração de logs em arquivo (diretório oficial de dados do usuário,
 // pois __dirname falha quando empacotado dentro do arquivo .asar)

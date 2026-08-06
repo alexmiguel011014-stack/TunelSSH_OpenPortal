@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import BreadcrumbBar from './BreadcrumbBar';
 import FileToolbar from './FileToolbar';
 import FileRow from './FileRow';
-import { getFileIcon } from '../lib/fileIcons';
+import { getFileIcon } from './lib/fileIcons';
 
 const chip = {
   padding: '2px 8px', borderRadius: '4px', border: '1px solid #475569',

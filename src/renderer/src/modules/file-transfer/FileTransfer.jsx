@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useContext, useRef } from 'react';
-import { MachineContext } from '../App';
+import { MachineContext } from '../../App';
 import FilePanel from './FilePanel';
-import { joinVirtual, parentOf, virtualCrumbs, isRoot, formatSize } from '../lib/paths';
+import { joinVirtual, parentOf, virtualCrumbs, isRoot, formatSize } from './lib/paths';
 
 const FILE_PORT = 5001;
 const REMOTE_ROOT = { name: 'Raiz', path: '/' };

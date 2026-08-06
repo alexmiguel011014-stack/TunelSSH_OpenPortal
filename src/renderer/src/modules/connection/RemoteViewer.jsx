@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useContext, useCallback } from 'react';
-import { MachineContext } from '../App';
+import { MachineContext } from '../../App';
 
 const VNC_PASSWORDS = {
   '100.66.218.65': '011014',

@@ -1,9 +1,9 @@
 import { useState, useEffect, createContext, useCallback, useRef } from 'react';
-import Sidebar from './components/Sidebar';
-import RemoteViewer from './components/RemoteViewer';
-import ConfigPanel from './components/ConfigPanel';
-import FileTransfer from './components/FileTransfer';
-import Dashboard from './components/Dashboard';
+import Sidebar from './shared/Sidebar';
+import RemoteViewer from './modules/connection/RemoteViewer';
+import ConfigPanel from './modules/config/ConfigPanel';
+import FileTransfer from './modules/file-transfer/FileTransfer';
+import Dashboard from './modules/dashboard/Dashboard';
 
 export const MachineContext = createContext(null);
 

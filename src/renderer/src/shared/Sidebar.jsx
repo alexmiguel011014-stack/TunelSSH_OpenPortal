@@ -1,7 +1,7 @@
 import { useContext, useMemo, useEffect, useState } from 'react';
 import { MachineContext } from '../App';
 import StatusBadge from './StatusBadge';
-import { isPrivateNetworkHost } from '../lib/net';
+import { isPrivateNetworkHost } from './lib/net';
 
 export default function Sidebar() {
   const {

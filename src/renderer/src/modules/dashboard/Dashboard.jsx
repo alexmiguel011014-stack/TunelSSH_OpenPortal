@@ -1,6 +1,6 @@
 import { useState, useEffect, useContext } from 'react';
-import { MachineContext } from '../App';
-import { isPrivateNetworkHost } from '../lib/net';
+import { MachineContext } from '../../App';
+import { isPrivateNetworkHost } from '../../shared/lib/net';
 
 const card = {
   background: '#1e293b', borderRadius: '8px', border: '1px solid #334155',

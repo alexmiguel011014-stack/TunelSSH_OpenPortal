@@ -1,5 +1,5 @@
-import { getFileIcon } from '../lib/fileIcons';
-import { formatSize, formatDate } from '../lib/paths';
+import { getFileIcon } from './lib/fileIcons';
+import { formatSize, formatDate } from './lib/paths';
 
 // Linha da tabela de arquivos. A seleção é identificada pelo NOME da entrada
 // (não pelo índice), então ordenar, filtrar ou atualizar a pasta não faz a

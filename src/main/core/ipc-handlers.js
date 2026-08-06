@@ -1,17 +1,17 @@
 'use strict';
 
 const { ipcMain, app, dialog, Notification } = require('electron');
-const { readConfig, writeConfig } = require('./config-manager');
-const { connectFileTransfer, disconnectFileTransfer, getActiveConnection, setStatusListener } = require('./file-transfer');
-const { getFileServerStatus } = require('./file-server');
-const { sendConnectRequest, SIGNAL_PORT } = require('./connection-request');
+const { readConfig, writeConfig } = require('../config/config-manager');
+const { connectFileTransfer, disconnectFileTransfer, getActiveConnection, setStatusListener } = require('../file-transfer/file-transfer');
+const { getFileServerStatus } = require('../file-transfer/file-server');
+const { sendConnectRequest, SIGNAL_PORT } = require('../connection/connection-request');
 const { execSync } = require('child_process');
 const os = require('os');
 const fs = require('fs');
 const fsp = require('fs/promises');
 const path = require('path');
 const net = require('net');
-const vpath = require('./vpath');
+const vpath = require('../file-transfer/vpath');
 
 const PROXY_PORT = 18900;
 const FILE_SERVER_PORT = 5001;

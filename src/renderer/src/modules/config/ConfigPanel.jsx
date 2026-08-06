@@ -1,5 +1,5 @@
 import { useContext, useState } from 'react';
-import { MachineContext } from '../App';
+import { MachineContext } from '../../App';
 
 const MAX_PORT = 65535;
 
