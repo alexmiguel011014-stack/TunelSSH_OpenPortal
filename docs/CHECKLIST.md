@@ -51,6 +51,10 @@
 - [x] **Atalhos de teclado globais**: ex.: F1 tela cheia no VNC (já existe F12 para devtools via `globalShortcut`).
 - [x] **Tema claro/escuro** alternável.
 
+### 🐛 Bug fix (sobreposição de UI)
+
+- [x] **Barra VNC sobrescrevendo o hambúrguer da sidebar**: quando a sidebar estava recolhida, a barra de controles do VNC (dimensão, tela cheia, desconectar, etc.) ficava por cima do botão hambúrguer no topo-esquerdo. Corrigido com `paddingLeft: '44px'` no `<div>` da barra de controles em `RemoteViewer.jsx`, garantindo que o conteúdo da barra não alcance a área do hambúrguer.
+
 ---
 
 ## 4. Estado das fases de interface (já concluídas — apenas referência)

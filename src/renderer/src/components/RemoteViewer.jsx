@@ -194,6 +194,7 @@ export default function RemoteViewer({ machine, reconnectFlag }) {
         style={{
           display: 'flex', gap: '6px', alignItems: 'center', flexWrap: 'wrap',
           background: '#0f172a', borderBottom: '1px solid #334155', padding: '6px 10px',
+          paddingLeft: '44px',
         }}
       >
         {remoteRes && (
