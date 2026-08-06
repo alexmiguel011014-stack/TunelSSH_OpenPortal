@@ -25,6 +25,11 @@ div:hover > .remove-machine-btn {
   display: block !important;
 }
 
+/* File list hover */
+.file-row:hover {
+  background: rgba(148, 163, 184, 0.08);
+}
+
 /* Scrollbar styling */
 ::-webkit-scrollbar {
   width: 8px;

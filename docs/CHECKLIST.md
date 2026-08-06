@@ -55,6 +55,13 @@
 
 - [x] **Barra VNC sobrescrevendo o hambúrguer da sidebar**: quando a sidebar estava recolhida, a barra de controles do VNC (dimensão, tela cheia, desconectar, etc.) ficava por cima do botão hambúrguer no topo-esquerdo. Corrigido com `paddingLeft: '44px'` no `<div>` da barra de controles em `RemoteViewer.jsx`, garantindo que o conteúdo da barra não alcance a área do hambúrguer.
 
+### 🗂️ Files UI (Explorador de Arquivos estilo Windows)
+
+- [x] **Arquitetura agradável**: `FilePanel` refatorado em sub-componentes (`BreadcrumbBar`, `FileToolbar`, `FileRow`) + helper `fileIcons.js`, tornando a listagem mais parecida com o Explorador do Windows.
+- [x] **Visual separado por arquivo**: linhas com mais respiro (`7px 12px`), efeito hover, seleção com borda azul, pastas em negrito, ícones por tipo de arquivo (imagem, vídeo, PDF, doc, código, compactado…).
+- [x] **Toggle de visualização**: botões "Lista" / "Ícones" no toolbar; a visão "Ícones" exibe um grid de cards grandes como o Explorer em "Ícones extras".
+- [x] **Upload pergunta destino**: ao enviar, um modal (`UploadDialog`) pergunta onde soltar o arquivo no PC remoto (antes só o download perguntava).
+
 ---
 
 ## 4. Estado das fases de interface (já concluídas — apenas referência)

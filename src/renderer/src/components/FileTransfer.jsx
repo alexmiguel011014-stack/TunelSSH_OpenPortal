@@ -32,11 +32,18 @@ const transferBytesInfo = (t) => {
   return `${formatSize(cur) || '0 B'} / ${formatSize(total) || '0 B'}`;
 };
 
+import FileRow from './FileRow';
+import BreadcrumbBar from './BreadcrumbBar';
+import FileToolbar from './FileToolbar';
+import UploadDialog from './UploadDialog';
+import { getFileIcon } from '../lib/fileIcons';
+
 function FilePanel({ title, path, entries, selected, onSelect, onNavigate, loading, drives, onDriveChange, isLocal, specialDirs, onSpecialDir, error, isConnecting, selectable, onRefresh }) {
   const pathParts = path ? path.split('\\').filter(Boolean) : [];
   const [query, setQuery] = useState('');
-  const [sortKey, setSortKey] = useState(null);
+  const [sortKey, setSortKey] = useState('name');
   const [sortDir, setSortDir] = useState('asc');
+  const [view, setView] = useState('list');
 
   const visibleIndices = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -46,10 +53,14 @@ function FilePanel({ title, path, entries, selected, onSelect, onNavigate, loadi
       idxs = [...idxs].sort((a, b) => {
         const ea = entries[a];
         const eb = entries[b];
-        let r = 0;
-        if (sortKey === 'name') r = (ea.n || '').toLowerCase().localeCompare((eb.n || '').toLowerCase());
-        else if (sortKey === 'size') r = (ea.s || 0) - (eb.s || 0);
-        else r = new Date(ea.m || 0).getTime() - new Date(eb.m || 0).getTime();
+        const da = ea.d ? 0 : 1;
+        const db = eb.d ? 0 : 1;
+        let r = da - db;
+        if (r === 0) {
+          if (sortKey === 'name') r = (ea.n || '').toLowerCase().localeCompare((eb.n || '').toLowerCase());
+          else if (sortKey === 'size') r = (ea.s || 0) - (eb.s || 0);
+          else r = new Date(ea.m || 0).getTime() - new Date(eb.m || 0).getTime();
+        }
         return sortDir === 'asc' ? r : -r;
       });
     }
@@ -74,16 +85,40 @@ function FilePanel({ title, path, entries, selected, onSelect, onNavigate, loadi
 
   const sortIndicator = (key) => (sortKey === key ? (sortDir === 'asc' ? ' \u2191' : ' \u2193') : '');
 
+  const handleToggleSelect = (index, e) => {
+    const sel = new Set(selSet);
+    if (e && e.onlyToggle) {
+      if (sel.has(index)) sel.delete(index); else sel.add(index);
+    } else if (e && (e.ctrlKey || e.metaKey)) {
+      if (sel.has(index)) sel.delete(index); else sel.add(index);
+    } else {
+      sel.clear(); sel.add(index);
+    }
+    onSelect(sel);
+  };
+
+  const canGoUp = (path && ((isLocal && pathParts.length > 1) || (!isLocal && pathParts.length > 0)));
+  const goUp = () => {
+    if (isLocal) {
+      const parent = path.replace(/\\$/, '').split('\\').slice(0, -1).join('\\') + '\\';
+      onNavigate(parent.match(/^[A-Z]:\\$/i) ? parent : parent.replace(/\\\\/g, '\\') || 'C:\\');
+    } else {
+      const pp = path.split('\\').filter(Boolean);
+      pp.pop();
+      onNavigate(pp.length === 0 ? '\\' : '\\' + pp.join('\\'));
+    }
+  };
+
   return (
     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', borderRight: isLocal ? '1px solid #334155' : 'none', minWidth: 0 }}>
       {/* Title */}
-      <div style={{ padding: '6px 10px', background: '#1e293b', borderBottom: '1px solid #334155', fontSize: '11px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.5px', color: '#94a3b8' }}>
+      <div style={{ padding: '6px 12px', background: '#1e293b', borderBottom: '1px solid #334155', fontSize: '11px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.5px', color: '#94a3b8' }}>
         {title}
       </div>
 
       {/* Drives (local only) */}
       {drives && isLocal && (
-        <div style={{ display: 'flex', gap: '4px', padding: '4px 10px', background: '#0f172a', borderBottom: '1px solid #1e293b', flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', gap: '4px', padding: '4px 12px', background: '#0f172a', borderBottom: '1px solid #1e293b', flexWrap: 'wrap' }}>
           {drives.map(d => (
             <button key={d} onClick={() => onDriveChange(d)} style={{
               ...btn, padding: '2px 8px', fontSize: '11px',
@@ -96,69 +131,24 @@ function FilePanel({ title, path, entries, selected, onSelect, onNavigate, loadi
 
       {/* Shortcut buttons (local only) */}
       {isLocal && specialDirs && (
-        <div style={{ display: 'flex', gap: '4px', padding: '3px 10px', background: '#0f172a', borderBottom: '1px solid #1e293b', flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', gap: '4px', padding: '3px 12px', background: '#0f172a', borderBottom: '1px solid #1e293b', flexWrap: 'wrap' }}>
           <button onClick={() => onSpecialDir(specialDirs.desktop)} style={{ ...btn, padding: '2px 8px', fontSize: '11px' }}>Area de Trabalho</button>
           <button onClick={() => onSpecialDir(specialDirs.downloads)} style={{ ...btn, padding: '2px 8px', fontSize: '11px' }}>Downloads</button>
           <button onClick={() => onSpecialDir(specialDirs.documents)} style={{ ...btn, padding: '2px 8px', fontSize: '11px' }}>Documentos</button>
         </div>
       )}
 
-      {/* Breadcrumbs */}
-      <div style={{
-        display: 'flex', alignItems: 'center', gap: '2px', padding: '4px 10px', background: '#0f172a',
-        borderBottom: '1px solid #1e293b', fontFamily: 'monospace', fontSize: '11px', color: '#94a3b8',
-        flexWrap: 'wrap', minHeight: '26px'
-      }}>
-        {isLocal ? (
-          pathParts.length === 0 ? (
-            <span style={{ color: '#64748b', fontSize: '11px' }}>{path}</span>
-          ) : (
-            <>
-              <span style={{ color: '#3b82f6', cursor: 'pointer' }} onClick={() => onNavigate(pathParts[0] + '\\')}>
-                {pathParts[0]}
-              </span>
-              {pathParts.slice(1).map((part, i) => (
-                <span key={i} style={{ display: 'flex', gap: '2px', alignItems: 'center' }}>
-                  <span style={{ color: '#475569' }}>\</span>
-                  <span style={{ cursor: 'pointer', color: '#e2e8f0' }} onClick={() => onNavigate(pathParts.slice(0, i + 2).join('\\') + '\\')}>
-                    {part}
-                  </span>
-                </span>
-              ))}
-            </>
-          )
-        ) : (
-          <>
-            <span style={{ color: '#3b82f6', cursor: 'pointer' }} onClick={() => onNavigate('\\')}>Raiz</span>
-            {pathParts.map((part, i) => (
-              <span key={i} style={{ display: 'flex', gap: '2px', alignItems: 'center' }}>
-                <span style={{ color: '#475569' }}>\</span>
-                <span style={{ cursor: 'pointer', color: '#e2e8f0' }} onClick={() => onNavigate('\\' + pathParts.slice(0, i + 1).join('\\'))}>
-                  {part}
-                </span>
-              </span>
-            ))}
-          </>
-        )}
-      </div>
+      <BreadcrumbBar path={path} isLocal={isLocal} onNavigate={onNavigate} />
 
-      {/* Toolbar (filter + refresh) */}
+      {/* Toolbar (filter + view + refresh) */}
       {!loading && !error && !isConnecting && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '4px 10px', background: '#0f172a', borderBottom: '1px solid #1e293b' }}>
-          <input
-            type="text"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="Filtrar..."
-            style={{
-              flex: 1, minWidth: 0, background: '#0f172a', border: '1px solid #334155',
-              borderRadius: '4px', color: '#e2e8f0', fontSize: '12px', padding: '3px 8px', outline: 'none'
-            }}
-          />
-          {onRefresh && (
-            <button onClick={onRefresh} style={{ ...btn, padding: '3px 10px', fontSize: '11px', whiteSpace: 'nowrap' }}>Atualizar</button>
-          )}
-        </div>
+        <FileToolbar
+          query={query}
+          onQueryChange={setQuery}
+          onRefresh={onRefresh}
+          view={view}
+          onViewChange={setView}
+        />
       )}
 
       {/* Content */}
@@ -182,125 +172,142 @@ function FilePanel({ title, path, entries, selected, onSelect, onNavigate, loadi
 
         {!loading && !error && !isConnecting && (
           <>
-            {/* Header row */}
-            <div style={{
-              display: 'flex', alignItems: 'center', padding: '4px 10px', gap: '8px',
-              borderBottom: '1px solid #1e293b', fontSize: '11px', color: '#64748b', fontWeight: 600
-            }}>
-              {selectable && (
-                <span style={{ width: '22px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                  <input
-                    type="checkbox"
-                    checked={allVisibleSelected}
-                    onChange={toggleSelectAll}
-                    ref={(el) => { if (el) el.indeterminate = someVisibleSelected && !allVisibleSelected; }}
-                    style={{ cursor: 'pointer', accentColor: '#3b82f6', margin: 0 }}
-                  />
-                </span>
-              )}
-              <span style={{ flex: 1, cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleSort('name')}>
-                Nome{sortIndicator('name')}
-              </span>
-              <span style={{ width: '80px', textAlign: 'right', cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleSort('size')}>
-                Tamanho{sortIndicator('size')}
-              </span>
-              <span style={{ width: '140px', textAlign: 'right', cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleSort('date')}>
-                Modificado{sortIndicator('date')}
-              </span>
-            </div>
-
-            {entries.length === 0 ? (
-              <div style={{ padding: '20px', textAlign: 'center', color: '#64748b', fontSize: '12px' }}>Pasta vazia</div>
-            ) : (
+            {view === 'list' ? (
               <>
-                {/* ".." parent entry */}
-                {path && ((isLocal && pathParts.length > 1) || (!isLocal && pathParts.length > 0)) && (
-                  <div style={{
-                    display: 'flex', alignItems: 'center', padding: '4px 10px', cursor: 'pointer',
-                    borderBottom: '1px solid #1e293b', gap: '8px', color: '#94a3b8', fontSize: '13px'
-                  }} onClick={() => {
-                    if (isLocal) {
-                      const parent = path.replace(/\\$/, '').split('\\').slice(0, -1).join('\\') + '\\';
-                      onNavigate(parent.match(/^[A-Z]:\\$/i) ? parent : parent.replace(/\\\\/g, '\\') || 'C:\\');
-                    } else {
-                      const pp = path.split('\\').filter(Boolean);
-                      pp.pop();
-                      onNavigate(pp.length === 0 ? '\\' : '\\' + pp.join('\\'));
-                    }
-                  }}>
-                    {isLocal && <span style={{ width: '22px' }}></span>}
-                    <span style={{ width: '18px', textAlign: 'center', fontSize: '14px', opacity: 0.6 }}>..</span>
-                    <span style={{ flex: 1 }}>Voltar</span>
-                    <span style={{ width: '80px' }}></span>
-                    <span style={{ width: '140px' }}></span>
-                  </div>
-                )}
+                {/* Header row */}
+                <div style={{
+                  display: 'flex', alignItems: 'center', padding: '5px 12px', gap: '8px',
+                  borderBottom: '1px solid #1e293b', fontSize: '11px', color: '#64748b', fontWeight: 600
+                }}>
+                  {selectable && (
+                    <span style={{ width: '18px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                      <input
+                        type="checkbox"
+                        checked={allVisibleSelected}
+                        onChange={toggleSelectAll}
+                        ref={(el) => { if (el) el.indeterminate = someVisibleSelected && !allVisibleSelected; }}
+                        style={{ cursor: 'pointer', accentColor: '#3b82f6', margin: 0 }}
+                      />
+                    </span>
+                  )}
+                  <span style={{ width: '22px' }}></span>
+                  <span style={{ flex: 1, cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleSort('name')}>
+                    Nome{sortIndicator('name')}
+                  </span>
+                  <span style={{ width: '80px', textAlign: 'right', cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleSort('size')}>
+                    Tamanho{sortIndicator('size')}
+                  </span>
+                  <span style={{ width: '140px', textAlign: 'right', cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleSort('date')}>
+                    Modificado{sortIndicator('date')}
+                  </span>
+                </div>
 
-                {visibleIndices.length === 0 ? (
-                  <div style={{ padding: '20px', textAlign: 'center', color: '#64748b', fontSize: '12px' }}>
-                    Nenhum item encontrado para &quot;{query}&quot;
-                  </div>
-                ) : visibleIndices.map(idx => {
-                  const entry = entries[idx];
-                  const isSelected = selectable ? selSet.has(idx) : false;
-                  return (
-                    <div
-                      key={idx}
-                      style={{
-                        display: 'flex', alignItems: 'center', padding: '4px 10px', gap: '8px',
-                        cursor: 'pointer', borderBottom: '1px solid #1e293b',
-                        background: isSelected ? '#1e3a5f' : 'transparent',
-                        color: entry.d ? '#e2e8f0' : '#cbd5e1'
-                      }}
-                      onClick={(e) => {
-                        if (!selectable) return;
-                        const sel = new Set(selSet);
-                        if (e.ctrlKey || e.metaKey) {
-                          if (sel.has(idx)) sel.delete(idx); else sel.add(idx);
-                        } else {
-                          sel.clear(); sel.add(idx);
-                        }
-                        onSelect(sel);
-                      }}
-                      onDoubleClick={() => {
-                        if (entry.d) {
+                {entries.length === 0 ? (
+                  <div style={{ padding: '20px', textAlign: 'center', color: '#64748b', fontSize: '12px' }}>Pasta vazia</div>
+                ) : (
+                  <>
+                    {/* ".." parent entry */}
+                    {canGoUp && (
+                      <div onDoubleClick={goUp} style={{
+                        display: 'flex', alignItems: 'center', padding: '7px 12px', cursor: 'pointer',
+                        borderBottom: '1px solid #1e293b', gap: '8px', color: '#94a3b8', fontSize: '13px',
+                      }}>
+                        <span style={{ width: '18px' }}></span>
+                        <span style={{ width: '22px', textAlign: 'center', fontSize: '18px', lineHeight: 1 }}>📂</span>
+                        <span style={{ flex: 1 }}>Voltar</span>
+                        <span style={{ width: '80px' }}></span>
+                        <span style={{ width: '140px' }}></span>
+                      </div>
+                    )}
+
+                    {visibleIndices.length === 0 ? (
+                      <div style={{ padding: '20px', textAlign: 'center', color: '#64748b', fontSize: '12px' }}>
+                        Nenhum item encontrado para &quot;{query}&quot;
+                      </div>
+                    ) : visibleIndices.map(idx => (
+                      <FileRow
+                        key={idx}
+                        entry={entries[idx]}
+                        index={idx}
+                        isSelected={selectable ? selSet.has(idx) : false}
+                        selectable={selectable}
+                        onToggleSelect={handleToggleSelect}
+                        onOpen={(entry) => {
                           onNavigate(isLocal ? path.replace(/\\$/, '') + '\\' + entry.n : (path.endsWith('\\') ? path : path + '\\') + entry.n);
                           if (selectable) onSelect(new Set());
-                        }
-                      }}
-                    >
-                      {/* Checkbox (selectable) */}
-                      {selectable && (
-                        <span style={{ width: '22px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                          <input
-                            type="checkbox"
-                            checked={isSelected}
-                            onChange={() => {}}
-                            style={{ cursor: 'pointer', accentColor: '#3b82f6' }}
-                            onClick={(e) => { e.stopPropagation(); const sel = new Set(selSet); if (sel.has(idx)) sel.delete(idx); else sel.add(idx); onSelect(sel); }}
-                          />
-                        </span>
-                      )}
-                      {/* Icon */}
-                      <span style={{ width: '18px', textAlign: 'center', fontSize: '14px', opacity: 0.7 }}>
-                        {entry.d ? '\uD83D\uDCC1' : '\uD83D\uDCC4'}
-                      </span>
-                      {/* Name */}
-                      <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: '13px' }}>
-                        {entry.n}
-                      </span>
-                      {/* Size */}
-                      <span style={{ width: '80px', textAlign: 'right', color: '#64748b', fontSize: '11px', whiteSpace: 'nowrap' }}>
-                        {entry.d ? '' : formatSize(entry.s)}
-                      </span>
-                      {/* Date */}
-                      <span style={{ width: '140px', textAlign: 'right', color: '#64748b', fontSize: '11px', whiteSpace: 'nowrap' }}>
-                        {formatDate(entry.m)}
-                      </span>
-                    </div>
-                  );
-                })}
+                        }}
+                      />
+                    ))}
+                  </>
+                )}
               </>
+            ) : (
+              <>
+                {/* Grid / icons view */}
+                {entries.length === 0 ? (
+                  <div style={{ padding: '20px', textAlign: 'center', color: '#64748b', fontSize: '12px' }}>Pasta vazia</div>
+                ) : (
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(110px, 1fr))', gap: '6px', padding: '10px' }}>
+                    {canGoUp && (
+                      <div onClick={goUp} style={{
+                        display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '6px',
+                        padding: '12px 6px', borderRadius: '8px', cursor: 'pointer', color: '#94a3b8',
+                        fontSize: '12px', textAlign: 'center',
+                      }}>
+                        <span style={{ fontSize: '40px', lineHeight: 1 }}>📂</span>
+                        <span>Voltar</span>
+                      </div>
+                    )}
+                    {visibleIndices.map(idx => {
+                      const entry = entries[idx];
+                      const isSelected = selectable ? selSet.has(idx) : false;
+                      return (
+                        <div
+                          key={idx}
+                          onClick={() => handleToggleSelect(idx, {})}
+                          onDoubleClick={() => {
+                            if (entry.d) {
+                              onNavigate(isLocal ? path.replace(/\\$/, '') + '\\' + entry.n : (path.endsWith('\\') ? path : path + '\\') + entry.n);
+                              if (selectable) onSelect(new Set());
+                            }
+                          }}
+                          style={{
+                            display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '6px',
+                            padding: '12px 6px', borderRadius: '8px', cursor: 'pointer',
+                            background: isSelected ? 'rgba(59,130,246,0.2)' : 'transparent',
+                            border: isSelected ? '1px solid #3b82f6' : '1px solid transparent',
+                            textAlign: 'center', position: 'relative',
+                          }}
+                          title={entry.n}
+                        >
+                          {selectable && (
+                            <span style={{ position: 'absolute', top: '4px', left: '4px' }}>
+                              <input
+                                type="checkbox"
+                                checked={isSelected}
+                                onChange={() => {}}
+                                onClick={(e) => { e.stopPropagation(); handleToggleSelect(idx, { onlyToggle: true }); }}
+                                style={{ cursor: 'pointer', accentColor: '#3b82f6' }}
+                              />
+                            </span>
+                          )}
+                          <span style={{ fontSize: '40px', lineHeight: 1 }}>
+                            {getFileIcon(entry.n, entry.d).icon}
+                          </span>
+                          <span style={{
+                            fontSize: '12px', color: entry.d ? '#e2e8f0' : '#cbd5e1',
+                            overflow: 'hidden', textOverflow: 'ellipsis', display: '-webkit-box',
+                            WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', wordBreak: 'break-word',
+                            maxWidth: '100%', fontWeight: entry.d ? 600 : 400,
+                          }}>
+                            {entry.n}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+</>
             )}
           </>
         )}
@@ -330,6 +337,7 @@ export default function FileTransfer() {
   const [remoteLoading, setRemoteLoading] = useState(false);
   const [remoteError, setRemoteError] = useState(null);
   const [remoteSelected, setRemoteSelected] = useState(new Set());
+  const [uploadDialog, setUploadDialog] = useState(null);
 
   const loadLocalDir = useCallback(async (dirPath) => {
     if (!dirPath) return;
@@ -607,13 +615,23 @@ export default function FileTransfer() {
     const items = [...localSelected].map(i => localEntries[i]).filter(Boolean);
     if (items.length === 0) return;
 
-    const sep = remotePath.endsWith('\\') ? '' : '\\';
+    const base = remotePath.endsWith('\\') ? remotePath : remotePath + '\\';
+    const singleFile = items.length === 1 && !items[0].d;
+    const initialPath = singleFile ? base + items[0].n : remotePath;
+    setUploadDialog({ items, initialPath, multiple: !singleFile });
+  };
+
+  const doUpload = async (destPath) => {
+    if (!uploadDialog) return;
+    const items = uploadDialog.items;
     let uploaded = 0;
     let failed = 0;
 
     for (const sel of items) {
       const localFull = localPath.replace(/\\$/, '') + '\\' + sel.n;
-      const remoteDest = remotePath + sep + sel.n;
+      const remoteDest = uploadDialog.multiple
+        ? (destPath.endsWith('\\') ? destPath : destPath + '\\') + sel.n
+        : destPath;
 
       try {
         if (sel.d) {
@@ -645,6 +663,7 @@ export default function FileTransfer() {
 
     if (uploaded > 0) loadRemoteDir(remotePath);
     setLocalSelected(new Set());
+    setUploadDialog(null);
   };
 
   if (!activeMachine || !activeMachine.host) {
@@ -790,6 +809,17 @@ export default function FileTransfer() {
           <span>{transfer.type === 'download' ? `Recebendo... ${transfer.percent}%` : `Enviando... ${transfer.percent}%`}</span>
         )}
       </div>
+
+      {/* Upload destination dialog */}
+      {uploadDialog && (
+        <UploadDialog
+          title={uploadDialog.multiple ? 'Enviar itens para pasta no remoto' : 'Salvar no computador remoto'}
+          initialPath={uploadDialog.initialPath}
+          multiple={uploadDialog.multiple}
+          onConfirm={(p) => doUpload(p)}
+          onCancel={() => setUploadDialog(null)}
+        />
+      )}
     </div>
   );
 }
