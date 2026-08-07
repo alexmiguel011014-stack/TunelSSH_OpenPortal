@@ -85,7 +85,7 @@ export default function ConfigPanel() {
       if (addLog) addLog(`Máximo de ${maxMachines} PC(s) atingido`, 'warn');
       return;
     }
-    const newMachine = { id: 'tmp-' + Date.now(), name: `PC ${draft.length + 1}`, host: '', port: 5900 };
+    const newMachine = { id: 'tmp-' + Date.now(), name: `PC ${draft.length + 1}`, host: '', port: 5900, vncPassword: '' };
     setDraft(prev => [...prev, newMachine]);
   };
 
@@ -137,7 +137,7 @@ export default function ConfigPanel() {
                   </button>
                 )}
               </div>
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
                 <div>
                   <label className="block text-xs text-slate-500 mb-1">Nome</label>
                   <input
@@ -187,6 +187,17 @@ export default function ConfigPanel() {
                     onChange={(e) => updateField(index, 'port', parseInt(e.target.value) || 5900)}
                     className={`w-full bg-slate-900 border rounded-lg px-3 py-2 text-sm text-slate-100 font-mono focus:outline-none focus:border-blue-500 transition-colors ${errors[index] && (machine.port < 1 || machine.port > MAX_PORT) ? 'border-red-600' : 'border-slate-600'}`}
                     placeholder="5900"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-slate-500 mb-1">Senha VNC</label>
+                  <input
+                    type="password"
+                    value={machine.vncPassword || ''}
+                    onChange={(e) => updateField(index, 'vncPassword', e.target.value)}
+                    autoComplete="new-password"
+                    className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-100 font-mono focus:outline-none focus:border-blue-500 transition-colors"
+                    placeholder="(opcional)"
                   />
                 </div>
               </div>

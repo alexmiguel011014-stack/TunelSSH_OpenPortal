@@ -10,6 +10,8 @@ export default function Sidebar() {
     connectMachine,
     addMachine,
     removeMachine,
+    showConfig,
+    setShowConfig,
     showFiles,
     setShowFiles,
     sidebarCollapsed,
@@ -148,10 +150,30 @@ export default function Sidebar() {
         )}
       </nav>
 
+      {/* Configurações button */}
+      <div style={{ padding: '0 12px', borderTop: '1px solid #334155' }}>
+        <button
+          onClick={() => { setShowFiles(false); setShowConfig(!showConfig); }}
+          style={{
+            width: '100%',
+            padding: '8px 12px',
+            borderRadius: '8px',
+            fontSize: '14px',
+            border: 'none',
+            cursor: 'pointer',
+            background: showConfig ? '#475569' : 'transparent',
+            color: showConfig ? '#ffffff' : '#94a3b8',
+            marginTop: '8px',
+          }}
+        >
+          ⚙️ Configurações
+        </button>
+      </div>
+
       {/* Files button */}
       <div style={{ padding: '0 12px', borderTop: '1px solid #334155' }}>
         <button
-          onClick={() => setShowFiles(!showFiles)}
+          onClick={() => { setShowConfig(false); setShowFiles(!showFiles); }}
           style={{
             width: '100%',
             padding: '8px 12px',

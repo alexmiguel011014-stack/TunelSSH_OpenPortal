@@ -1,27 +1,12 @@
 const WebSocket = require('ws');
 const net = require('net');
 const { URL } = require('url');
-
-const isDev = process.env.NODE_ENV === 'development';
+const { isAllowedHost } = require('./net-guard');
 
 const CONNECT_TIMEOUT = 10000;
 const IDLE_TIMEOUT = 30 * 60 * 1000;
 const HEARTBEAT_INTERVAL = 30000;   // ping WS a cada 30s
 const HEARTBEAT_MAX_MISSED = 2;     // encerra após ~60s sem pong
-
-function isAllowedHost(host) {
-  if (!host) return false;
-  if (isDev && (host === '127.0.0.1' || host === 'localhost')) return true;
-  const parts = host.split('.');
-  if (parts.length !== 4) return false;
-  const a = parseInt(parts[0], 10);
-  const b = parseInt(parts[1], 10);
-  if (a === 100) return true;                                    // Tailscale (CGNAT 100.64/10)
-  if (a === 10) return true;                                     // 10/8
-  if (a === 192 && b === 168) return true;                       // 192.168/16
-  if (a === 172 && b >= 16 && b <= 31) return true;              // 172.16/12
-  return false;
-}
 
 function startWebSocketProxy(port = 18900) {
   const wss = new WebSocket.Server({ port });

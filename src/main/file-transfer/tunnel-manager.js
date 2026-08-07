@@ -5,6 +5,7 @@
 // duas (mesmo padrão usado antes da remoção do módulo antigo).
 const os = require('os');
 const { sendConnectRequest, SIGNAL_PORT } = require('../connection/connection-request');
+const { isAllowedHost } = require('../connection/net-guard');
 const { FileClient } = require('./file-client');
 
 const sessions = new Map(); // sessionId -> { sessionId, host, client }
@@ -28,6 +29,9 @@ async function connect(host, opts = {}) {
   if (!target) throw new Error('Endereço IP vazio');
   if (!/^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(target)) {
     throw new Error('Endereço IP inválido: use o formato 100.x.x.x');
+  }
+  if (!isAllowedHost(target)) {
+    throw new Error('Endereço fora da rede privada/Tailscale (100.x, 10.x, 192.168.x, 172.16-31.x)');
   }
 
   if (!opts.force) {

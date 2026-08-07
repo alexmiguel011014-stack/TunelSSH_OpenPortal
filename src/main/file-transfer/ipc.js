@@ -242,6 +242,7 @@ function registerFileTransferIpc(mainWindow) {
       const result = await runUploadBatch(mainWindow, sessionId, jobs, batchId);
       return { success: true, ...result };
     } catch (err) {
+      send(mainWindow, 'ft:progress', { batchId, phase: 'upload', done: true, ok: 0, failed: localPaths.length, error: err.message });
       return { success: false, message: err.message };
     }
   });
@@ -253,6 +254,7 @@ function registerFileTransferIpc(mainWindow) {
       const result = await runDownloadBatch(mainWindow, sessionId, jobs, batchId);
       return { success: true, ...result };
     } catch (err) {
+      send(mainWindow, 'ft:progress', { batchId, phase: 'download', done: true, ok: 0, failed: remotePaths.length, error: err.message });
       return { success: false, message: err.message };
     }
   });

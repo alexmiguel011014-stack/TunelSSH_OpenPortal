@@ -114,10 +114,9 @@ Proxy VNC                (VNC remoto)
 
 ## Senhas VNC
 
-| PC | IP | Senha |
-|---|---|---|
-| PC local (skytre) | `100.66.218.65` | `011014` |
-| PC remoto (desktop-o18jvru) | `100.81.199.56` | `Alex.777` |
+Não ficam mais hardcoded em código nem em documentação — cada PC cadastrado
+tem seu campo "Senha VNC" na tela de Configurações (⚙️ na Sidebar), salvo
+localmente em `config.json` (fora do repositório).
 
 ---
 

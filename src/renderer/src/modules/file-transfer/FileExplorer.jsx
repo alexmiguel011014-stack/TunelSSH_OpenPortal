@@ -534,16 +534,19 @@ function PaneView({ label, pane, connectionBadge, onDisconnect }) {
   };
 
   const handleNewFolder = async () => {
+    // mkdir(..., {recursive:true}) no backend não falha se a pasta já
+    // existir — por isso a checagem de colisão é feita aqui contra os
+    // nomes já listados, e não tentando criar e reagindo ao erro.
+    const existingNames = new Set(pane.entries.map((e) => e.name));
     const base = 'Nova pasta';
     let name = base;
-    for (let i = 2; i <= 30; i++) {
-      try {
-        await pane.adapter.mkdir(pane.adapter.join(pane.path, name));
-        break;
-      } catch {
-        name = `${base} (${i})`;
-        if (i === 30) return;
-      }
+    for (let i = 2; existingNames.has(name); i++) name = `${base} (${i})`;
+
+    try {
+      await pane.adapter.mkdir(pane.adapter.join(pane.path, name));
+    } catch (err) {
+      window.alert(`Falha ao criar pasta: ${err.message}`);
+      return;
     }
     await pane.refresh();
     pane.setSelected(new Set([name]));
@@ -704,9 +707,11 @@ function StatusBar({ batch }) {
   return (
     <div className="border-t border-[#e5e5e5] bg-[#f9f9f9] px-4 py-2 text-[12px] text-[#1b1b1b]">
       <div className="flex items-center justify-between mb-1">
-        <span className="truncate">
+        <span className={`truncate ${batch.error && !batch.ok ? 'text-[#a80000]' : ''}`}>
           {batch.done
-            ? `${phaseLabel} concluído — ${batch.ok || 0} ok${batch.failed ? `, ${batch.failed} falha(s)` : ''}`
+            ? batch.error && !batch.ok
+              ? `${phaseLabel} falhou: ${batch.error}`
+              : `${phaseLabel} concluído — ${batch.ok || 0} ok${batch.failed ? `, ${batch.failed} falha(s)` : ''}`
             : `${phaseLabel}: ${batch.fileName || ''} (${filePct}%)`}
         </span>
         <span className="shrink-0 text-[#605e5c]">

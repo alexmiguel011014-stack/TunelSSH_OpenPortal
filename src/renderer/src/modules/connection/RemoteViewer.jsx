@@ -1,11 +1,6 @@
 import { useEffect, useRef, useState, useContext, useCallback } from 'react';
 import { MachineContext } from '../../App';
 
-const VNC_PASSWORDS = {
-  '100.66.218.65': '011014',
-  '100.81.199.56': 'Alex.777',
-};
-
 const QUALITY_LEVELS = [
   { label: 'Baixa', level: 0 },
   { label: 'Média', level: 3 },
@@ -54,7 +49,7 @@ export default function RemoteViewer({ machine, reconnectFlag }) {
   }, [addLog]);
 
   const proxyUrl = `ws://127.0.0.1:18900`;
-  const password = VNC_PASSWORDS[machine.host] || '';
+  const password = machine.vncPassword || '';
   const viewerUrl = `./noVNC/vnc.html?host=${machine.host}&port=${machine.port}&proxy=${encodeURIComponent(proxyUrl)}&password=${encodeURIComponent(password)}`;
 
   const sendResize = useCallback(() => {
