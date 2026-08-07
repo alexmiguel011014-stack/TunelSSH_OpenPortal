@@ -10,6 +10,8 @@ export default function Sidebar() {
     connectMachine,
     addMachine,
     removeMachine,
+    showFiles,
+    setShowFiles,
     sidebarCollapsed,
     toggleSidebar,
     maxMachines,
@@ -106,8 +108,8 @@ export default function Sidebar() {
                       {machine.name}
                     </div>
                     {isConfigured && (
-                      <div style={{ fontSize: '12px', opacity: 0.7, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginTop: '2px' }}>
-                        {machine.host}:{machine.port}
+                      <div style={{ fontSize: '12px', opacity: 0.7, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginTop: '2px', fontFamily: 'monospace' }}>
+                        {machine.mask || `${machine.host}:${machine.port}`}
                       </div>
                     )}
                   </div>
@@ -145,6 +147,26 @@ export default function Sidebar() {
           </button>
         )}
       </nav>
+
+      {/* Files button */}
+      <div style={{ padding: '0 12px', borderTop: '1px solid #334155' }}>
+        <button
+          onClick={() => setShowFiles(!showFiles)}
+          style={{
+            width: '100%',
+            padding: '8px 12px',
+            borderRadius: '8px',
+            fontSize: '14px',
+            border: 'none',
+            cursor: 'pointer',
+            background: showFiles ? '#475569' : 'transparent',
+            color: showFiles ? '#ffffff' : '#94a3b8',
+            marginTop: '8px',
+          }}
+        >
+          📁 Arquivos
+        </button>
+      </div>
 
       {/* Atualizações button */}
       <div style={{ padding: '0 12px', borderTop: '1px solid #334155' }}>

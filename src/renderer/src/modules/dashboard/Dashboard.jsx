@@ -16,22 +16,13 @@ const sectionTitle = {
 };
 
 export default function Dashboard({ onConnect }) {
-  const { machines, activeMachine, setActiveMachine, addLog, connHistory } = useContext(MachineContext);
+  const { machines, activeMachine, connectMachine, addLog, connHistory } = useContext(MachineContext);
   const [quickIp, setQuickIp] = useState('');
   const [connecting, setConnecting] = useState(false);
 
   const handleConnectMachine = async (machine) => {
     if (activeMachine && activeMachine.id === machine.id) return;
-    if (activeMachine) {
-      try { await window.electronAPI.disconnectVnc(); } catch {}
-    }
-    try {
-      await window.electronAPI.connectVnc(machine);
-      setActiveMachine(machine);
-      addLog(`Conectando a ${machine.name} (${machine.host})`);
-    } catch (err) {
-      addLog(`Erro ao conectar: ${err.message}`, 'error');
-    }
+    await connectMachine(machine);
   };
 
   const handleQuickConnect = async () => {
@@ -45,43 +36,10 @@ export default function Dashboard({ onConnect }) {
     }
     if (connecting) return;
     setConnecting(true);
-    addLog(`Solicitando conexão a ${ip}...`);
-
-    let localIp = '';
     try {
-      const res = await window.electronAPI.getLocalIp();
-      localIp = (res && res.ip) || '';
-    } catch {}
-
-    try {
-      const reqRes = await window.electronAPI.requestConnection(ip, { fromIp: localIp });
-      if (!reqRes || !reqRes.success || !reqRes.approved) {
-        addLog(`Conexão recusada: ${(reqRes && reqRes.message) || 'não aprovada'}`, 'error');
-        return;
-      }
-    } catch (err) {
-      addLog(`Erro ao solicitar conexão: ${err.message}`, 'error');
-      return;
+      await connectMachine({ id: 'quick-' + Date.now(), name: 'Conexão Direta', host: ip, port: 5900 });
     } finally {
       setConnecting(false);
-    }
-
-    addLog('Conexão aceita pelo PC remoto. Abrindo visualização...');
-    const tempMachine = {
-      id: 'quick-' + Date.now(),
-      name: 'Conexão Direta',
-      host: ip,
-      port: 5900
-    };
-    if (activeMachine) {
-      try { await window.electronAPI.disconnectVnc(); } catch {}
-    }
-    try {
-      await window.electronAPI.connectVnc(tempMachine);
-      setActiveMachine(tempMachine);
-      addLog(`Conectando a ${ip}:5900`);
-    } catch (err) {
-      addLog(`Erro ao conectar: ${err.message}`, 'error');
     }
   };
 
@@ -118,7 +76,7 @@ export default function Dashboard({ onConnect }) {
                 <span style={{ fontSize: '16px' }}>{'\uD83D\uDDA5\uFE0F'}</span>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontSize: '14px', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{m.name}</div>
-                  <div style={{ fontSize: '11px', color: '#64748b' }}>{m.host}{m.port !== 5900 ? ':' + m.port : ''}</div>
+                  <div style={{ fontSize: '11px', color: '#64748b', fontFamily: 'monospace' }}>{m.mask || `${m.host}${m.port !== 5900 ? ':' + m.port : ''}`}</div>
                 </div>
                 <button style={{ ...btn, background: '#2563eb', borderColor: '#2563eb', color: '#fff' }} onClick={() => handleConnectMachine(m)}>
                   {activeMachine?.id === m.id ? 'Visualizando' : 'Conectar'}

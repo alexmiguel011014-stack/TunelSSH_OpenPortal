@@ -222,7 +222,7 @@ export default function RemoteViewer({ machine, reconnectFlag }) {
           <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: health.color, display: 'inline-block' }} />
           {health.label}
         </span>
-        <span style={ctrlLabel}>{machine.name} · {machine.host}:{machine.port}</span>
+        <span style={ctrlLabel}>{machine.name} · {machine.mask || `${machine.host}:${machine.port}`}</span>
       </div>
 
       {/* Canvas viewport */}

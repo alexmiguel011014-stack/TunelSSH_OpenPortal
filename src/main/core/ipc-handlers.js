@@ -2,7 +2,6 @@
 
 const { ipcMain, app, Notification } = require('electron');
 const { readConfig, writeConfig } = require('../config/config-manager');
-const { sendConnectRequest, SIGNAL_PORT } = require('../connection/connection-request');
 const { execSync } = require('child_process');
 const os = require('os');
 const net = require('net');
@@ -56,22 +55,6 @@ function registerIpcHandlers(mainWindow) {
     } catch {}
     return '';
   }
-
-  ipcMain.handle('connect:request', async (_, host, opts) => {
-    try {
-      const ip = (host || '').trim();
-      if (!ip) throw new Error('EndereÃ§o IP vazio');
-      if (!/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.test(ip)) {
-        throw new Error('EndereÃ§o IP invÃ¡lido: use o formato 100.x.x.x');
-      }
-      const fromName = (opts && opts.fromName) || os.hostname() || 'PC';
-      const fromIp = (opts && opts.fromIp) || getLocalTailscaleIp();
-      const res = await sendConnectRequest(ip, fromName, fromIp);
-      return { success: true, approved: res.approved, message: res.message };
-    } catch (err) {
-      return { success: false, approved: false, message: err.message };
-    }
-  });
 
   ipcMain.handle('app:notify', (_, { title, body, silent }) => {
     try {

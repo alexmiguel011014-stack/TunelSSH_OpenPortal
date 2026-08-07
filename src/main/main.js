@@ -5,6 +5,7 @@ const { autoUpdater } = require('electron-updater');
 const { startWebSocketProxy } = require('./connection/proxy');
 const { registerIpcHandlers } = require('./core/ipc-handlers');
 const { ConnectionRequestServer } = require('./connection/connection-request');
+const { registerFileTransferIpc } = require('./file-transfer/ipc');
 
 // Configuração de logs em arquivo (diretório oficial de dados do usuário,
 // pois __dirname falha quando empacotado dentro do arquivo .asar)
@@ -159,11 +160,14 @@ function createUpdateProgressWindow() {
 
 function handleConnectionRequest(req, respond) {
   const parent = (mainWindow && !mainWindow.isDestroyed()) ? mainWindow : undefined;
+  const detail = req.capability === 'tunnel'
+    ? `IP de origem: ${req.fromIp || 'desconhecido'}\n\nEsse PC poderá ver sua tela e listar, enviar e receber arquivos deste computador. Essa permissão não fica salva — será pedida de novo na próxima vez.\n\nAceita a conexão?`
+    : `IP de origem: ${req.fromIp || 'desconhecido'}\n\nAceita a conexão?`;
   const options = {
     type: 'question',
     title: 'Solicitação de conexão',
     message: `${req.fromName} quer se conectar a você.`,
-    detail: `IP de origem: ${req.fromIp || 'desconhecido'}\n\nAceita a conexão?`,
+    detail,
     buttons: ['Aceitar', 'Rejeitar'],
     defaultId: 0,
     cancelId: 1
@@ -291,6 +295,7 @@ app.whenReady().then(() => {
 
   createWindow();
   registerIpcHandlers(mainWindow);
+  registerFileTransferIpc(mainWindow);
 
   ipcMain.handle('app:checkUpdate', () => {
     if (isDev) {

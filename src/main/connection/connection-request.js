@@ -1,4 +1,7 @@
 const net = require('net');
+const os = require('os');
+const { FileAgentSession } = require('../file-transfer/file-agent');
+const { FrameDecoder } = require('../file-transfer/protocol');
 
 const SIGNAL_PORT = 18902;
 const REQUEST_TIMEOUT = 15000;
@@ -18,13 +21,26 @@ class ConnectionRequestServer {
       socket.setNoDelay(true);
       let buffer = Buffer.alloc(0);
 
-      const respond = (payload) => {
-        if (socket.destroyed) return;
-        socket.write(JSON.stringify(payload));
-        socket.end();
+      // Upgrade: depois de aprovar um pedido com capability:'tunnel', o
+      // socket NÃO é fechado — vira o transporte multiplexado de
+      // transferência de arquivos (ver file-agent.js / protocol.js). Isso
+      // evita abrir uma porta TCP nova (e a regra de firewall que ela
+      // exigiria): reaproveita esta conexão, que o Windows já deixa passar.
+      const upgradeToTunnel = () => {
+        socket.removeListener('data', dataHandler);
+        const session = new FileAgentSession(socket, os.homedir());
+        const decoder = new FrameDecoder();
+        socket.on('data', (chunk) => {
+          const frames = decoder.push(chunk);
+          for (const frame of frames) {
+            session.handleFrame(frame).catch(() => {});
+          }
+        });
+        socket.on('close', () => session.destroy());
+        socket.on('error', () => session.destroy());
       };
 
-      socket.on('data', (d) => {
+      const dataHandler = (d) => {
         buffer = Buffer.concat([buffer, d]);
         let msg = null;
         try {
@@ -33,21 +49,40 @@ class ConnectionRequestServer {
         if (!msg) return;
 
         if (msg.type === 'connect-request') {
+          const wantsTunnel = msg.capability === 'tunnel';
           const req = {
             requestId: msg.requestId || String(Date.now()),
             fromName: msg.fromName || 'Desconhecido',
-            fromIp: msg.fromIp || ''
+            fromIp: msg.fromIp || '',
+            capability: wantsTunnel ? 'tunnel' : 'vnc'
           };
+
+          const respond = (payload) => {
+            if (socket.destroyed) return;
+            const approved = !!payload.approved;
+            const finalPayload = wantsTunnel && approved ? { ...payload, tunnel: true } : payload;
+            socket.write(JSON.stringify(finalPayload));
+            if (wantsTunnel && approved) {
+              upgradeToTunnel();
+            } else {
+              socket.end();
+            }
+          };
+
           if (this.onRequest) {
             this.onRequest(req, respond);
           } else {
-            respond({ type: 'connect-response', approved: false, message: 'Server not ready' });
+            respond({ type: 'connect-response', requestId: req.requestId, approved: false, message: 'Server not ready' });
           }
         } else {
-          respond({ type: 'connect-response', approved: false, message: 'Unknown request' });
+          if (!socket.destroyed) {
+            socket.write(JSON.stringify({ type: 'connect-response', approved: false, message: 'Unknown request' }));
+            socket.end();
+          }
         }
-      });
+      };
 
+      socket.on('data', dataHandler);
       socket.on('error', () => {});
     });
 
@@ -70,7 +105,9 @@ class ConnectionRequestServer {
   }
 }
 
-function sendConnectRequestOnce(host, fromName, fromIp, port = SIGNAL_PORT) {
+function sendConnectRequestOnce(host, fromName, fromIp, port = SIGNAL_PORT, opts = {}) {
+  const wantsTunnel = !!opts.wantsTunnel;
+
   return new Promise((resolve, reject) => {
     let socket;
     try {
@@ -100,11 +137,13 @@ function sendConnectRequestOnce(host, fromName, fromIp, port = SIGNAL_PORT) {
         type: 'connect-request',
         requestId: String(Date.now()),
         fromName,
-        fromIp
+        fromIp,
+        capability: wantsTunnel ? 'tunnel' : undefined
       }));
     });
 
     socket.on('data', (d) => {
+      if (responded) return;
       buffer = Buffer.concat([buffer, d]);
       let msg = null;
       try {
@@ -113,16 +152,30 @@ function sendConnectRequestOnce(host, fromName, fromIp, port = SIGNAL_PORT) {
       if (!msg) return;
       responded = true;
       if (timer) clearTimeout(timer);
-      if (!socket.destroyed) socket.destroy();
-      if (msg.type === 'connect-response') {
-        resolve({ approved: !!msg.approved, message: msg.message || '' });
-      } else {
+
+      if (msg.type !== 'connect-response') {
+        if (!socket.destroyed) socket.destroy();
         resolve({ approved: false, message: 'Resposta inválida do PC remoto' });
+        return;
       }
+
+      // Túnel aprovado: NÃO destrói o socket, ele vira o transporte de
+      // arquivos (ver tunnel-manager.js / file-client.js).
+      if (wantsTunnel && msg.approved && msg.tunnel) {
+        socket.removeAllListeners('data');
+        socket.removeAllListeners('error');
+        socket.removeAllListeners('close');
+        resolve({ approved: true, message: msg.message || '', socket });
+        return;
+      }
+
+      if (!socket.destroyed) socket.destroy();
+      resolve({ approved: !!msg.approved, message: msg.message || '' });
     });
 
     socket.on('error', (err) => {
-      fail(new Error(`Não foi possível contactar ${host}:${port} (${err.code || err.message})`));
+      const hint = err.code === 'ECONNREFUSED' ? ' — verifique se o OpenPortal está aberto no PC remoto' : '';
+      fail(new Error(`Não foi possível contactar ${host}:${port} (${err.code || err.message})${hint}`));
     });
 
     socket.on('close', () => {
@@ -131,7 +184,7 @@ function sendConnectRequestOnce(host, fromName, fromIp, port = SIGNAL_PORT) {
   });
 }
 
-function sendConnectRequest(host, fromName, fromIp, port = SIGNAL_PORT) {
+function sendConnectRequest(host, fromName, fromIp, port = SIGNAL_PORT, opts = {}) {
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
   return (async () => {
@@ -139,7 +192,7 @@ function sendConnectRequest(host, fromName, fromIp, port = SIGNAL_PORT) {
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
       if (attempt > 1) await sleep(RETRY_DELAY);
       try {
-        const res = await sendConnectRequestOnce(host, fromName, fromIp, port);
+        const res = await sendConnectRequestOnce(host, fromName, fromIp, port, opts);
         return res;
       } catch (err) {
         lastError = err;
