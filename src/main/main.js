@@ -1,7 +1,13 @@
 const { app, BrowserWindow, Menu, ipcMain, globalShortcut, dialog } = require('electron');
 const path = require('path');
 const fs = require('fs');
-const { autoUpdater } = require('electron-updater');
+let _autoUpdater = null;
+function getAutoUpdater() {
+  if (!_autoUpdater) {
+    _autoUpdater = require('electron-updater').autoUpdater;
+  }
+  return _autoUpdater;
+}
 const { startWebSocketProxy } = require('./connection/proxy');
 const { registerIpcHandlers } = require('./core/ipc-handlers');
 const { ConnectionRequestServer } = require('./connection/connection-request');
@@ -139,7 +145,7 @@ function startDailyUpdateCheck() {
     console.log(`[auto-update] Periodic check every ${Math.round(intervalMs / 60000)} min`);
     updateInterval = setInterval(() => {
       console.log('[auto-update] Periodic check: checking for updates...');
-      autoUpdater.checkForUpdates();
+      getAutoUpdater().checkForUpdates();
     }, intervalMs);
   }
 }
@@ -199,7 +205,7 @@ function beginUpdateDownload(info) {
   updateWinJS(`addLog('Baixando v${info.version}...')`);
   updateWinJS(`setStatus('Baixando v${info.version}...')`);
   updateWinJS('setProgress(0)');
-  autoUpdater.downloadUpdate();
+  getAutoUpdater().downloadUpdate();
 }
 
 function promptUpdate(info) {
@@ -345,7 +351,7 @@ app.whenReady().then(() => {
     }
     updateWinJS("addLog('Verificando atualizações...')");
     updateWinJS("setStatus('Verificando...')");
-    autoUpdater.checkForUpdates();
+    getAutoUpdater().checkForUpdates();
     return { checking: true };
   });
 
@@ -374,6 +380,7 @@ app.whenReady().then(() => {
   });
 
   if (!isDev) {
+    const autoUpdater = getAutoUpdater();
     autoUpdater.logger = console;
     autoUpdater.autoDownload = false;
     autoUpdater.allowPrerelease = ALLOW_PRERELEASE;
