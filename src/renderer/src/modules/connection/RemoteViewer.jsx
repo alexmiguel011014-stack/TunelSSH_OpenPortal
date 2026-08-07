@@ -11,7 +11,7 @@ const QUALITY_LEVELS = [
 const MAX_VNC_RETRIES = 5;
 const VNC_RETRY_DELAYS = [3000, 5000, 10000, 15000, 20000];
 
-export default function RemoteViewer({ machine, reconnectFlag }) {
+export default function RemoteViewer({ machine, reconnectFlag, wasRejected }) {
   const iframeRef = useRef(null);
   const containerRef = useRef(null);
   const [iframeKey, setIframeKey] = useState(0);
@@ -49,10 +49,11 @@ export default function RemoteViewer({ machine, reconnectFlag }) {
   }, [addLog]);
 
   // A aprovação remota (dialogo Aceitar/Rejeitar) já é a trava de acesso.
-  // Se configurada, a senha VNC é usada como fallback caso a conexão seja recusada.
+  // Se rejeitada, VNC pede senha. Se aprovada, conecta direto.
   const proxyUrl = `ws://127.0.0.1:18900`;
   const passwordParam = machine.password ? `&password=${encodeURIComponent(machine.password)}` : '';
-  const viewerUrl = `./noVNC/vnc.html?host=${machine.host}&port=${machine.port}&proxy=${encodeURIComponent(proxyUrl)}${passwordParam}`;
+  const rejectedParam = wasRejected ? '&rejected=true' : '';
+  const viewerUrl = `./noVNC/vnc.html?host=${machine.host}&port=${machine.port}&proxy=${encodeURIComponent(proxyUrl)}${passwordParam}${rejectedParam}`;
 
   const sendResize = useCallback(() => {
     try {

@@ -41,6 +41,7 @@ export default function App() {
   const [connHistory, setConnHistory] = useState([]);
   const [theme, setTheme] = useState(() => localStorage.getItem('openportal-theme') || 'dark');
   const [ftSessionId, setFtSessionId] = useState(null);
+  const [wasRejected, setWasRejected] = useState(false);
   const logIdRef = useRef(0);
 
   const toggleTheme = useCallback(() => {
@@ -154,13 +155,23 @@ export default function App() {
       console.log(`[app] Connecting to ${machine.name} (${machine.host}:${machine.port}) with fromIp=${fromIp}`);
       const res = await window.electronAPI.ftConnect(machine.host, { fromIp });
       if (!res || !res.success) {
+        const rejected = res?.rejected === true;
         const message = (res && res.message) || 'Conexão recusada ou sem resposta';
-        console.warn(`[app] Connection rejected: ${message}`);
-        addLog(`Conexão recusada: ${message}`, 'error');
-        recordConn({ name: machine.name, host: machine.host, state: 'error', message });
-        window.electronAPI?.notify?.({ title: 'Conexão recusada', body: `${machine.name} não aceitou a conexão. O app precisa estar aberto no PC remoto.` });
+        if (rejected) {
+          console.warn(`[app] Connection explicitly rejected by user: ${message}`);
+          addLog(`Conexão recusada pelo PC remoto: ${message}`, 'error');
+          setWasRejected(true);
+          recordConn({ name: machine.name, host: machine.host, state: 'error', message: 'Conexão recusada pelo usuário' });
+        } else {
+          console.warn(`[app] Connection failed: ${message}`);
+          addLog(`Falha na conexão: ${message}`, 'error');
+          setWasRejected(false);
+          recordConn({ name: machine.name, host: machine.host, state: 'error', message });
+        }
+        window.electronAPI?.notify?.({ title: 'Conexão falhou', body: `${machine.name}: ${message}` });
         return;
       }
+      setWasRejected(false);
       setFtSessionId(res.sessionId);
       const identity = machines.some((m) => m.id === machine.id) ? machine.id : machine;
       setActiveMachineId(identity);
@@ -170,6 +181,7 @@ export default function App() {
     } catch (err) {
       console.error(`[app] Connection error:`, err);
       addLog(`Erro ao conectar: ${err.message}`, 'error');
+      setWasRejected(false);
       recordConn({ name: machine.name, host: machine.host, state: 'error', message: err.message });
     }
   }, [activeMachine, disconnectMachine, machines, addLog, recordConn]);
@@ -248,6 +260,7 @@ export default function App() {
     theme,
     setTheme,
     toggleTheme,
+    wasRejected,
   };
 
   return (
@@ -260,7 +273,7 @@ export default function App() {
           ) : showFiles ? (
             <FileExplorer />
           ) : activeMachine ? (
-            <RemoteViewer machine={activeMachine} reconnectFlag={reconnectFlag} />
+            <RemoteViewer machine={activeMachine} reconnectFlag={reconnectFlag} wasRejected={wasRejected} />
           ) : (
             <Dashboard />
           )}

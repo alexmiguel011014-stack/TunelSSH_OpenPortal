@@ -66,6 +66,7 @@
     const host = params.get('host');
     const port = params.get('port') || '5900';
     const password = params.get('password') || '';
+    const wasRejected = params.get('rejected') === 'true';
     const proxyWs = params.get('proxy') || 'ws://127.0.0.1:18900';
 
     const connectingOverlay = document.getElementById('connecting-overlay');
@@ -109,7 +110,7 @@
       }
 
       const wsUrl = `${proxyWs}?host=${host}&port=${port}`;
-      console.log('[vnc] Connect:', { host, port, proxyWs: proxyWs.split('?')[0], password: !!password });
+      console.log('[vnc] Connect:', { host, port, proxyWs: proxyWs.split('?')[0], password: !!password, wasRejected });
       connectingOverlay.classList.remove('hidden');
       connectingText.textContent = `Connecting to ${host}:${port}...`;
 
@@ -148,15 +149,25 @@
         });
 
         rfb.addEventListener('credentialsrequired', () => {
-          console.log('[vnc] Server requires password', { hasPassword: !!password });
-          if (password) {
+          console.log('[vnc] Server requires password', { hasPassword: !!password, wasRejected });
+
+          if (wasRejected && !password) {
+            // Conexão foi rejeitada explicitamente e não tem senha configurada
+            console.log('[vnc] Connection was rejected; no password configured');
+            if (rfb) rfb.disconnect();
+            parent.postMessage({ type: 'vnc-status', state: 'error', message: 'Connection rejected' }, '*');
+            errorMsg.textContent = 'Conexão recusada pelo PC remoto. Configure uma senha no app para tentar de novo.';
+            errorOverlay.classList.add('visible');
+          } else if (password) {
+            // Temos senha (aprovado ou rejeitado, não importa)
             console.log('[vnc] Sending configured password...');
             rfb.sendCredentials({ password });
           } else {
-            console.log('[vnc] No password configured; app does not send passwordless auth');
+            // Sem rejeição explícita e sem senha = erro de configuração
+            console.log('[vnc] Server requires password but none configured');
             if (rfb) rfb.disconnect();
             parent.postMessage({ type: 'vnc-status', state: 'error', message: 'Password required' }, '*');
-            errorMsg.textContent = 'VNC server requires a password. Configure the TightVNC without password or disable authentication for this network.';
+            errorMsg.textContent = 'VNC server requires a password. Configure a senha no app (Configurações → Senha VNC).';
             errorOverlay.classList.add('visible');
           }
         });

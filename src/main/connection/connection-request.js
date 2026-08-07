@@ -60,7 +60,10 @@ class ConnectionRequestServer {
           const respond = (payload) => {
             if (socket.destroyed) return;
             const approved = !!payload.approved;
-            const finalPayload = wantsTunnel && approved ? { ...payload, tunnel: true } : payload;
+            // Se rejeitado explicitamente, marca para o cliente saber
+            const finalPayload = wantsTunnel && approved
+              ? { ...payload, tunnel: true }
+              : { ...payload, rejected: !approved };
             socket.write(JSON.stringify(finalPayload));
             if (wantsTunnel && approved) {
               upgradeToTunnel();
