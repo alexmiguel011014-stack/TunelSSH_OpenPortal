@@ -8,6 +8,7 @@ export default function Sidebar() {
     machines,
     activeMachineId,
     connectMachine,
+    disconnectMachine,
     addMachine,
     removeMachine,
     showConfig,
@@ -60,14 +61,24 @@ export default function Sidebar() {
     }
   };
 
+  const goHome = () => {
+    if (activeMachineId) disconnectMachine();
+    setShowConfig(false);
+    setShowFiles(false);
+  };
+
   return (
     <aside style={{ width: '256px', minWidth: '256px', background: '#1e293b', borderRight: '1px solid #334155', display: 'flex', flexDirection: 'column' }}>
       {/* Header with collapse */}
       <div style={{ padding: '16px', borderBottom: '1px solid #334155', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-        <div>
+        <button
+          onClick={goHome}
+          title="Voltar para a tela inicial"
+          style={{ background: 'none', border: 'none', padding: 0, textAlign: 'left', cursor: 'pointer' }}
+        >
           <h1 style={{ fontSize: '18px', fontWeight: 600, color: '#f1f5f9' }}>OpenPortal</h1>
           <p style={{ fontSize: '12px', color: '#94a3b8', marginTop: '4px' }}>Remote Desktop Gateway</p>
-        </div>
+        </button>
         <button
           onClick={toggleSidebar}
           style={{ background: 'none', border: 'none', color: '#64748b', cursor: 'pointer', padding: '4px', fontSize: '16px' }}
@@ -149,6 +160,26 @@ export default function Sidebar() {
           </button>
         )}
       </nav>
+
+      {/* Início button */}
+      <div style={{ padding: '0 12px', borderTop: '1px solid #334155' }}>
+        <button
+          onClick={goHome}
+          style={{
+            width: '100%',
+            padding: '8px 12px',
+            borderRadius: '8px',
+            fontSize: '14px',
+            border: 'none',
+            cursor: 'pointer',
+            background: (!activeMachineId && !showConfig && !showFiles) ? '#475569' : 'transparent',
+            color: (!activeMachineId && !showConfig && !showFiles) ? '#ffffff' : '#94a3b8',
+            marginTop: '8px',
+          }}
+        >
+          🏠 Início
+        </button>
+      </div>
 
       {/* Configurações button */}
       <div style={{ padding: '0 12px', borderTop: '1px solid #334155' }}>

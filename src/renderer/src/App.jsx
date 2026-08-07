@@ -16,9 +16,9 @@ function genMask() {
 }
 
 const DEFAULT_MACHINES = [
-  { id: 'pc-1', name: 'PC Remoto 1', host: '', port: 5900, mask: genMask(), vncPassword: '' },
-  { id: 'pc-2', name: 'PC Remoto 2', host: '', port: 5900, mask: genMask(), vncPassword: '' },
-  { id: 'pc-3', name: 'PC 3', host: '', port: 5900, mask: genMask(), vncPassword: '' },
+  { id: 'pc-1', name: 'PC Remoto 1', host: '', port: 5900, mask: genMask() },
+  { id: 'pc-2', name: 'PC Remoto 2', host: '', port: 5900, mask: genMask() },
+  { id: 'pc-3', name: 'PC 3', host: '', port: 5900, mask: genMask() },
 ];
 
 const MAX_MACHINES = 20;
@@ -80,9 +80,9 @@ export default function App() {
       if (config?.machines) {
         let changed = false;
         const withMasks = config.machines.map((m) => {
-          if (m.mask && m.vncPassword !== undefined) return m;
+          if (m.mask) return m;
           changed = true;
-          return { mask: genMask(), vncPassword: '', ...m };
+          return { ...m, mask: genMask() };
         });
         setMachines(withMasks);
         if (changed) window.electronAPI?.saveConfig?.({ machines: withMasks });
@@ -181,7 +181,7 @@ export default function App() {
       addLog(`Max ${MAX_MACHINES} machines reached`, 'warn');
       return;
     }
-    const newMachine = { id: genId(), name: `PC ${machines.length + 1}`, host: '', port: 5900, mask: genMask(), vncPassword: '' };
+    const newMachine = { id: genId(), name: `PC ${machines.length + 1}`, host: '', port: 5900, mask: genMask() };
     const updated = [...machines, newMachine];
     setMachines(updated);
     window.electronAPI?.saveConfig({ machines: updated });

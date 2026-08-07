@@ -114,6 +114,15 @@ function rename(oldPath, newPath) {
   return fs.promises.rename(oldPath, newPath);
 }
 
+// Copia um arquivo/pasta externo (ex.: arrastado do Explorer do Windows)
+// para dentro de destDir, mantendo o nome original. Usado pelo drag&drop.
+async function copyInto(srcPath, destDir) {
+  const baseName = path.basename(srcPath);
+  const dest = path.join(destDir, baseName);
+  await fs.promises.cp(srcPath, dest, { recursive: true });
+  return dest;
+}
+
 // Percorre uma árvore local e devolve uma lista plana de segmentos relativos
 // (nunca string com separador), para reconstrução multiplataforma no destino.
 async function walkDir(rootPath) {
@@ -141,4 +150,4 @@ async function walkDir(rootPath) {
   return out;
 }
 
-module.exports = { listRoots, quickAccess, listDir, parentOf, walkDir, makeDir, remove, rename };
+module.exports = { listRoots, quickAccess, listDir, parentOf, walkDir, makeDir, remove, rename, copyInto };

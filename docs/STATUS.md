@@ -114,9 +114,11 @@ Proxy VNC                (VNC remoto)
 
 ## Senhas VNC
 
-Não ficam mais hardcoded em código nem em documentação — cada PC cadastrado
-tem seu campo "Senha VNC" na tela de Configurações (⚙️ na Sidebar), salvo
-localmente em `config.json` (fora do repositório).
+O app não guarda nem envia senha de VNC — o diálogo de aprovação
+(Aceitar/Rejeitar) no PC remoto é a única trava de acesso. Se o TightVNC do
+lado remoto tiver senha própria configurada, a conexão falha na etapa do
+VNC (fora do controle do app); nesse caso, remova a senha do TightVNC ou
+configure-o para aceitar conexões sem senha na rede Tailscale/privada.
 
 ---
 

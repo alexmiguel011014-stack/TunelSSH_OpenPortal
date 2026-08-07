@@ -1,6 +1,9 @@
-const { contextBridge, ipcRenderer } = require('electron');
+const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
 contextBridge.exposeInMainWorld('electronAPI', {
+  // Electron 32+ com contextIsolation não expõe mais File.path direto;
+  // precisa passar o File pelo webUtils no preload para pegar o caminho real.
+  getPathForFile: (file) => webUtils.getPathForFile(file),
   getConfig: () => ipcRenderer.invoke('config:get'),
   saveConfig: (config) => ipcRenderer.invoke('config:save', config),
 
@@ -32,6 +35,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   fsMkdir: (dirPath) => ipcRenderer.invoke('fs:mkdir', dirPath),
   fsDelete: (itemPath) => ipcRenderer.invoke('fs:delete', itemPath),
   fsRename: (oldPath, newPath) => ipcRenderer.invoke('fs:rename', oldPath, newPath),
+  fsCopyExternal: (srcPaths, destDir) => ipcRenderer.invoke('fs:copyExternal', srcPaths, destDir),
 
   // Transferência de arquivos — painel remoto (túnel multiplexado)
   ftConnect: (host, opts) => ipcRenderer.invoke('ft:connect', host, opts),

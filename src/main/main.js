@@ -70,6 +70,8 @@ let updateProgressWindow = null;
 let isUserTriggeredUpdate = false;
 let pendingUpdateInfo = null;
 let updateConfirmed = false;
+let dismissedVersion = null; // versão que o usuário já recusou — não perguntar de novo sozinho
+let promptOpen = false; // evita dois dialogs de update simultâneos (check manual + periódico)
 
 const isDev = process.env.NODE_ENV === 'development';
 const PROXY_PORT = 18900;
@@ -198,6 +200,12 @@ function beginUpdateDownload(info) {
 }
 
 function promptUpdate(info) {
+  // Sem isso, o check automático (a cada 15 min) reabre o mesmo popup
+  // repetidamente — tanto para uma versão já recusada quanto em cima de
+  // um prompt/download já em andamento (ex.: check manual concorrente).
+  if (promptOpen || updateConfirmed) return;
+  if (!isUserTriggeredUpdate && info.version === dismissedVersion) return;
+
   const options = {
     type: 'info',
     title: 'Atualização disponível',
@@ -212,14 +220,18 @@ function promptUpdate(info) {
     beginUpdateDownload(info);
     return;
   }
+  promptOpen = true;
   dialog.showMessageBox(target, options).then(({ response }) => {
+    promptOpen = false;
     if (response === 0) {
       beginUpdateDownload(info);
     } else {
+      dismissedVersion = info.version;
       closeUpdateProgressWindow();
       isUserTriggeredUpdate = false;
     }
   }).catch(() => {
+    promptOpen = false;
     closeUpdateProgressWindow();
     isUserTriggeredUpdate = false;
   });

@@ -104,7 +104,9 @@ function makeRemoteAdapter(sessionId) {
     side: 'remote',
     join: joinVirtual,
     async listRoots() {
-      return { roots: [{ name: 'Raiz do agente', path: '/' }], quickAccess: [{ name: 'Início', path: '/' }] };
+      // Só existe uma raiz no agente ('/'), então basta o atalho de Início —
+      // repetir em "Este computador" seria redundante.
+      return { roots: [], quickAccess: [{ name: 'Início', path: '/' }] };
     },
     async listDir(virtualPath) {
       const r = await window.electronAPI.ftList(sessionId, virtualPath);
@@ -418,8 +420,9 @@ function InlineNameInput({ initialValue, onCommit, onCancel }) {
   );
 }
 
-function EntryList({ pane, visibleEntries, onOpen, onSelect, onRenameCommit }) {
+function EntryList({ pane, visibleEntries, onOpen, onSelect, onRenameCommit, dnd }) {
   const listRef = useRef(null);
+  const [dragOverName, setDragOverName] = useState(null);
 
   const headerBtn = (col, label) => (
     <button
@@ -434,6 +437,26 @@ function EntryList({ pane, visibleEntries, onOpen, onSelect, onRenameCommit }) {
     </button>
   );
 
+  const rowDragProps = (entry) => ({
+    draggable: pane.renamingName !== entry.name,
+    onDragStart: (e) => dnd.onEntryDragStart(e, entry),
+    onDragOver: (e) => {
+      if (!entry.dir) return;
+      e.preventDefault();
+      e.stopPropagation();
+      e.dataTransfer.dropEffect = dnd.effectFor(e);
+      setDragOverName(entry.name);
+    },
+    onDragLeave: () => setDragOverName((prev) => (prev === entry.name ? null : prev)),
+    onDrop: (e) => {
+      if (!entry.dir) return;
+      e.preventDefault();
+      e.stopPropagation();
+      setDragOverName(null);
+      dnd.onDropOnFolder(e, entry);
+    },
+  });
+
   if (pane.view === 'icons') {
     return (
       <div
@@ -447,8 +470,9 @@ function EntryList({ pane, visibleEntries, onOpen, onSelect, onRenameCommit }) {
             key={entry.name}
             onClick={(e) => { e.stopPropagation(); onSelect(entry, index, e); }}
             onDoubleClick={(e) => { e.stopPropagation(); onOpen(entry); }}
-            className={`flex flex-col items-center gap-1 p-2 rounded cursor-default select-none ${pane.selected.has(entry.name) ? 'bg-[#cce8ff]' : 'hover:bg-[#f0f0f0]'}`}
+            className={`flex flex-col items-center gap-1 p-2 rounded cursor-default select-none ${pane.selected.has(entry.name) ? 'bg-[#cce8ff]' : dragOverName === entry.name ? 'bg-[#d5ecff] ring-1 ring-[#0067c0]' : 'hover:bg-[#f0f0f0]'}`}
             title={entry.name}
+            {...rowDragProps(entry)}
           >
             <span className="text-[36px] leading-none">{iconFor(entry)}</span>
             {pane.renamingName === entry.name ? (
@@ -478,7 +502,8 @@ function EntryList({ pane, visibleEntries, onOpen, onSelect, onRenameCommit }) {
           key={entry.name}
           onClick={(e) => { e.stopPropagation(); onSelect(entry, index, e); }}
           onDoubleClick={(e) => { e.stopPropagation(); onOpen(entry); }}
-          className={`file-row flex items-center gap-2 px-3 h-8 text-[13px] cursor-default select-none ${pane.selected.has(entry.name) ? 'bg-[#cce8ff]' : ''}`}
+          className={`file-row flex items-center gap-2 px-3 h-8 text-[13px] cursor-default select-none ${pane.selected.has(entry.name) ? 'bg-[#cce8ff]' : dragOverName === entry.name ? 'bg-[#d5ecff] ring-1 ring-inset ring-[#0067c0]' : ''}`}
+          {...rowDragProps(entry)}
         >
           <span className="text-[16px] w-5 shrink-0 text-center">{iconFor(entry)}</span>
           {pane.renamingName === entry.name ? (
@@ -503,9 +528,10 @@ function EntryList({ pane, visibleEntries, onOpen, onSelect, onRenameCommit }) {
   );
 }
 
-function PaneView({ label, pane, connectionBadge, onDisconnect }) {
+function PaneView({ label, pane, connectionBadge, onDisconnect, leftmost, dnd }) {
   const lastIndexRef = useRef(-1);
   const [pendingDelete, setPendingDelete] = useState(false);
+  const [paneDragOver, setPaneDragOver] = useState(false);
 
   const visibleEntries = useMemo(
     () => sortAndFilter(pane.entries, { query: pane.query, sortBy: pane.sortBy, sortDir: pane.sortDir }),
@@ -587,8 +613,12 @@ function PaneView({ label, pane, connectionBadge, onDisconnect }) {
 
   return (
     <div className="flex flex-col h-full min-w-0 bg-white">
-      {/* Cabeçalho da janela */}
-      <div className="flex items-center justify-between h-8 px-3 bg-[#f3f3f3] border-b border-[#e5e5e5] text-[12px] font-medium text-[#1b1b1b]">
+      {/* Cabeçalho da janela — paddingLeft extra no painel da esquerda pra não
+          ficar embaixo do hambúrguer fixo (barra lateral recolhida). */}
+      <div
+        className="flex items-center justify-between h-8 px-3 bg-[#f3f3f3] border-b border-[#e5e5e5] text-[12px] font-medium text-[#1b1b1b]"
+        style={leftmost ? { paddingLeft: '44px' } : undefined}
+      >
         <span className="truncate">{label}</span>
         {connectionBadge && (
           <div className="flex items-center gap-2 shrink-0">
@@ -633,7 +663,25 @@ function PaneView({ label, pane, connectionBadge, onDisconnect }) {
 
       <div className="flex flex-1 min-h-0">
         <NavSidebar pane={pane} onNavigate={pane.load} />
-        <div className="flex-1 min-w-0 flex flex-col relative">
+        <div
+          className={`flex-1 min-w-0 flex flex-col relative ${paneDragOver ? 'after:absolute after:inset-0 after:pointer-events-none after:ring-2 after:ring-inset after:ring-[#0067c0] after:bg-[#0067c0]/5' : ''}`}
+          onDragOver={(e) => {
+            if (!dnd) return;
+            e.preventDefault();
+            e.dataTransfer.dropEffect = dnd.effectFor(e);
+            setPaneDragOver(true);
+          }}
+          onDragLeave={(e) => {
+            if (e.currentTarget.contains(e.relatedTarget)) return;
+            setPaneDragOver(false);
+          }}
+          onDrop={(e) => {
+            if (!dnd) return;
+            e.preventDefault();
+            setPaneDragOver(false);
+            dnd.onDropOnCurrentDir(e);
+          }}
+        >
           {pane.loading && (
             <div className="absolute inset-0 flex items-center justify-center bg-white/60 text-[13px] text-[#605e5c] z-20">Carregando…</div>
           )}
@@ -645,7 +693,7 @@ function PaneView({ label, pane, connectionBadge, onDisconnect }) {
               </div>
             </div>
           ) : (
-            <EntryList pane={pane} visibleEntries={visibleEntries} onOpen={onOpen} onSelect={onSelect} onRenameCommit={handleRenameCommit} />
+            <EntryList pane={pane} visibleEntries={visibleEntries} onOpen={onOpen} onSelect={onSelect} onRenameCommit={handleRenameCommit} dnd={dnd} />
           )}
         </div>
       </div>
@@ -759,21 +807,24 @@ export default function FileExplorer() {
 
   const handleDisconnect = () => machineCtx?.disconnectMachine?.();
 
-  const runBatch = async (kind) => {
+  // kind: 'upload' (local→remoto) ou 'download' (remoto→local). Aceita
+  // caminhos/destino explícitos (usado pelo drag&drop soltando numa
+  // subpasta) ou cai na seleção atual + pasta aberta (botões da rail).
+  const runBatch = async (kind, override) => {
     if (!sessionId || transferring) return;
     const batchId = ++batchIdRef.current;
     setTransferring(true);
     setBatch({ batchId, phase: kind === 'upload' ? 'upload' : 'download', batchSent: 0, batchTotal: 0, elapsedMs: 0, speedBps: 0 });
     try {
       if (kind === 'upload') {
-        const localPaths = [...local.selected].map((name) => local.entries.find((e) => e.name === name)?.path).filter(Boolean);
+        const localPaths = override?.paths || [...local.selected].map((name) => local.entries.find((e) => e.name === name)?.path).filter(Boolean);
         if (localPaths.length === 0) return;
-        await window.electronAPI.ftUploadBatch(sessionId, { localPaths, destDir: remote.path, batchId });
+        await window.electronAPI.ftUploadBatch(sessionId, { localPaths, destDir: override?.destDir || remote.path, batchId });
         await remote.refresh();
       } else {
-        const remotePaths = [...remote.selected].map((name) => remote.entries.find((e) => e.name === name)?.path).filter(Boolean);
+        const remotePaths = override?.paths || [...remote.selected].map((name) => remote.entries.find((e) => e.name === name)?.path).filter(Boolean);
         if (remotePaths.length === 0) return;
-        await window.electronAPI.ftDownloadBatch(sessionId, { remotePaths, destDir: local.path, batchId });
+        await window.electronAPI.ftDownloadBatch(sessionId, { remotePaths, destDir: override?.destDir || local.path, batchId });
         await local.refresh();
       }
     } finally {
@@ -781,10 +832,61 @@ export default function FileExplorer() {
     }
   };
 
+  // ---- Drag & drop ---------------------------------------------------
+  // dragPayloadRef guarda a origem de um arraste iniciado DENTRO do app
+  // (linha/ícone de um dos painéis). dataTransfer não é usado para o
+  // payload em si (evita serializar/desserializar), só como sinalizador
+  // de que existe um drag em andamento.
+  const dragPayloadRef = useRef(null);
+
+  const makeDnd = (side) => ({
+    effectFor: (e) => (e.dataTransfer.types.includes('Files') || dragPayloadRef.current ? 'copy' : 'none'),
+
+    onEntryDragStart: (e, entry) => {
+      const pane = side === 'local' ? local : remote;
+      const names = pane.selected.has(entry.name) ? [...pane.selected] : [entry.name];
+      const paths = names.map((n) => pane.entries.find((x) => x.name === n)?.path).filter(Boolean);
+      dragPayloadRef.current = { side, paths };
+      e.dataTransfer.effectAllowed = 'copy';
+      try { e.dataTransfer.setData('text/plain', names.join(', ')); } catch {}
+    },
+
+    onDropOnFolder: (e, folderEntry) => handleDrop(e, side, folderEntry.path),
+    onDropOnCurrentDir: (e) => handleDrop(e, side, side === 'local' ? local.path : remote.path),
+  });
+
+  const handleDrop = async (e, targetSide, destDir) => {
+    const files = e.dataTransfer.files;
+    if (files && files.length > 0) {
+      // Arquivos vindos de fora do app (Explorer do Windows).
+      const srcPaths = [...files].map((f) => window.electronAPI.getPathForFile(f)).filter(Boolean);
+      if (srcPaths.length === 0) return;
+      if (targetSide === 'local') {
+        const res = await window.electronAPI.fsCopyExternal(srcPaths, destDir);
+        if (!res.success) window.alert(`Falha ao copiar ${res.failed} item(ns):\n${res.errors.join('\n')}`);
+        await local.refresh();
+      } else {
+        await runBatch('upload', { paths: srcPaths, destDir });
+      }
+      return;
+    }
+
+    // Arraste interno entre os painéis do próprio app.
+    const payload = dragPayloadRef.current;
+    dragPayloadRef.current = null;
+    if (!payload || payload.paths.length === 0) return;
+    if (payload.side === targetSide) return; // soltar no mesmo painel: sem ação (sem mover local ainda)
+    if (payload.side === 'local' && targetSide === 'remote') {
+      await runBatch('upload', { paths: payload.paths, destDir });
+    } else if (payload.side === 'remote' && targetSide === 'local') {
+      await runBatch('download', { paths: payload.paths, destDir });
+    }
+  };
+
   return (
     <div className="flex flex-col h-full bg-[#f3f3f3] text-[#1b1b1b]" style={{ fontFamily: '"Segoe UI", system-ui, sans-serif' }}>
       <div className="flex-1 flex min-h-0">
-        <PaneView label="Este Computador" pane={local} />
+        <PaneView label="Este Computador" pane={local} leftmost dnd={makeDnd('local')} />
         <TransferRail
           onSend={() => runBatch('upload')}
           onReceive={() => runBatch('download')}
@@ -794,7 +896,7 @@ export default function FileExplorer() {
           receiveCount={remote.selected.size}
         />
         {remoteAdapter ? (
-          <PaneView label="PC Remoto" pane={remote} connectionBadge onDisconnect={handleDisconnect} />
+          <PaneView label="PC Remoto" pane={remote} connectionBadge onDisconnect={handleDisconnect} dnd={makeDnd('remote')} />
         ) : (
           <div className="flex-1 min-w-0 border-l border-[#e5e5e5]">
             <RemotePlaceholder activeMachine={activeMachine} />

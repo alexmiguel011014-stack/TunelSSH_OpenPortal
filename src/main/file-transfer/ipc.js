@@ -195,6 +195,22 @@ function registerFileTransferIpc(mainWindow) {
     }
   });
 
+  // Cópia de arquivo/pasta externo (drag&drop vindo do Explorer do Windows)
+  // para dentro do painel local — não passa pelo túnel.
+  ipcMain.handle('fs:copyExternal', async (_, srcPaths, destDir) => {
+    let ok = 0;
+    const errors = [];
+    for (const src of srcPaths) {
+      try {
+        await localFs.copyInto(src, destDir);
+        ok++;
+      } catch (err) {
+        errors.push(`${path.basename(src)}: ${err.message}`);
+      }
+    }
+    return { success: errors.length === 0, ok, failed: errors.length, errors };
+  });
+
   // --- Túnel (painel remoto) ---
   ipcMain.handle('ft:connect', async (_, host, opts) => {
     try {
