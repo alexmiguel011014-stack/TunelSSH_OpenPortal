@@ -41,6 +41,7 @@ O React agora funciona. O noVNC foi extraído para iframe isolado (abordagem do 
 - [x] **Overflow VNC resolvido — tela preenche corretamente sem corte**
 - [x] **Otimizacoes de conexao** — setNoDelay, keepAlive, qualityLevel:4, compressionLevel:3, keyboardDelay:20
 - [x] **F12 funciona via View > Toggle Developer Tools**
+- [x] **Suporte a Senha VNC opcional** — configurável no app, fallback pós-rejeição
 
 ## O Que Funciona (Packaging / Distribuicao)
 
@@ -114,14 +115,18 @@ Proxy VNC                (VNC remoto)
 
 ## Autenticação
 
-O app não guarda nem envia senha de VNC — o diálogo de aprovação
-(Aceitar/Rejeitar) no PC remoto é a única trava de acesso.
+O modelo de autenticação é **aprovação + senha opcional**:
 
-**Se receber "VNC server requires a password":** O TightVNC está configurado
-com autenticação. Remova a senha: abra TightVNC Server → Admin Properties →
-aba Security → deixe "Password" vazio → OK.
+1. **Aprovação** (obrigatória): Diálogo "Aceitar/Rejeitar" no PC remoto
+2. **Senha VNC** (opcional): Fallback caso a conexão seja rejeitada
 
-Veja [VNC_TROUBLESHOOTING.md](VNC_TROUBLESHOOTING.md) para detalhes.
+Veja [VNC_PASSWORD_AUTH.md](VNC_PASSWORD_AUTH.md) para detalhes completos.
+
+**Se receber "VNC server requires a password":**
+- Opção 1: Remova a senha do TightVNC (recomendado)
+- Opção 2: Configure a mesma senha no app (Configurações → Senha VNC)
+
+Veja [VNC_TROUBLESHOOTING.md](VNC_TROUBLESHOOTING.md) para troubleshooting.
 
 ---
 
