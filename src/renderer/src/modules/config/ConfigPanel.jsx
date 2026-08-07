@@ -1,5 +1,6 @@
 import { useContext, useState } from 'react';
 import { MachineContext } from '../../App';
+import MockPanel from '../debug/MockPanel';
 
 const MAX_PORT = 65535;
 
@@ -112,6 +113,10 @@ export default function ConfigPanel() {
   return (
     <div className="flex-1 overflow-y-auto p-8">
       <div className="max-w-2xl mx-auto">
+        <div className="mb-6">
+          <MockPanel />
+        </div>
+
         <div className="flex items-center justify-between mb-8">
           <div>
             <h2 className="text-2xl font-semibold text-slate-100">Configurações</h2>

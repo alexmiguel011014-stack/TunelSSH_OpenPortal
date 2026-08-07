@@ -6,6 +6,7 @@ const { startWebSocketProxy } = require('./connection/proxy');
 const { registerIpcHandlers } = require('./core/ipc-handlers');
 const { ConnectionRequestServer } = require('./connection/connection-request');
 const { registerFileTransferIpc } = require('./file-transfer/ipc');
+const { MockRemoteServer } = require('./mock-server');
 
 // Configuração de logs em arquivo (diretório oficial de dados do usuário,
 // pois __dirname falha quando empacotado dentro do arquivo .asar)
@@ -66,6 +67,7 @@ process.on('unhandledRejection', (reason, promise) => {
 let mainWindow = null;
 let wss = null;
 let requestServer = null;
+let mockServer = null; // Para testes locais
 let updateProgressWindow = null;
 let isUserTriggeredUpdate = false;
 let pendingUpdateInfo = null;
@@ -75,6 +77,7 @@ let promptOpen = false; // evita dois dialogs de update simultâneos (check manu
 
 const isDev = process.env.NODE_ENV === 'development';
 const PROXY_PORT = 18900;
+const USE_MOCK = process.env.OPENPORTAL_MOCK === 'true'; // Ativar com: OPENPORTAL_MOCK=true npm run dev
 const UPDATE_CHECK_INTERVAL_MS = parseInt(process.env.OPENPORTAL_UPDATE_INTERVAL_MS || (isDev ? (5 * 60 * 1000) : (15 * 60 * 1000)), 10);
 const ALLOW_PRERELEASE = process.env.OPENPORTAL_ALLOW_PRERELEASE !== 'false';
 
@@ -298,6 +301,7 @@ function buildAppMenu() {
 app.whenReady().then(() => {
   console.log('[main] App ready, starting...');
   console.log('[main] Proxy port:', PROXY_PORT);
+  if (USE_MOCK) console.log('[main] MOCK SERVER ENABLED (porta 18903)');
 
   buildAppMenu();
   wss = startWebSocketProxy(PROXY_PORT);
@@ -305,9 +309,31 @@ app.whenReady().then(() => {
   requestServer = new ConnectionRequestServer((req, respond) => handleConnectionRequest(req, respond));
   requestServer.start();
 
+  // Iniciar mock server se habilitado (teste local)
+  if (USE_MOCK) {
+    mockServer = new MockRemoteServer(18903);
+    mockServer.start();
+  }
+
   createWindow();
   registerIpcHandlers(mainWindow);
   registerFileTransferIpc(mainWindow);
+
+  // Mock server controls (para testes locais)
+  ipcMain.handle('mock:setMode', (_, mode) => {
+    if (!mockServer) {
+      return { success: false, message: 'Mock server não está ativo. Rode com: OPENPORTAL_MOCK=true npm run dev' };
+    }
+    mockServer.setMode(mode);
+    return { success: true, message: `Mock server agora em modo: ${mode}` };
+  });
+
+  ipcMain.handle('mock:getStatus', () => {
+    if (!mockServer) {
+      return { active: false };
+    }
+    return { active: true, mode: mockServer.mode };
+  });
 
   ipcMain.handle('app:checkUpdate', () => {
     if (isDev) {

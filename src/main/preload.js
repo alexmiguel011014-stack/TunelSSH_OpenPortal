@@ -28,6 +28,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   testConnection: (host, port) => ipcRenderer.invoke('net:test', { host, port }),
 
+  // Mock server (testes locais)
+  mockSetMode: (mode) => ipcRenderer.invoke('mock:setMode', mode),
+  mockGetStatus: () => ipcRenderer.invoke('mock:getStatus'),
+
   // Transferência de arquivos — painel local (fs direto nesta máquina)
   fsListRoots: () => ipcRenderer.invoke('fs:listRoots'),
   fsListDir: (dirPath) => ipcRenderer.invoke('fs:listDir', dirPath),
