@@ -1,0 +1,51 @@
+╔════════════════════════════════════════════════════════════════╗
+║           TESTE RÁPIDO EM 30 SEGUNDOS                          ║
+║      Testar aprovação/rejeição SEM subir para GitHub           ║
+╚════════════════════════════════════════════════════════════════╝
+
+1. Abra um terminal:
+   cd d:\ProjetosVS\TunelSSH
+
+2. Rode (com a flag OPENPORTAL_MOCK):
+   OPENPORTAL_MOCK=true npm run dev
+
+3. Espere a janela Electron abrir (~15 segundos)
+
+4. Vá para Configurações (⚙️)
+
+5. Procure o painel roxo "Mock Server Ativo"
+
+6. Clique um dos botões:
+   ✓ Sempre Aprovar    (verde)
+   ✗ Sempre Rejeitar   (vermelho)
+   ⇄ Alternar          (amarelo)
+
+7. Volte ao Dashboard (← ou clique um PC)
+
+8. Clique "Conectar" em um PC configurado para 127.0.0.1
+
+9. Você verá o resultado imediato:
+   - "Conexão aprovada" (se clicked Aprovar)
+   - "Conexão recusada" (se clicked Rejeitar)
+
+10. Verifique o console (F12 → Console) para logs detalhados
+
+═════════════════════════════════════════════════════════════════
+
+📚 MAIS INFORMAÇÕES:
+
+- docs/QUICK_TEST.md          ← Tutorial detalhado (30 seg)
+- docs/TESTE_LOCAL.md         ← 5 estratégias de teste (todas)
+- docs/RESUMO_TESTES.md       ← Comparação e matriz de decisão
+- docs/APROVACAO_VS_REJEICAO.md ← Como funciona a lógica
+
+═════════════════════════════════════════════════════════════════
+
+🎯 CICLOS DE TESTE:
+
+  ANTES (com GitHub):    25-35 minutos por ciclo
+  DEPOIS (com Mock):      < 1 minuto por ciclo
+
+  Ganho: 24-34 minutos por teste! 🚀
+
+═════════════════════════════════════════════════════════════════
