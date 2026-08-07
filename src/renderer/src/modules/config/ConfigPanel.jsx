@@ -30,12 +30,19 @@ export default function ConfigPanel() {
     try {
       const res = await window.electronAPI.testConnection(host, machine.port || 5900);
       setTestResults((prev) => ({ ...prev, [index]: res }));
-      if (addLog) addLog(res.ok
-        ? `Teste OK: ${host}:${machine.port} acessível em ${res.ms}ms`
-        : `Teste falhou: ${host}:${machine.port} (${res.error})`, res.ok ? 'info' : 'warn');
+      if (addLog) {
+        if (res.ok) {
+          addLog(`✓ Teste OK: ${host}:${machine.port} acessível em ${res.ms}ms`, 'info');
+        } else {
+          const hint = res.error?.includes('ECONNREFUSED') ? ' (VNC não está rodando?)' :
+                       res.error?.includes('ENOTFOUND') ? ' (IP não resolvido ou offline)' :
+                       res.error?.includes('ETIMEDOUT') ? ' (Tailscale não alcança?)' : '';
+          addLog(`✗ Teste falhou: ${host}:${machine.port} (${res.error})${hint}`, 'warn');
+        }
+      }
     } catch (err) {
       setTestResults((prev) => ({ ...prev, [index]: { ok: false, error: err.message } }));
-      if (addLog) addLog(`Erro no teste: ${err.message}`, 'error');
+      if (addLog) addLog(`✗ Erro no teste: ${err.message}`, 'error');
     } finally {
       setTesting((prev) => ({ ...prev, [index]: false }));
     }

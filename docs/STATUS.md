@@ -112,13 +112,16 @@ Proxy VNC                (VNC remoto)
 
 ---
 
-## Senhas VNC
+## Autenticação
 
 O app não guarda nem envia senha de VNC — o diálogo de aprovação
-(Aceitar/Rejeitar) no PC remoto é a única trava de acesso. Se o TightVNC do
-lado remoto tiver senha própria configurada, a conexão falha na etapa do
-VNC (fora do controle do app); nesse caso, remova a senha do TightVNC ou
-configure-o para aceitar conexões sem senha na rede Tailscale/privada.
+(Aceitar/Rejeitar) no PC remoto é a única trava de acesso.
+
+**Se receber "VNC server requires a password":** O TightVNC está configurado
+com autenticação. Remova a senha: abra TightVNC Server → Admin Properties →
+aba Security → deixe "Password" vazio → OK.
+
+Veja [VNC_TROUBLESHOOTING.md](VNC_TROUBLESHOOTING.md) para detalhes.
 
 ---
 

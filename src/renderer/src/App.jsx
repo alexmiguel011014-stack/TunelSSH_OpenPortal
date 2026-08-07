@@ -151,9 +151,11 @@ export default function App() {
     } catch {}
 
     try {
+      console.log(`[app] Connecting to ${machine.name} (${machine.host}:${machine.port}) with fromIp=${fromIp}`);
       const res = await window.electronAPI.ftConnect(machine.host, { fromIp });
       if (!res || !res.success) {
         const message = (res && res.message) || 'Conexão recusada ou sem resposta';
+        console.warn(`[app] Connection rejected: ${message}`);
         addLog(`Conexão recusada: ${message}`, 'error');
         recordConn({ name: machine.name, host: machine.host, state: 'error', message });
         window.electronAPI?.notify?.({ title: 'Conexão recusada', body: `${machine.name} não aceitou a conexão. O app precisa estar aberto no PC remoto.` });
@@ -162,9 +164,11 @@ export default function App() {
       setFtSessionId(res.sessionId);
       const identity = machines.some((m) => m.id === machine.id) ? machine.id : machine;
       setActiveMachineId(identity);
-      window.electronAPI?.connectVnc(machine).catch(() => {});
+      console.log(`[app] Connection approved, tunnel session: ${res.sessionId}, connecting VNC...`);
+      window.electronAPI?.connectVnc(machine).catch((e) => console.warn('[app] VNC connect error:', e));
       addLog(`Conexão aprovada por ${machine.name}.`);
     } catch (err) {
+      console.error(`[app] Connection error:`, err);
       addLog(`Erro ao conectar: ${err.message}`, 'error');
       recordConn({ name: machine.name, host: machine.host, state: 'error', message: err.message });
     }
