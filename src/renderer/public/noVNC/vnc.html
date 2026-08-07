@@ -109,6 +109,7 @@
       }
 
       const wsUrl = `${proxyWs}?host=${host}&port=${port}`;
+      console.log('[vnc] Connect:', { host, port, proxyWs: proxyWs.split('?')[0], password: !!password });
       connectingOverlay.classList.remove('hidden');
       connectingText.textContent = `Connecting to ${host}:${port}...`;
 
@@ -124,13 +125,13 @@
         });
 
         rfb.addEventListener('connect', () => {
+          console.log('[vnc] Connected to', host);
           connectingOverlay.classList.add('hidden');
           errorOverlay.classList.remove('visible');
           fbWidth = rfb._fbWidth || 0;
           fbHeight = rfb._fbHeight || 0;
           fitScreen();
           parent.postMessage({ type: 'vnc-resolution', width: fbWidth, height: fbHeight }, '*');
-          // Watch canvas for dynamic resolution changes from server
           const roCanvas = new ResizeObserver(() => fitScreen());
           const canvas = container.querySelector('canvas');
           if (canvas) roCanvas.observe(canvas);
@@ -147,13 +148,13 @@
         });
 
         rfb.addEventListener('credentialsrequired', () => {
-          if (password) {
-            rfb.approvePassword(password);
-          } else {
-            parent.postMessage({ type: 'vnc-status', state: 'error', message: 'Password required' }, '*');
-            errorMsg.textContent = 'VNC server requires a password';
-            errorOverlay.classList.add('visible');
-          }
+          console.log('[vnc] Server requires password; app does not store/send passwords');
+          // Desconecta e mostra erro: o servidor VNC requer autenticação,
+          // mas o app não guarda/envia senhas (aprovação remota é a trava).
+          if (rfb) rfb.disconnect();
+          parent.postMessage({ type: 'vnc-status', state: 'error', message: 'Password required' }, '*');
+          errorMsg.textContent = 'VNC server requires a password. Configure the TightVNC without password or disable authentication for this network.';
+          errorOverlay.classList.add('visible');
         });
 
         rfb.addEventListener('error', (e) => {

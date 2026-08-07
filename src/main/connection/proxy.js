@@ -24,6 +24,7 @@ function startWebSocketProxy(port = 18900) {
     const url = new URL(req.url, 'http://localhost');
     const targetHost = url.searchParams.get('host');
     const targetPort = parseInt(url.searchParams.get('port') || '5900', 10);
+    console.log(`[proxy] New WebSocket connection: target ${targetHost}:${targetPort}`);
 
     if (!targetHost) {
       ws.close(4001, 'Missing host parameter');
@@ -81,6 +82,7 @@ function startWebSocketProxy(port = 18900) {
     }, CONNECT_TIMEOUT);
 
     tcpSocket.on('connect', () => {
+      console.log(`[proxy] TCP connected to ${targetHost}:${targetPort}`);
       settled = true;
       clearTimeout(connectTimer);
       tcpSocket.setTimeout(IDLE_TIMEOUT);
@@ -107,7 +109,7 @@ function startWebSocketProxy(port = 18900) {
     tcpSocket.on('error', (err) => {
       stopHeartbeat();
       clearTimeout(connectTimer);
-      console.error(`[proxy] TCP error (${targetHost}:${targetPort}):`, err.message);
+      console.error(`[proxy] TCP error (${targetHost}:${targetPort}):`, err.code, err.message);
       if (ws.readyState === WebSocket.OPEN) {
         ws.close(4003, `TCP error: ${err.message}`);
       }
