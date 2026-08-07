@@ -197,6 +197,19 @@ export default function ConfigPanel() {
                   />
                 </div>
               </div>
+              <div className="mt-4">
+                <label className="block text-xs text-slate-500 mb-1">Senha VNC (opcional)</label>
+                <input
+                  type="password"
+                  value={machine.password || ''}
+                  onChange={(e) => updateField(index, 'password', e.target.value)}
+                  className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-100 font-mono focus:outline-none focus:border-blue-500 transition-colors"
+                  placeholder="Deixe em branco se não tiver senha"
+                />
+                <p className="text-xs text-slate-600 mt-1">
+                  Se o VNC tiver senha, configure aqui. Será usada como fallback se a conexão for recusada.
+                </p>
+              </div>
               {errors[index] && (
                 <ul className="mt-3 space-y-1">
                   {errors[index].map((err) => (

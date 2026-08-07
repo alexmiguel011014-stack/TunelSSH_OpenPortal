@@ -148,13 +148,17 @@
         });
 
         rfb.addEventListener('credentialsrequired', () => {
-          console.log('[vnc] Server requires password; app does not store/send passwords');
-          // Desconecta e mostra erro: o servidor VNC requer autenticação,
-          // mas o app não guarda/envia senhas (aprovação remota é a trava).
-          if (rfb) rfb.disconnect();
-          parent.postMessage({ type: 'vnc-status', state: 'error', message: 'Password required' }, '*');
-          errorMsg.textContent = 'VNC server requires a password. Configure the TightVNC without password or disable authentication for this network.';
-          errorOverlay.classList.add('visible');
+          console.log('[vnc] Server requires password', { hasPassword: !!password });
+          if (password) {
+            console.log('[vnc] Sending configured password...');
+            rfb.sendCredentials({ password });
+          } else {
+            console.log('[vnc] No password configured; app does not send passwordless auth');
+            if (rfb) rfb.disconnect();
+            parent.postMessage({ type: 'vnc-status', state: 'error', message: 'Password required' }, '*');
+            errorMsg.textContent = 'VNC server requires a password. Configure the TightVNC without password or disable authentication for this network.';
+            errorOverlay.classList.add('visible');
+          }
         });
 
         rfb.addEventListener('error', (e) => {

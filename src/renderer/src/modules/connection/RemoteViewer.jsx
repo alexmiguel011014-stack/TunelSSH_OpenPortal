@@ -48,12 +48,11 @@ export default function RemoteViewer({ machine, reconnectFlag }) {
     }, delay);
   }, [addLog]);
 
-  // A aprovação remota (dialogo Aceitar/Rejeitar) já é a trava de acesso —
-  // o app não guarda nem pede senha de VNC. Se o VNC do outro lado tiver
-  // senha própria configurada, a autenticação falha ali mesmo (fora do
-  // nosso controle), o que é aceitável.
+  // A aprovação remota (dialogo Aceitar/Rejeitar) já é a trava de acesso.
+  // Se configurada, a senha VNC é usada como fallback caso a conexão seja recusada.
   const proxyUrl = `ws://127.0.0.1:18900`;
-  const viewerUrl = `./noVNC/vnc.html?host=${machine.host}&port=${machine.port}&proxy=${encodeURIComponent(proxyUrl)}`;
+  const passwordParam = machine.password ? `&password=${encodeURIComponent(machine.password)}` : '';
+  const viewerUrl = `./noVNC/vnc.html?host=${machine.host}&port=${machine.port}&proxy=${encodeURIComponent(proxyUrl)}${passwordParam}`;
 
   const sendResize = useCallback(() => {
     try {
