@@ -2,6 +2,7 @@
 
 const { ipcMain, app, Notification } = require('electron');
 const { readConfig, writeConfig } = require('../config/config-manager');
+const { readHistory, addEntry } = require('../config/history-manager');
 const { execSync } = require('child_process');
 const os = require('os');
 const net = require('net');
@@ -21,6 +22,14 @@ function registerIpcHandlers(mainWindow) {
 
   ipcMain.handle('config:save', (_, config) => {
     return writeConfig(config);
+  });
+
+  ipcMain.handle('history:get', () => {
+    return readHistory();
+  });
+
+  ipcMain.handle('history:add', (_, entry) => {
+    return addEntry(entry);
   });
 
   ipcMain.handle('vnc:connect', (_, machine) => {

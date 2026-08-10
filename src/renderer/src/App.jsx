@@ -74,6 +74,17 @@ export default function App() {
       message: info.message || '',
     };
     setConnHistory((prev) => [...prev.slice(-49), entry]);
+    window.electronAPI?.addHistoryEntry?.(entry).catch(() => {});
+  }, []);
+
+  // Hidrata o histórico salvo em disco (sobrevive a reinícios do app) —
+  // se falhar, mantém o array vazio do useState e segue normalmente.
+  useEffect(() => {
+    window.electronAPI?.getHistory?.().then((entries) => {
+      if (Array.isArray(entries) && entries.length > 0) {
+        setConnHistory(entries.slice(-49));
+      }
+    }).catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -283,27 +294,29 @@ export default function App() {
         {sidebarCollapsed && (
           <button
             onClick={toggleSidebar}
+            title="Mostrar barra lateral"
             style={{
               position: 'fixed',
               top: 8,
               left: 8,
               zIndex: 99999,
-              background: 'none',
-              border: 'none',
+              background: 'rgba(30, 41, 59, 0.85)',
+              border: '1px solid #334155',
+              borderRadius: '6px',
               cursor: 'pointer',
-              padding: '6px',
-              opacity: 0.2,
+              padding: '8px 10px',
+              opacity: 0.85,
               transition: 'opacity 0.2s',
               display: 'flex',
               flexDirection: 'column',
               gap: '3px',
             }}
-            onMouseEnter={(e) => e.currentTarget.style.opacity = '0.6'}
-            onMouseLeave={(e) => e.currentTarget.style.opacity = '0.2'}
+            onMouseEnter={(e) => e.currentTarget.style.opacity = '1'}
+            onMouseLeave={(e) => e.currentTarget.style.opacity = '0.85'}
           >
-            <div style={{ width: '18px', height: '2px', background: '#94a3b8', borderRadius: '1px' }} />
-            <div style={{ width: '18px', height: '2px', background: '#94a3b8', borderRadius: '1px' }} />
-            <div style={{ width: '18px', height: '2px', background: '#94a3b8', borderRadius: '1px' }} />
+            <div style={{ width: '18px', height: '2px', background: '#e2e8f0', borderRadius: '1px' }} />
+            <div style={{ width: '18px', height: '2px', background: '#e2e8f0', borderRadius: '1px' }} />
+            <div style={{ width: '18px', height: '2px', background: '#e2e8f0', borderRadius: '1px' }} />
           </button>
         )}
       </div>

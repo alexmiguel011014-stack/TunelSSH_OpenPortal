@@ -8,6 +8,13 @@ const { sendConnectRequest, SIGNAL_PORT } = require('../connection/connection-re
 const { isAllowedHost } = require('../connection/net-guard');
 const { FileClient } = require('./file-client');
 
+// Testes locais (OPENPORTAL_MOCK=true): redireciona o pedido de conexão
+// para o Mock Server (porta 18903) em vez do ConnectionRequestServer real
+// (18902), que é o próprio processo — sem isso, "Conectar" em 127.0.0.1
+// nunca alcança o mock e sempre abre o dialog nativo de aprovação.
+const USE_MOCK = process.env.OPENPORTAL_MOCK === 'true';
+const MOCK_PORT = 18903;
+
 const sessions = new Map(); // sessionId -> { sessionId, host, client }
 const connecting = new Map(); // host -> Promise<{sessionId, reused}>
 let counter = 0;
@@ -31,7 +38,7 @@ async function connect(host, opts = {}) {
     throw new Error('Endereço IP inválido: use o formato 100.x.x.x');
   }
   if (!isAllowedHost(target)) {
-    throw new Error('Endereço fora da rede privada/Tailscale (100.x, 10.x, 192.168.x, 172.16-31.x)');
+    throw new Error('Endereço fora da rede Tailscale (use um IP 100.x)');
   }
 
   if (!opts.force) {
@@ -43,7 +50,8 @@ async function connect(host, opts = {}) {
   const task = (async () => {
     const fromName = opts.fromName || os.hostname() || 'PC';
     const fromIp = opts.fromIp || '';
-    const res = await sendConnectRequest(target, fromName, fromIp, SIGNAL_PORT, { wantsTunnel: true });
+    const port = (USE_MOCK && (target === '127.0.0.1' || target === 'localhost')) ? MOCK_PORT : SIGNAL_PORT;
+    const res = await sendConnectRequest(target, fromName, fromIp, port, { wantsTunnel: true });
     if (!res.approved || !res.socket) {
       throw new Error(res.message || 'Conexão de arquivos recusada pelo PC remoto');
     }

@@ -1,5 +1,6 @@
 const net = require('net');
 const os = require('os');
+const { EventEmitter } = require('events');
 const { FileAgentSession } = require('../file-transfer/file-agent');
 const { FrameDecoder } = require('../file-transfer/protocol');
 
@@ -8,8 +9,16 @@ const REQUEST_TIMEOUT = 15000;
 const MAX_ATTEMPTS = 3;
 const RETRY_DELAY = 5000;
 
-class ConnectionRequestServer {
+// Emite 'tunnel-open'/'tunnel-close' (com o req da conexão) quando um
+// pedido aprovado vira túnel de arquivos — usado pelo main.js para mostrar
+// o aviso "alguém está conectado". É uma aproximação: a sessão VNC em si
+// (porta 5900) fala direto com o TightVNC, sem passar por este servidor,
+// então não há como observar seu início/fim de verdade — mas como o
+// App.jsx abre e fecha o túnel junto com a sessão VNC (mesmo clique de
+// conectar/desconectar), esse sinal reflete bem a sessão na prática.
+class ConnectionRequestServer extends EventEmitter {
   constructor(onRequest) {
+    super();
     this.onRequest = onRequest;
     this.server = null;
   }
@@ -26,7 +35,7 @@ class ConnectionRequestServer {
       // transferência de arquivos (ver file-agent.js / protocol.js). Isso
       // evita abrir uma porta TCP nova (e a regra de firewall que ela
       // exigiria): reaproveita esta conexão, que o Windows já deixa passar.
-      const upgradeToTunnel = () => {
+      const upgradeToTunnel = (req) => {
         socket.removeListener('data', dataHandler);
         const session = new FileAgentSession(socket, os.homedir());
         const decoder = new FrameDecoder();
@@ -36,8 +45,16 @@ class ConnectionRequestServer {
             session.handleFrame(frame).catch(() => {});
           }
         });
-        socket.on('close', () => session.destroy());
-        socket.on('error', () => session.destroy());
+        this.emit('tunnel-open', req);
+        let closed = false;
+        const onTunnelEnd = () => {
+          if (closed) return;
+          closed = true;
+          session.destroy();
+          this.emit('tunnel-close', req);
+        };
+        socket.on('close', onTunnelEnd);
+        socket.on('error', onTunnelEnd);
       };
 
       const dataHandler = (d) => {
@@ -66,7 +83,7 @@ class ConnectionRequestServer {
               : { ...payload, rejected: !approved };
             socket.write(JSON.stringify(finalPayload));
             if (wantsTunnel && approved) {
-              upgradeToTunnel();
+              upgradeToTunnel(req);
             } else {
               socket.end();
             }
@@ -132,7 +149,7 @@ function sendConnectRequestOnce(host, fromName, fromIp, port = SIGNAL_PORT, opts
     };
 
     timer = setTimeout(() => {
-      fail(new Error('Sem resposta do PC remoto (timeout de 15s)'));
+      fail(new Error('Sem resposta do PC remoto (timeout de 15s) — verifique se o OpenPortal está aberto lá e se o Firewall do Windows não bloqueou o app na primeira execução'));
     }, REQUEST_TIMEOUT);
 
     socket.on('connect', () => {

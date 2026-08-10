@@ -1,10 +1,25 @@
 import { useState, useEffect, useContext } from 'react';
 import { MachineContext } from '../../App';
 
+function DiagRow({ label, ok, error }) {
+  return (
+    <div className="flex items-center gap-2 text-xs">
+      <span className={`w-2 h-2 rounded-full flex-shrink-0 ${ok ? 'bg-green-400' : 'bg-red-400'}`} />
+      <span className={ok ? 'text-slate-300' : 'text-red-300'}>{label}</span>
+      {!ok && error && <span className="text-red-400/80">— {error}</span>}
+    </div>
+  );
+}
+
 export default function MockPanel() {
   const { addLog } = useContext(MachineContext);
   const [mockActive, setMockActive] = useState(false);
   const [mockMode, setMockMode] = useState('approve');
+  const [diag, setDiag] = useState(null);
+
+  const refreshDiag = () => {
+    window.electronAPI?.getDiagStatus?.().then(setDiag).catch(() => {});
+  };
 
   useEffect(() => {
     // Verificar se mock server está ativo
@@ -14,6 +29,10 @@ export default function MockPanel() {
         setMockMode(status.mode);
       }
     }).catch(() => {});
+
+    refreshDiag();
+    const interval = setInterval(refreshDiag, 3000);
+    return () => clearInterval(interval);
   }, []);
 
   const handleSetMode = async (mode) => {
@@ -34,11 +53,17 @@ export default function MockPanel() {
     return (
       <div className="p-4 bg-blue-900/20 border border-blue-700/50 rounded-lg">
         <p className="text-xs text-blue-400">
-          💡 Mock Server desativo. Para ativar em testes locais:
+          💡 Mock Server desativo. Para testar localmente, dê 2 cliques em:
         </p>
         <pre className="text-xs text-blue-300 mt-2 p-2 bg-blue-950/50 rounded">
-          OPENPORTAL_MOCK=true npm run dev
+          TESTE_LOCAL.bat
         </pre>
+        {diag && (
+          <div className="mt-3 pt-3 border-t border-blue-800/30 space-y-1.5">
+            <DiagRow label="Proxy VNC (18900)" ok={diag.proxy?.listening} error={diag.proxy?.error} />
+            <DiagRow label="Servidor de aprovação (18902)" ok={diag.signal?.listening} error={diag.signal?.error} />
+          </div>
+        )}
       </div>
     );
   }
@@ -58,6 +83,19 @@ export default function MockPanel() {
       <p className="text-xs text-purple-300 mb-4">
         Simula um PC remoto respondendo a conexões. Útil para testar diálogos de aprovação/rejeição.
       </p>
+
+      {diag && (
+        <div className="mb-4 p-3 bg-slate-950/50 rounded-lg space-y-1.5 border border-purple-800/30">
+          <DiagRow label="Proxy VNC (18900)" ok={diag.proxy?.listening} error={diag.proxy?.error} />
+          <DiagRow label="Servidor de aprovação (18902)" ok={diag.signal?.listening} error={diag.signal?.error} />
+          <DiagRow label="Mock Server (18903)" ok={diag.mock?.active && diag.mock?.listening} error={diag.mock?.error} />
+          {(!diag.proxy?.listening || !diag.signal?.listening || (diag.mock?.active && !diag.mock?.listening)) && (
+            <p className="text-xs text-amber-400 pt-1">
+              ⚠️ Feche o app e reabra com <code className="bg-slate-900 px-1 rounded">TESTE_LOCAL.bat</code> para liberar as portas.
+            </p>
+          )}
+        </div>
+      )}
 
       <div className="space-y-2">
         <button

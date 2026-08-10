@@ -15,6 +15,26 @@ const sectionTitle = {
   letterSpacing: '0.5px', color: '#94a3b8'
 };
 
+// Mescla entradas consecutivas do mesmo PC (name+host) em uma só linha com
+// contador — evita poluir a lista quando o mock aprova/desconecta em
+// sequência rápida (sem VNC real por trás, isso gera várias linhas por
+// tentativa).
+function groupHistory(history) {
+  const reversed = history.slice().reverse();
+  const groups = [];
+  for (const entry of reversed) {
+    const last = groups[groups.length - 1];
+    if (last && last.name === entry.name && last.host === entry.host) {
+      last.count += 1;
+      last.state = entry.state;
+      last.message = entry.message;
+    } else {
+      groups.push({ ...entry, count: 1 });
+    }
+  }
+  return groups;
+}
+
 export default function Dashboard({ onConnect }) {
   const { machines, activeMachine, connectMachine, addLog, connHistory } = useContext(MachineContext);
   const [quickIp, setQuickIp] = useState('');
@@ -26,9 +46,16 @@ export default function Dashboard({ onConnect }) {
   };
 
   const handleQuickConnect = async () => {
-    const ip = quickIp.trim();
+    // Aceita IP:porta colado sem quebrar — a porta é sempre 5900 aqui, então
+    // só descartamos o que vier depois dos dois-pontos em vez de mandar pro
+    // backend e deixar o erro genérico de validação explicar o formato.
+    const ip = quickIp.trim().split(':')[0];
     if (!ip) {
       addLog('Digite um IP para conectar', 'warn');
+      return;
+    }
+    if (!/^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(ip)) {
+      addLog(`IP inválido: use o formato 100.x.x.x (sem porta, sem espaços)`, 'error');
       return;
     }
     if (!isPrivateNetworkHost(ip)) {
@@ -119,7 +146,7 @@ export default function Dashboard({ onConnect }) {
             </button>
           </div>
           <div style={{ fontSize: '11px', color: '#64748b', marginTop: '8px' }}>
-            O PC remoto receberá um pedido de conexão e precisa aceitar.
+            Apenas o IP, sem porta (a porta VNC padrão 5900 é usada automaticamente). O PC remoto receberá um pedido de conexão e precisa aceitar.
           </div>
         </div>
 
@@ -132,7 +159,7 @@ export default function Dashboard({ onConnect }) {
             <div style={{ color: '#64748b', fontSize: '12px' }}>Nenhuma conexão registrada ainda.</div>
           ) : (
             <div style={{ maxHeight: '220px', overflow: 'auto' }}>
-              {connHistory.slice().reverse().map((c) => (
+              {groupHistory(connHistory).map((c) => (
                 <div key={c.id} style={{
                   display: 'flex', alignItems: 'center', gap: '8px',
                   fontSize: '12px', padding: '5px 4px',
@@ -143,6 +170,11 @@ export default function Dashboard({ onConnect }) {
                   <span style={{ color: '#94a3b8', flexShrink: 0 }}>{c.date} {c.time}</span>
                   <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.name} · {c.host || '-'}</span>
                   <span style={{ color: '#64748b' }}>{c.message || c.state}</span>
+                  {c.count > 1 && (
+                    <span style={{ color: '#64748b', background: '#0f172a', borderRadius: '10px', padding: '1px 7px', fontSize: '11px', flexShrink: 0 }}>
+                      {c.count}x
+                    </span>
+                  )}
                 </div>
               ))}
             </div>

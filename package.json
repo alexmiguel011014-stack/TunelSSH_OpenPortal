@@ -39,7 +39,8 @@
     },
     "files": [
       "src/main/**/*",
-      "dist/renderer/**/*"
+      "dist/renderer/**/*",
+      "resources/*.html"
     ],
     "win": {
       "target": [

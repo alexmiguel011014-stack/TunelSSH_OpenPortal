@@ -17,6 +17,8 @@ class MockRemoteServer {
     this.server = null;
     this.mode = 'approve'; // approve | reject | toggle
     this.nextAction = 'approve'; // para mode === 'toggle'
+    this.listening = false;
+    this.lastError = null;
   }
 
   start() {
@@ -52,19 +54,23 @@ class MockRemoteServer {
             console.log(`[mock] Toggle: próxima ação será ${this.nextAction}`);
           }
 
+          const isTunnel = approved && msg.capability === 'tunnel';
           const response = {
             type: 'connect-response',
             requestId: msg.requestId,
             approved,
             rejected: !approved,
+            tunnel: isTunnel,
             message: approved ? 'Aprovado pelo mock server' : 'Rejeitado pelo mock server'
           };
 
           console.log(`[mock] Enviando resposta:`, response);
           socket.write(JSON.stringify(response));
 
-          // Para approved + tunnel: manter socket aberto (upgrade)
-          if (!approved || msg.capability !== 'tunnel') {
+          // Para approved + tunnel: manter socket aberto (upgrade), igual ao
+          // ConnectionRequestServer real — senão o cliente descarta o
+          // socket e trata como "aprovado sem sessão de arquivos".
+          if (!isTunnel) {
             socket.end();
           }
         } else {
@@ -85,10 +91,16 @@ class MockRemoteServer {
     });
 
     this.server.on('error', (err) => {
+      this.listening = false;
+      this.lastError = err.code === 'EADDRINUSE'
+        ? `Porta ${this.port} já está em uso (outra instância do app rodando?)`
+        : err.message;
       console.error(`[mock] Server error:`, err.message);
     });
 
     this.server.listen(this.port, '127.0.0.1', () => {
+      this.listening = true;
+      this.lastError = null;
       console.log(`[mock] Mock server rodando em 127.0.0.1:${this.port} (modo: ${this.mode})`);
     });
 
@@ -99,6 +111,7 @@ class MockRemoteServer {
     if (this.server) {
       this.server.close();
       this.server = null;
+      this.listening = false;
       console.log(`[mock] Mock server parado`);
     }
   }

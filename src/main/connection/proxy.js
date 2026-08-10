@@ -32,7 +32,7 @@ function startWebSocketProxy(port = 18900) {
     }
 
     if (!isAllowedHost(targetHost)) {
-      ws.close(4002, 'Invalid host: must be a private/Tailscale IP (100.x, 10.x, 192.168.x, 172.x)');
+      ws.close(4002, 'Invalid host: must be a Tailscale IP (100.x)');
       return;
     }
 

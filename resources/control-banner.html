@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{background:transparent;overflow:hidden}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;height:100vh;display:flex;align-items:center}
+.card{width:100%;margin:6px;background:#7f1d1d;color:#fff;border-radius:8px;padding:10px 12px;display:flex;align-items:center;gap:8px;box-shadow:0 4px 16px rgba(0,0,0,.4);border:1px solid #991b1b}
+.dot{width:8px;height:8px;border-radius:50%;background:#fca5a5;flex-shrink:0;animation:pulse 1.5s ease-in-out infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+.text{flex:1;min-width:0}
+.title{font-size:12px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sub{font-size:10px;color:#fecaca;margin-top:1px}
+.close{background:none;border:none;color:#fecaca;cursor:pointer;font-size:14px;padding:2px 4px;flex-shrink:0;line-height:1}
+.close:hover{color:#fff}
+</style>
+</head>
+<body>
+<div class="card">
+  <span class="dot"></span>
+  <div class="text">
+    <div class="title" id="title">Alguém está conectado</div>
+    <div class="sub">Tela e arquivos deste PC estão acessíveis</div>
+  </div>
+  <button class="close" id="dismiss" title="Ocultar aviso">✕</button>
+</div>
+<script>
+function setName(name){document.getElementById('title').textContent=(name||'Alguém')+' está conectado';}
+document.getElementById('dismiss').addEventListener('click',()=>{window.close();});
+</script>
+</body>
+</html>

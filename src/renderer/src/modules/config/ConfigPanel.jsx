@@ -200,6 +200,11 @@ export default function ConfigPanel() {
                     className={`w-full bg-slate-900 border rounded-lg px-3 py-2 text-sm text-slate-100 font-mono focus:outline-none focus:border-blue-500 transition-colors ${errors[index] && (machine.port < 1 || machine.port > MAX_PORT) ? 'border-red-600' : 'border-slate-600'}`}
                     placeholder="5900"
                   />
+                  {[18900, 18901, 18902, 18903].includes(Number(machine.port)) && (
+                    <p className="text-xs text-amber-400 mt-1">
+                      ⚠️ Essa é uma porta interna do OpenPortal, não do VNC. Use 5900 (padrão do TightVNC).
+                    </p>
+                  )}
                 </div>
               </div>
               <div className="mt-4">
@@ -254,6 +259,16 @@ export default function ConfigPanel() {
           <p className="text-xs text-slate-500">
             Informe o IP Tailscale de cada PC remoto. O TightVNC Server deve
             estar rodando na porta 5900 (ou na porta informada). Máximo de {maxMachines} PC(s).
+            Por segurança, só são aceitos IPs Tailscale (100.x) — fora do túnel Tailscale a conexão não é criptografada.
+          </p>
+        </div>
+
+        <div className="mt-3 p-4 bg-amber-900/10 rounded-lg border border-amber-800/30">
+          <p className="text-xs text-amber-400/90">
+            ⚠️ Se uma conexão nunca chegar (fica "Aguardando aprovação" até dar timeout), verifique se o
+            Firewall do Windows não bloqueou o OpenPortal Remote no PC de destino — isso costuma acontecer
+            na primeira vez que o app roda lá. Vá em Firewall do Windows → Permitir um aplicativo e confirme
+            que o OpenPortal Remote está marcado para redes privadas.
           </p>
         </div>
       </div>

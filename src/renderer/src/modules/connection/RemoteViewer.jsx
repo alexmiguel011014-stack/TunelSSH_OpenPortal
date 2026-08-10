@@ -18,6 +18,7 @@ export default function RemoteViewer({ machine, reconnectFlag, wasRejected }) {
   const [remoteRes, setRemoteRes] = useState(null);
   const [quality, setQuality] = useState(3);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [pingMs, setPingMs] = useState(null);
   const { addLog, setStatuses, disconnectMachine, statuses } = useContext(MachineContext);
 
   const vncState = statuses[machine.id] || 'connecting';
@@ -155,6 +156,25 @@ export default function RemoteViewer({ machine, reconnectFlag, wasRejected }) {
     };
   }, []);
 
+  // Latência até o PC remoto, só enquanto a sessão está conectada —
+  // reaproveita o mesmo teste de conexão TCP usado em Configurações.
+  useEffect(() => {
+    if (vncState !== 'connected') {
+      setPingMs(null);
+      return;
+    }
+    let cancelled = false;
+    const poll = async () => {
+      try {
+        const res = await window.electronAPI?.testConnection?.(machine.host, machine.port);
+        if (!cancelled && res?.ok) setPingMs(res.ms);
+      } catch {}
+    };
+    poll();
+    const interval = setInterval(poll, 5000);
+    return () => { cancelled = true; clearInterval(interval); };
+  }, [vncState, machine.host, machine.port]);
+
   useEffect(() => {
     window.addEventListener('resize', sendResize);
     return () => window.removeEventListener('resize', sendResize);
@@ -219,6 +239,7 @@ export default function RemoteViewer({ machine, reconnectFlag, wasRejected }) {
         <span style={{ display: 'inline-flex', alignItems: 'center', gap: '5px', ...ctrlLabel }}>
           <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: health.color, display: 'inline-block' }} />
           {health.label}
+          {pingMs !== null && <span>· {pingMs}ms</span>}
         </span>
         <span style={ctrlLabel}>{machine.name} · {machine.mask || `${machine.host}:${machine.port}`}</span>
       </div>

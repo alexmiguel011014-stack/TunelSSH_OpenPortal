@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Menu, ipcMain, globalShortcut, dialog } = require('electron');
+const { app, BrowserWindow, Menu, ipcMain, globalShortcut, dialog, screen } = require('electron');
 const path = require('path');
 const fs = require('fs');
 let _autoUpdater = null;
@@ -74,6 +74,8 @@ let mainWindow = null;
 let wss = null;
 let requestServer = null;
 let mockServer = null; // Para testes locais
+let controlBannerWindow = null;
+let activeSessionCount = 0; // protege o banner contra 2 sessões simultâneas
 let updateProgressWindow = null;
 let isUserTriggeredUpdate = false;
 let pendingUpdateInfo = null;
@@ -90,6 +92,14 @@ const ALLOW_PRERELEASE = process.env.OPENPORTAL_ALLOW_PRERELEASE !== 'false';
 if (!app.requestSingleInstanceLock()) {
   app.quit();
 }
+
+// Diagnóstico de portas: alimentado pelos handlers 'error' de cada
+// servidor, para o painel de Configurações mostrar status real em vez de
+// assumir que "objeto criado" == "porta realmente aberta" (ver EADDRINUSE).
+const portStatus = {
+  proxy: { port: PROXY_PORT, listening: false, error: null },
+  signal: { port: 18902, listening: false, error: null },
+};
 
 function createWindow() {
   console.log('[main] Creating window...');
@@ -167,6 +177,40 @@ function createUpdateProgressWindow() {
   win.loadFile(path.join(__dirname, '..', '..', 'resources', 'update-progress.html'));
   win.on('closed', () => { updateProgressWindow = null; });
   updateProgressWindow = win;
+}
+
+// Aviso persistente "alguém está conectado" enquanto uma sessão de túnel
+// recebida está ativa (ver comentário em ConnectionRequestServer sobre a
+// aproximação usada). Janela pequena, sempre no topo, canto superior
+// direito — não bloqueia o uso do PC, só avisa.
+function showControlBanner(fromName) {
+  if (controlBannerWindow && !controlBannerWindow.isDestroyed()) {
+    controlBannerWindow.webContents.executeJavaScript(`setName(${JSON.stringify(fromName || '')})`).catch(() => {});
+    return;
+  }
+  const { width: screenW } = screen.getPrimaryDisplay().workAreaSize;
+  const winWidth = 300;
+  const win = new BrowserWindow({
+    width: winWidth, height: 64,
+    x: screenW - winWidth - 12, y: 12,
+    resizable: false, movable: true, frame: false,
+    alwaysOnTop: true, skipTaskbar: true, transparent: true,
+    backgroundColor: '#00000000',
+    webPreferences: { nodeIntegration: false, contextIsolation: true }
+  });
+  win.setAlwaysOnTop(true, 'screen-saver');
+  win.loadFile(path.join(__dirname, '..', '..', 'resources', 'control-banner.html')).then(() => {
+    win.webContents.executeJavaScript(`setName(${JSON.stringify(fromName || '')})`).catch(() => {});
+  }).catch(() => {});
+  win.on('closed', () => { controlBannerWindow = null; });
+  controlBannerWindow = win;
+}
+
+function hideControlBanner() {
+  if (controlBannerWindow && !controlBannerWindow.isDestroyed()) {
+    controlBannerWindow.close();
+  }
+  controlBannerWindow = null;
 }
 
 function handleConnectionRequest(req, respond) {
@@ -311,9 +355,31 @@ app.whenReady().then(() => {
 
   buildAppMenu();
   wss = startWebSocketProxy(PROXY_PORT);
+  wss.on('listening', () => { portStatus.proxy.listening = true; portStatus.proxy.error = null; });
+  wss.on('error', (err) => {
+    portStatus.proxy.listening = false;
+    portStatus.proxy.error = err.code === 'EADDRINUSE'
+      ? `Porta ${PROXY_PORT} já está em uso (outra instância do app rodando?)`
+      : err.message;
+  });
 
   requestServer = new ConnectionRequestServer((req, respond) => handleConnectionRequest(req, respond));
   requestServer.start();
+  requestServer.server.on('listening', () => { portStatus.signal.listening = true; portStatus.signal.error = null; });
+  requestServer.server.on('error', (err) => {
+    portStatus.signal.listening = false;
+    portStatus.signal.error = err.code === 'EADDRINUSE'
+      ? `Porta ${portStatus.signal.port} já está em uso (outra instância do app rodando?)`
+      : err.message;
+  });
+  requestServer.on('tunnel-open', (req) => {
+    activeSessionCount += 1;
+    showControlBanner(req?.fromName);
+  });
+  requestServer.on('tunnel-close', () => {
+    activeSessionCount = Math.max(0, activeSessionCount - 1);
+    if (activeSessionCount === 0) hideControlBanner();
+  });
 
   // Iniciar mock server se habilitado (teste local)
   if (USE_MOCK) {
@@ -328,7 +394,7 @@ app.whenReady().then(() => {
   // Mock server controls (para testes locais)
   ipcMain.handle('mock:setMode', (_, mode) => {
     if (!mockServer) {
-      return { success: false, message: 'Mock server não está ativo. Rode com: OPENPORTAL_MOCK=true npm run dev' };
+      return { success: false, message: 'Mock server não está ativo. Feche o app e reabra com TESTE_LOCAL.bat' };
     }
     mockServer.setMode(mode);
     return { success: true, message: `Mock server agora em modo: ${mode}` };
@@ -338,7 +404,19 @@ app.whenReady().then(() => {
     if (!mockServer) {
       return { active: false };
     }
-    return { active: true, mode: mockServer.mode };
+    return { active: true, mode: mockServer.mode, listening: mockServer.listening, error: mockServer.lastError };
+  });
+
+  // Diagnóstico completo de portas/servidores locais, para o painel de
+  // Configurações mostrar status real (sem precisar ler log de terminal).
+  ipcMain.handle('diag:getStatus', () => {
+    return {
+      proxy: { ...portStatus.proxy },
+      signal: { ...portStatus.signal },
+      mock: mockServer
+        ? { active: true, port: mockServer.port, listening: mockServer.listening, mode: mockServer.mode, error: mockServer.lastError }
+        : { active: false }
+    };
   });
 
   ipcMain.handle('app:checkUpdate', () => {
