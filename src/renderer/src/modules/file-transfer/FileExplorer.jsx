@@ -721,6 +721,36 @@ function RemotePlaceholder({ activeMachine }) {
   );
 }
 
+// Divisor arrastavel entre os dois paineis - clientX vira % da largura do
+// container pai, clampado para nenhum lado ficar menor que 20%.
+function Splitter({ containerRef, setWidthPct }) {
+  const draggingRef = useRef(false);
+
+  useEffect(() => {
+    const onMove = (e) => {
+      if (!draggingRef.current || !containerRef.current) return;
+      const rect = containerRef.current.getBoundingClientRect();
+      const pct = ((e.clientX - rect.left) / rect.width) * 100;
+      setWidthPct(Math.min(80, Math.max(20, pct)));
+    };
+    const onUp = () => { draggingRef.current = false; };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+    return () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+  }, [containerRef, setWidthPct]);
+
+  return (
+    <div
+      onMouseDown={() => { draggingRef.current = true; }}
+      title="Arraste para redimensionar"
+      className="w-1.5 shrink-0 cursor-col-resize bg-[#e5e5e5] hover:bg-[#0067c0] active:bg-[#0067c0] transition-colors"
+    />
+  );
+}
+
 function TransferRail({ onSend, onReceive, sendDisabled, receiveDisabled, sendCount, receiveCount }) {
   return (
     <div className="w-16 shrink-0 flex flex-col items-center justify-center gap-3 bg-[#f3f3f3] border-x border-[#e5e5e5]">
@@ -797,6 +827,8 @@ export default function FileExplorer() {
   const [batch, setBatch] = useState(null);
   const batchIdRef = useRef(0);
   const [transferring, setTransferring] = useState(false);
+  const [leftWidthPct, setLeftWidthPct] = useState(50);
+  const splitContainerRef = useRef(null);
 
   useEffect(() => {
     const unsub = window.electronAPI?.onFtProgress?.((p) => {
@@ -885,8 +917,11 @@ export default function FileExplorer() {
 
   return (
     <div className="flex flex-col h-full bg-[#f3f3f3] text-[#1b1b1b]" style={{ fontFamily: '"Segoe UI", system-ui, sans-serif' }}>
-      <div className="flex-1 flex min-h-0">
-        <PaneView label="Este Computador" pane={local} leftmost dnd={makeDnd('local')} />
+      <div ref={splitContainerRef} className="flex-1 flex min-h-0">
+        <div style={{ width: `${leftWidthPct}%` }} className="flex min-w-0 shrink-0">
+          <PaneView label="Este Computador" pane={local} leftmost dnd={makeDnd('local')} />
+        </div>
+        <Splitter containerRef={splitContainerRef} setWidthPct={setLeftWidthPct} />
         <TransferRail
           onSend={() => runBatch('upload')}
           onReceive={() => runBatch('download')}

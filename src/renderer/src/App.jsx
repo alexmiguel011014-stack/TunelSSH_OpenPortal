@@ -23,10 +23,18 @@ const DEFAULT_MACHINES = [
 ];
 
 const MAX_MACHINES = 20;
-let nextId = 4;
 
-function genId() {
-  return 'pc-' + (nextId++);
+// Deriva o próximo id a partir do maior "pc-N" já existente na lista atual
+// (em vez de um contador fixo em módulo) — um contador fixo reiniciava em 4
+// a cada abertura do app e colidia com ids maiores já salvos em config.json,
+// fazendo o novo PC sobrescrever um existente com o mesmo id.
+function genId(existingMachines) {
+  let max = 0;
+  for (const m of existingMachines) {
+    const match = /^pc-(\d+)$/.exec(m.id || '');
+    if (match) max = Math.max(max, parseInt(match[1], 10));
+  }
+  return 'pc-' + (max + 1);
 }
 
 export default function App() {
@@ -209,7 +217,7 @@ export default function App() {
       addLog(`Max ${MAX_MACHINES} machines reached`, 'warn');
       return;
     }
-    const newMachine = { id: genId(), name: `PC ${machines.length + 1}`, host: '', port: 5900, mask: genMask() };
+    const newMachine = { id: genId(machines), name: `PC ${machines.length + 1}`, host: '', port: 5900, mask: genMask() };
     const updated = [...machines, newMachine];
     setMachines(updated);
     window.electronAPI?.saveConfig({ machines: updated });

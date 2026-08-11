@@ -40,11 +40,6 @@ export default function Sidebar() {
     toggleTheme,
   } = useContext(MachineContext);
 
-  const otherMachines = useMemo(
-    () => machines.filter(m => m.id !== activeMachineId),
-    [machines, activeMachineId]
-  );
-
   if (sidebarCollapsed) return null;
 
   const handleClickMachine = (machine) => {
@@ -107,20 +102,22 @@ export default function Sidebar() {
 
       <nav className="flex-1 p-3 overflow-y-auto">
         <p className="text-[11px] font-medium text-text-faint uppercase tracking-wide px-2 mb-2">
-          PCs ({otherMachines.length}/{maxMachines})
+          PCs ({machines.length}/{maxMachines})
         </p>
-        {otherMachines.length === 0 && (
+        {machines.length === 0 && (
           <div className="px-2 py-3 text-xs text-text-faint text-center">
             Nenhum PC cadastrado
           </div>
         )}
-        {otherMachines.map((machine) => {
+        {machines.map((machine) => {
           const isConfigured = machine.host && machine.host.trim() !== '';
+          const isActive = machine.id === activeMachineId;
           return (
             <div key={machine.id} className="relative mb-0.5 group">
               <button
                 onClick={() => handleClickMachine(machine)}
                 className={`w-full text-left px-3 py-2.5 rounded-lg border-none ${
+                  isActive ? 'bg-surface-2 text-text-primary' :
                   isConfigured ? 'cursor-pointer text-text-secondary hover:bg-surface-2' : 'cursor-not-allowed text-text-faint'
                 } bg-transparent transition-colors`}
               >

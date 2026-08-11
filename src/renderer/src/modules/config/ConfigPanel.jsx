@@ -1,5 +1,5 @@
-import { useContext, useState } from 'react';
-import { ArrowLeft, Check, XCircle, AlertTriangle } from 'lucide-react';
+import { useContext, useEffect, useState } from 'react';
+import { ArrowLeft, Check, XCircle, AlertTriangle, Copy } from 'lucide-react';
 import { MachineContext } from '../../App';
 
 const MAX_PORT = 65535;
@@ -19,6 +19,15 @@ export default function ConfigPanel() {
   const [errors, setErrors] = useState({});
   const [testing, setTesting] = useState({});
   const [testResults, setTestResults] = useState({});
+  const [localIp, setLocalIp] = useState(null); // null = carregando, '' = não achou
+
+  useEffect(() => {
+    window.electronAPI?.getLocalIp?.().then((res) => setLocalIp(res?.ip || '')).catch(() => setLocalIp(''));
+  }, []);
+
+  const copyLocalIp = () => {
+    if (localIp) navigator.clipboard?.writeText(localIp);
+  };
 
   const handleTest = async (index, machine) => {
     const host = (machine.host || '').trim();
@@ -126,6 +135,27 @@ export default function ConfigPanel() {
           >
             <ArrowLeft size={16} /> Voltar
           </button>
+        </div>
+
+        <div className="mb-6 p-4 bg-accent/10 rounded-xl border border-accent/30">
+          <p className="text-xs text-text-faint mb-1">
+            Este é o IP Tailscale <strong>deste</strong> PC — passe ele para quem for conectar aqui.
+            Para conectar <strong>neste app</strong> em outro PC, use o IP Tailscale do PC remoto (visto lá, não aqui).
+          </p>
+          <div className="flex items-center gap-2 mt-2">
+            <code className="flex-1 px-3 py-2 bg-inset rounded-lg text-sm font-mono text-text-primary border border-line">
+              {localIp === null ? 'Detectando...' : localIp || 'Não encontrado — Tailscale está instalado e conectado?'}
+            </code>
+            {localIp && (
+              <button
+                onClick={copyLocalIp}
+                title="Copiar IP"
+                className="flex items-center gap-1.5 px-3 py-2 text-xs rounded-lg border border-line text-text-secondary hover:border-accent hover:text-accent transition-colors"
+              >
+                <Copy size={14} /> Copiar
+              </button>
+            )}
+          </div>
         </div>
 
         <div className="space-y-4">

@@ -5,6 +5,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { app } = require('electron');
 
 function listRoots() {
   if (process.platform === 'win32') {
@@ -47,31 +48,31 @@ function listRoots() {
   return roots;
 }
 
+// Usa as pastas especiais do próprio Windows (via Electron app.getPath),
+// não um "chute" de home + nome fixo — isso é o que faz funcionar mesmo
+// quando o OneDrive redireciona Área de Trabalho/Documentos/Imagens/Vídeos
+// para dentro de "OneDrive\..." em vez do perfil puro. Adivinhar o caminho
+// (como antes) causava tanto pasta errada quanto ENOENT.
 function quickAccess() {
   const home = os.homedir();
-  const named = {
-    'Área de Trabalho': 'Desktop',
-    Downloads: 'Downloads',
-    Documentos: 'Documents',
-    Imagens: 'Pictures',
-    Vídeos: 'Videos',
-  };
+  const named = [
+    ['Área de Trabalho', 'desktop'],
+    ['Downloads', 'downloads'],
+    ['Documentos', 'documents'],
+    ['Imagens', 'pictures'],
+    ['Vídeos', 'videos'],
+  ];
   const list = [{ name: 'Início', path: home }];
-  for (const [ptName, enName] of Object.entries(named)) {
-    const ptPath = path.join(home, ptName);
-    const enPath = path.join(home, enName);
-    let resolved = ptPath;
+  for (const [label, electronName] of named) {
     try {
-      fs.accessSync(ptPath);
-    } catch {
-      try {
-        fs.accessSync(enPath);
-        resolved = enPath;
-      } catch {
-        resolved = ptPath;
+      const resolved = app.getPath(electronName);
+      if (resolved && fs.existsSync(resolved)) {
+        list.push({ name: label, path: resolved });
       }
+    } catch {
+      // pasta especial indisponível nesta plataforma/perfil — só omite do
+      // acesso rápido em vez de expor um caminho que não existe
     }
-    list.push({ name: ptName, path: resolved });
   }
   return list;
 }
