@@ -1,7 +1,23 @@
 import { useContext, useMemo } from 'react';
+import { Home, Settings, FolderOpen, Download, Sun, Moon, PanelLeftClose, X } from 'lucide-react';
 import { MachineContext } from '../App';
 import StatusBadge from './StatusBadge';
 import { isPrivateNetworkHost } from './lib/net';
+
+function NavButton({ active, onClick, icon, children, title }) {
+  return (
+    <button
+      onClick={onClick}
+      title={title}
+      className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm transition-colors ${
+        active ? 'bg-surface-2 text-text-primary' : 'text-text-muted hover:bg-surface-2 hover:text-text-secondary'
+      }`}
+    >
+      {icon}
+      {children}
+    </button>
+  );
+}
 
 export default function Sidebar() {
   const {
@@ -67,61 +83,52 @@ export default function Sidebar() {
     setShowFiles(false);
   };
 
+  const isHome = !activeMachineId && !showConfig && !showFiles;
+
   return (
-    <aside style={{ width: '256px', minWidth: '256px', background: '#1e293b', borderRight: '1px solid #334155', display: 'flex', flexDirection: 'column' }}>
-      {/* Header with collapse */}
-      <div style={{ padding: '16px', borderBottom: '1px solid #334155', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+    <aside className="w-64 min-w-64 bg-surface border-r border-line flex flex-col">
+      <div className="px-4 py-4 border-b border-line-subtle flex items-center justify-between">
         <button
           onClick={goHome}
           title="Voltar para a tela inicial"
-          style={{ background: 'none', border: 'none', padding: 0, textAlign: 'left', cursor: 'pointer' }}
+          className="bg-transparent border-none p-0 text-left cursor-pointer"
         >
-          <h1 style={{ fontSize: '18px', fontWeight: 600, color: '#f1f5f9' }}>OpenPortal</h1>
-          <p style={{ fontSize: '12px', color: '#94a3b8', marginTop: '4px' }}>Remote Desktop Gateway</p>
+          <h1 className="text-lg font-semibold text-text-primary">OpenPortal</h1>
+          <p className="text-xs text-text-muted mt-1">Remote Desktop Gateway</p>
         </button>
         <button
           onClick={toggleSidebar}
-          style={{ background: 'none', border: 'none', color: '#64748b', cursor: 'pointer', padding: '4px', fontSize: '16px' }}
+          className="bg-transparent border-none text-text-faint hover:text-text-secondary cursor-pointer p-1 transition-colors"
           title="Recolher barra lateral"
         >
-          ◀
+          <PanelLeftClose size={18} />
         </button>
       </div>
 
-      {/* Machines List */}
-      <nav style={{ flex: 1, padding: '12px', overflowY: 'auto' }}>
-        <p style={{ fontSize: '11px', fontWeight: 500, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.05em', padding: '0 8px', marginBottom: '8px' }}>
+      <nav className="flex-1 p-3 overflow-y-auto">
+        <p className="text-[11px] font-medium text-text-faint uppercase tracking-wide px-2 mb-2">
           PCs ({otherMachines.length}/{maxMachines})
         </p>
         {otherMachines.length === 0 && (
-          <div style={{ padding: '12px 8px', fontSize: '12px', color: '#475569', textAlign: 'center' }}>
+          <div className="px-2 py-3 text-xs text-text-faint text-center">
             Nenhum PC cadastrado
           </div>
         )}
         {otherMachines.map((machine) => {
           const isConfigured = machine.host && machine.host.trim() !== '';
           return (
-            <div key={machine.id} style={{ position: 'relative', marginBottom: '2px' }}>
+            <div key={machine.id} className="relative mb-0.5 group">
               <button
                 onClick={() => handleClickMachine(machine)}
-                style={{
-                  width: '100%',
-                  textAlign: 'left',
-                  padding: '10px 12px',
-                  borderRadius: '8px',
-                  border: 'none',
-                  cursor: isConfigured ? 'pointer' : 'not-allowed',
-                  background: 'transparent',
-                  color: isConfigured ? '#cbd5e1' : '#475569',
-                }}
+                className={`w-full text-left px-3 py-2.5 rounded-lg border-none ${
+                  isConfigured ? 'cursor-pointer text-text-secondary hover:bg-surface-2' : 'cursor-not-allowed text-text-faint'
+                } bg-transparent transition-colors`}
               >
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                  <div style={{ minWidth: 0 }}>
-                    <div style={{ fontSize: '14px', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      {machine.name}
-                    </div>
+                <div className="flex items-center justify-between">
+                  <div className="min-w-0">
+                    <div className="text-sm font-medium truncate">{machine.name}</div>
                     {isConfigured && (
-                      <div style={{ fontSize: '12px', opacity: 0.7, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginTop: '2px', fontFamily: 'monospace' }}>
+                      <div className="text-xs opacity-70 truncate mt-0.5 font-mono">
                         {machine.mask || `${machine.host}:${machine.port}`}
                       </div>
                     )}
@@ -131,135 +138,40 @@ export default function Sidebar() {
               </button>
               <button
                 onClick={() => handleRemove(machine.id, machine.name)}
-                style={{
-                  position: 'absolute', top: '2px', right: '2px',
-                  background: 'none', border: 'none', color: '#475569',
-                  cursor: 'pointer', fontSize: '12px', padding: '2px 6px',
-                  borderRadius: '4px', display: 'none',
-                }}
-                className="remove-machine-btn"
+                className="hidden group-hover:block absolute top-1 right-1 bg-transparent border-none text-text-faint hover:text-danger cursor-pointer p-1 rounded transition-colors"
                 title="Remover PC"
               >
-                ✕
+                <X size={12} />
               </button>
             </div>
           );
         })}
 
-        {/* Add PC button */}
         {machines.length < maxMachines && (
           <button
             onClick={addMachine}
-            style={{
-              width: '100%', padding: '8px 12px', marginTop: '8px',
-              borderRadius: '8px', fontSize: '13px', border: '1px dashed #475569',
-              cursor: 'pointer', background: 'transparent', color: '#64748b',
-            }}
+            className="w-full px-3 py-2 mt-2 rounded-lg text-sm border border-dashed border-line text-text-muted hover:border-text-faint hover:text-text-secondary bg-transparent cursor-pointer transition-colors"
           >
             + Adicionar PC
           </button>
         )}
       </nav>
 
-      {/* Início button */}
-      <div style={{ padding: '0 12px', borderTop: '1px solid #334155' }}>
-        <button
-          onClick={goHome}
-          style={{
-            width: '100%',
-            padding: '8px 12px',
-            borderRadius: '8px',
-            fontSize: '14px',
-            border: 'none',
-            cursor: 'pointer',
-            background: (!activeMachineId && !showConfig && !showFiles) ? '#475569' : 'transparent',
-            color: (!activeMachineId && !showConfig && !showFiles) ? '#ffffff' : '#94a3b8',
-            marginTop: '8px',
-          }}
-        >
-          🏠 Início
-        </button>
-      </div>
-
-      {/* Configurações button */}
-      <div style={{ padding: '0 12px', borderTop: '1px solid #334155' }}>
-        <button
-          onClick={() => { setShowFiles(false); setShowConfig(!showConfig); }}
-          style={{
-            width: '100%',
-            padding: '8px 12px',
-            borderRadius: '8px',
-            fontSize: '14px',
-            border: 'none',
-            cursor: 'pointer',
-            background: showConfig ? '#475569' : 'transparent',
-            color: showConfig ? '#ffffff' : '#94a3b8',
-            marginTop: '8px',
-          }}
-        >
-          ⚙️ Configurações
-        </button>
-      </div>
-
-      {/* Files button */}
-      <div style={{ padding: '0 12px', borderTop: '1px solid #334155' }}>
-        <button
-          onClick={() => { setShowConfig(false); setShowFiles(!showFiles); }}
-          style={{
-            width: '100%',
-            padding: '8px 12px',
-            borderRadius: '8px',
-            fontSize: '14px',
-            border: 'none',
-            cursor: 'pointer',
-            background: showFiles ? '#475569' : 'transparent',
-            color: showFiles ? '#ffffff' : '#94a3b8',
-            marginTop: '8px',
-          }}
-        >
-          📁 Arquivos
-        </button>
-      </div>
-
-      {/* Atualizações button */}
-      <div style={{ padding: '0 12px', borderTop: '1px solid #334155' }}>
-        <button
-          onClick={handleCheckUpdate}
-          style={{
-            width: '100%',
-            padding: '8px 12px',
-            borderRadius: '8px',
-            fontSize: '14px',
-            border: 'none',
-            cursor: 'pointer',
-            background: 'transparent',
-            color: '#94a3b8',
-          }}
-          title="Verificar atualizações"
-        >
-          🔄 Atualizações
-        </button>
-      </div>
-
-      {/* Tema button */}
-      <div style={{ padding: '0 12px', borderTop: '1px solid #334155' }}>
-        <button
-          onClick={toggleTheme}
-          style={{
-            width: '100%',
-            padding: '8px 12px',
-            borderRadius: '8px',
-            fontSize: '14px',
-            border: 'none',
-            cursor: 'pointer',
-            background: 'transparent',
-            color: '#94a3b8',
-          }}
-          title="Alternar tema claro/escuro"
-        >
-          {theme === 'dark' ? '☀️ Tema claro' : '🌙 Tema escuro'}
-        </button>
-      </div>
+      <nav className="flex flex-col gap-0.5 p-2 border-t border-line-subtle">
+        <NavButton active={isHome} onClick={goHome} icon={<Home size={16} />}>Início</NavButton>
+        <NavButton active={showConfig} onClick={() => { setShowFiles(false); setShowConfig(!showConfig); }} icon={<Settings size={16} />}>
+          Configurações
+        </NavButton>
+        <NavButton active={showFiles} onClick={() => { setShowConfig(false); setShowFiles(!showFiles); }} icon={<FolderOpen size={16} />}>
+          Arquivos
+        </NavButton>
+        <NavButton onClick={handleCheckUpdate} icon={<Download size={16} />} title="Verificar atualizações">
+          Atualizações
+        </NavButton>
+        <NavButton onClick={toggleTheme} icon={theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />} title="Alternar tema claro/escuro">
+          {theme === 'dark' ? 'Tema claro' : 'Tema escuro'}
+        </NavButton>
+      </nav>
     </aside>
   );
 }

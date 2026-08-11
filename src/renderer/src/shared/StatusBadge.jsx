@@ -1,10 +1,10 @@
 export default function StatusBadge({ state }) {
   const colors = {
-    connected: 'bg-emerald-500',
-    connecting: 'bg-amber-500 animate-pulse',
-    credentials: 'bg-amber-500 animate-pulse',
-    disconnected: 'bg-slate-600',
-    error: 'bg-red-500',
+    connected: 'bg-success',
+    connecting: 'bg-warning animate-pulse',
+    credentials: 'bg-warning animate-pulse',
+    disconnected: 'bg-text-faint',
+    error: 'bg-danger',
   };
 
   const labels = {
@@ -21,7 +21,7 @@ export default function StatusBadge({ state }) {
   return (
     <div className="flex items-center gap-2">
       <div className={`w-2.5 h-2.5 rounded-full ${color}`} />
-      <span className="text-xs text-slate-400">{label}</span>
+      <span className="text-xs text-text-muted">{label}</span>
     </div>
   );
 }

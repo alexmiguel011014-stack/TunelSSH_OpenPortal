@@ -784,7 +784,7 @@ function StatusBar({ batch }) {
 export default function FileExplorer() {
   const local = usePane(localAdapter, null);
 
-  // A aprovação e o túnel de arquivos já foram estabelecidos no momento em
+  // A aprovação e a sessão de arquivos já foram estabelecidas no momento em
   // que o usuário conectou ao PC (ver connectMachine em App.jsx) — aqui só
   // lemos o sessionId pronto. Nenhum IP, nenhum "aguardando aprovação".
   const machineCtx = useContext(MachineContext);

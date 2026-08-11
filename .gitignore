@@ -32,7 +32,6 @@ __pycache__/
 # Logs e artefatos locais de dev
 build-log.txt
 dev-run.log
-TESTE_LOCAL.bat
 
 # Cache de tokens (base_project)
 eco_tokens/

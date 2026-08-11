@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, useContext, useCallback } from 'react';
+import { RefreshCw, Maximize2, Minimize2, PowerOff } from 'lucide-react';
 import { MachineContext } from '../../App';
 
 const QUALITY_LEVELS = [
@@ -23,10 +24,10 @@ export default function RemoteViewer({ machine, reconnectFlag, wasRejected }) {
 
   const vncState = statuses[machine.id] || 'connecting';
   const healthMap = {
-    connected: { color: '#22c55e', label: 'Conectado' },
-    connecting: { color: '#f59e0b', label: 'Conectando...' },
-    error: { color: '#ef4444', label: 'Erro' },
-    disconnected: { color: '#94a3b8', label: 'Desconectado' },
+    connected: { color: 'bg-success', label: 'Conectado' },
+    connecting: { color: 'bg-warning', label: 'Conectando...' },
+    error: { color: 'bg-danger', label: 'Erro' },
+    disconnected: { color: 'bg-text-muted', label: 'Desconectado' },
   };
   const health = healthMap[vncState] || healthMap.disconnected;
 
@@ -195,62 +196,58 @@ export default function RemoteViewer({ machine, reconnectFlag, wasRejected }) {
     return () => { ro.disconnect(); };
   }, [sendResize]);
 
-  const ctrlBtn = {
-    display: 'flex', alignItems: 'center', gap: '4px', fontSize: '12px',
-    padding: '5px 10px', borderRadius: '6px', border: '1px solid #334155',
-    background: '#1e293b', color: '#cbd5e1', cursor: 'pointer', whiteSpace: 'nowrap',
-  };
-  const ctrlLabel = { fontSize: '11px', color: '#94a3b8' };
+  const ctrlBtnClass = 'flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-md border border-line bg-surface text-text-secondary hover:bg-surface-2 transition-colors whitespace-nowrap';
+  const ctrlLabelClass = 'text-[11px] text-text-muted';
 
   return (
-    <div
-      ref={containerRef}
-      style={{ flex: 1, display: 'flex', flexDirection: 'column', background: '#000', overflow: 'hidden' }}
-    >
+    <div ref={containerRef} className="flex-1 flex flex-col bg-black overflow-hidden">
       {/* Control bar (top) */}
-      <div
-        style={{
-          display: 'flex', gap: '6px', alignItems: 'center', flexWrap: 'wrap',
-          background: '#0f172a', borderBottom: '1px solid #334155', padding: '6px 10px',
-          paddingLeft: '44px',
-        }}
-      >
+      <div className="flex gap-1.5 items-center flex-wrap bg-canvas border-b border-line pl-11 pr-2.5 py-1.5">
         {remoteRes && (
-          <span style={{ ...ctrlLabel, background: '#1e293b', border: '1px solid #334155', borderRadius: '4px', padding: '4px 8px' }}>
+          <span className={`${ctrlLabelClass} bg-surface border border-line rounded px-2 py-1`}>
             Dimensão: {remoteRes.w}×{remoteRes.h}
           </span>
         )}
-        <button style={ctrlBtn} onClick={handleReconnect} title="Reconectar">🔄 Reconectar</button>
-        <button style={ctrlBtn} onClick={toggleFullscreen} title={isFullscreen ? 'Sair da tela cheia' : 'Tela cheia'}>
-          {isFullscreen ? '⛶ Sair da tela' : '⛶ Tela cheia'}
+        <button className={ctrlBtnClass} onClick={handleReconnect} title="Reconectar">
+          <RefreshCw size={13} /> Reconectar
+        </button>
+        <button className={ctrlBtnClass} onClick={toggleFullscreen} title={isFullscreen ? 'Sair da tela cheia' : 'Tela cheia'}>
+          {isFullscreen ? <Minimize2 size={13} /> : <Maximize2 size={13} />}
+          {isFullscreen ? 'Sair da tela' : 'Tela cheia'}
         </button>
         <select
           title="Qualidade"
           value={quality}
           onChange={(e) => { const lv = parseInt(e.target.value, 10); setQuality(lv); sendQuality(lv); }}
-          style={{ ...ctrlBtn, padding: '5px 8px' }}
+          className={`${ctrlBtnClass} py-1.5`}
         >
           {QUALITY_LEVELS.map((q) => (
             <option key={q.level} value={q.level}>Qualidade: {q.label}</option>
           ))}
         </select>
-        <button style={{ ...ctrlBtn, color: '#f87171', borderColor: '#7f1d1d' }} onClick={handleDisconnect} title="Desconectar">⏹ Desconectar</button>
-        <span style={{ flex: 1 }} />
-        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '5px', ...ctrlLabel }}>
-          <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: health.color, display: 'inline-block' }} />
+        <button
+          className={`${ctrlBtnClass} text-danger border-danger/40 border-l ml-1 pl-2.5`}
+          onClick={handleDisconnect}
+          title="Desconectar"
+        >
+          <PowerOff size={13} /> Desconectar
+        </button>
+        <div className="flex-1" />
+        <span className={`inline-flex items-center gap-1.5 ${ctrlLabelClass}`}>
+          <span className={`w-2 h-2 rounded-full inline-block ${health.color}`} />
           {health.label}
           {pingMs !== null && <span>· {pingMs}ms</span>}
         </span>
-        <span style={ctrlLabel}>{machine.name} · {machine.mask || `${machine.host}:${machine.port}`}</span>
+        <span className={ctrlLabelClass}>{machine.name} · {machine.mask || `${machine.host}:${machine.port}`}</span>
       </div>
 
       {/* Canvas viewport */}
-      <div style={{ flex: 1, position: 'relative' }}>
+      <div className="flex-1 relative">
         <iframe
           key={iframeKey}
           ref={iframeRef}
           src={viewerUrl}
-          style={{ width: '100%', height: '100%', border: 'none', display: 'block' }}
+          className="w-full h-full border-none block"
           title={`VNC - ${machine.name}`}
         />
       </div>

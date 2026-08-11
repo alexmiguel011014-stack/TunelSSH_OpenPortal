@@ -9,13 +9,13 @@ const REQUEST_TIMEOUT = 15000;
 const MAX_ATTEMPTS = 3;
 const RETRY_DELAY = 5000;
 
-// Emite 'tunnel-open'/'tunnel-close' (com o req da conexão) quando um
-// pedido aprovado vira túnel de arquivos — usado pelo main.js para mostrar
-// o aviso "alguém está conectado". É uma aproximação: a sessão VNC em si
-// (porta 5900) fala direto com o TightVNC, sem passar por este servidor,
-// então não há como observar seu início/fim de verdade — mas como o
-// App.jsx abre e fecha o túnel junto com a sessão VNC (mesmo clique de
-// conectar/desconectar), esse sinal reflete bem a sessão na prática.
+// Emite 'file-session-open'/'file-session-close' (com o req da conexão)
+// quando um pedido aprovado vira sessão de arquivos — usado pelo main.js
+// para mostrar o aviso "alguém está conectado". É uma aproximação: a sessão
+// VNC em si (porta 5900) fala direto com o TightVNC, sem passar por este
+// servidor, então não há como observar seu início/fim de verdade — mas como
+// o App.jsx abre e fecha a sessão de arquivos junto com a sessão VNC (mesmo
+// clique de conectar/desconectar), esse sinal reflete bem a sessão na prática.
 class ConnectionRequestServer extends EventEmitter {
   constructor(onRequest) {
     super();
@@ -30,12 +30,14 @@ class ConnectionRequestServer extends EventEmitter {
       socket.setNoDelay(true);
       let buffer = Buffer.alloc(0);
 
-      // Upgrade: depois de aprovar um pedido com capability:'tunnel', o
-      // socket NÃO é fechado — vira o transporte multiplexado de
-      // transferência de arquivos (ver file-agent.js / protocol.js). Isso
-      // evita abrir uma porta TCP nova (e a regra de firewall que ela
-      // exigiria): reaproveita esta conexão, que o Windows já deixa passar.
-      const upgradeToTunnel = (req) => {
+      // Upgrade: depois de aprovar um pedido com capability:'tunnel' (nome
+      // de campo do wire-protocol, mantido por estabilidade — ver
+      // file-transfer-session.js para a sessão de arquivos em si), o socket
+      // NÃO é fechado — vira o transporte multiplexado de transferência de
+      // arquivos (ver file-agent.js / protocol.js). Isso evita abrir uma
+      // porta TCP nova (e a regra de firewall que ela exigiria): reaproveita
+      // esta conexão, que o Windows já deixa passar.
+      const upgradeToFileSession = (req) => {
         socket.removeListener('data', dataHandler);
         const session = new FileAgentSession(socket, os.homedir());
         const decoder = new FrameDecoder();
@@ -45,16 +47,16 @@ class ConnectionRequestServer extends EventEmitter {
             session.handleFrame(frame).catch(() => {});
           }
         });
-        this.emit('tunnel-open', req);
+        this.emit('file-session-open', req);
         let closed = false;
-        const onTunnelEnd = () => {
+        const onFileSessionEnd = () => {
           if (closed) return;
           closed = true;
           session.destroy();
-          this.emit('tunnel-close', req);
+          this.emit('file-session-close', req);
         };
-        socket.on('close', onTunnelEnd);
-        socket.on('error', onTunnelEnd);
+        socket.on('close', onFileSessionEnd);
+        socket.on('error', onFileSessionEnd);
       };
 
       const dataHandler = (d) => {
@@ -83,7 +85,7 @@ class ConnectionRequestServer extends EventEmitter {
               : { ...payload, rejected: !approved };
             socket.write(JSON.stringify(finalPayload));
             if (wantsTunnel && approved) {
-              upgradeToTunnel(req);
+              upgradeToFileSession(req);
             } else {
               socket.end();
             }
@@ -179,8 +181,8 @@ function sendConnectRequestOnce(host, fromName, fromIp, port = SIGNAL_PORT, opts
         return;
       }
 
-      // Túnel aprovado: NÃO destrói o socket, ele vira o transporte de
-      // arquivos (ver tunnel-manager.js / file-client.js).
+      // Sessão de arquivos aprovada: NÃO destrói o socket, ele vira o
+      // transporte de arquivos (ver file-transfer-session.js / file-client.js).
       if (wantsTunnel && msg.approved && msg.tunnel) {
         socket.removeAllListeners('data');
         socket.removeAllListeners('error');

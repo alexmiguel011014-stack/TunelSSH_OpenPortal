@@ -1,0 +1,46 @@
+:root,
+html[data-theme="dark"] {
+  --color-bg-canvas: 15 23 42;
+  --color-bg-surface: 30 41 59;
+  --color-bg-surface-2: 51 65 85;
+  --color-bg-inset: 15 23 42;
+
+  --color-border: 51 65 85;
+  --color-border-subtle: 30 41 59;
+
+  --color-text-primary: 241 245 249;
+  --color-text-secondary: 203 213 225;
+  --color-text-muted: 148 163 184;
+  --color-text-faint: 100 116 139;
+
+  --color-accent: 59 130 246;
+  --color-accent-strong: 37 99 235;
+
+  --color-success: 34 197 94;
+  --color-warning: 245 158 11;
+  --color-danger: 239 68 68;
+  --color-info: 148 163 184;
+}
+
+html[data-theme="light"] {
+  --color-bg-canvas: 238 242 247;
+  --color-bg-surface: 255 255 255;
+  --color-bg-surface-2: 226 232 240;
+  --color-bg-inset: 241 245 249;
+
+  --color-border: 203 213 225;
+  --color-border-subtle: 226 232 240;
+
+  --color-text-primary: 15 23 42;
+  --color-text-secondary: 51 65 85;
+  --color-text-muted: 100 116 139;
+  --color-text-faint: 148 163 184;
+
+  --color-accent: 37 99 235;
+  --color-accent-strong: 29 78 216;
+
+  --color-success: 22 163 74;
+  --color-warning: 217 119 6;
+  --color-danger: 220 38 38;
+  --color-info: 100 116 139;
+}

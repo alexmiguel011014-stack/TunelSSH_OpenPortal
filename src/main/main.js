@@ -1,91 +1,24 @@
-const { app, BrowserWindow, Menu, ipcMain, globalShortcut, dialog, screen } = require('electron');
-const path = require('path');
-const fs = require('fs');
-let _autoUpdater = null;
-function getAutoUpdater() {
-  if (!_autoUpdater) {
-    _autoUpdater = require('electron-updater').autoUpdater;
-  }
-  return _autoUpdater;
-}
+const { app, BrowserWindow, ipcMain, globalShortcut } = require('electron');
+const { initLogging } = require('./logging');
+const { createMainWindow } = require('./windows/main-window');
+const { onFileSessionOpen, onFileSessionClose } = require('./windows/control-banner');
+const { showUpdateProgress, closeUpdateProgress, sendToUpdateWindow, isUpdateProgressOpen } = require('./windows/update-progress');
+const { initAutoUpdater } = require('./updater/auto-updater');
+const { buildAppMenu } = require('./app-menu');
 const { startWebSocketProxy } = require('./connection/proxy');
 const { registerIpcHandlers } = require('./core/ipc-handlers');
 const { ConnectionRequestServer } = require('./connection/connection-request');
 const { registerFileTransferIpc } = require('./file-transfer/ipc');
-const { MockRemoteServer } = require('./mock-server');
 
-// Configuração de logs em arquivo (diretório oficial de dados do usuário,
-// pois __dirname falha quando empacotado dentro do arquivo .asar)
-const logsDir = path.join(app.getPath('userData'), 'logs');
-if (!fs.existsSync(logsDir)) {
-  fs.mkdirSync(logsDir, { recursive: true });
-}
-const outLogPath = path.join(logsDir, 'electron-out.log');
-const errLogPath = path.join(logsDir, 'electron-err.log');
-
-console.log('[main] Log files:', outLogPath);
-console.error('[main] Log files:', errLogPath);
-
-// Rotação simples: acima de 5 MB o log vira .1 e recomeça, para o diretório de
-// dados do usuário não crescer sem limite em produção.
-const MAX_LOG_BYTES = 5 * 1024 * 1024;
-
-function rotateIfNeeded(filePath) {
-  try {
-    if (fs.existsSync(filePath) && fs.statSync(filePath).size > MAX_LOG_BYTES) {
-      fs.rmSync(filePath + '.1', { force: true });
-      fs.renameSync(filePath, filePath + '.1');
-    }
-  } catch {}
-}
-
-rotateIfNeeded(outLogPath);
-rotateIfNeeded(errLogPath);
-
-const outStream = fs.createWriteStream(outLogPath, { flags: 'a' });
-const errStream = fs.createWriteStream(errLogPath, { flags: 'a' });
-outStream.on('error', () => {});
-errStream.on('error', () => {});
-
-function writeLog(stream, prefix, args) {
-  const msg = args.map(arg => {
-    if (arg instanceof Error) return arg.stack;
-    return typeof arg === 'object' ? JSON.stringify(arg, null, 2) : arg;
-  }).join(' ');
-  const formatted = `[${new Date().toISOString()}] ${prefix}: ${msg}\n`;
-  // Em app empacotado no Windows não há console anexado: escrever em
-  // process.stdout pode lançar EPIPE/EBADF e derrubar o processo.
-  try { stream.write(formatted); } catch {}
-  try { process.stdout.write(formatted); } catch {}
-}
-
-console.log = (...args) => writeLog(outStream, 'INFO', args);
-console.error = (...args) => writeLog(errStream, 'ERROR', args);
-
-process.on('uncaughtException', (err) => {
-  console.error('Uncaught Exception:', err);
-});
-
-process.on('unhandledRejection', (reason, promise) => {
-  console.error('Unhandled Rejection at:', promise, 'reason:', reason);
-});
+initLogging();
 
 let mainWindow = null;
 let wss = null;
 let requestServer = null;
-let mockServer = null; // Para testes locais
-let controlBannerWindow = null;
-let activeSessionCount = 0; // protege o banner contra 2 sessões simultâneas
-let updateProgressWindow = null;
-let isUserTriggeredUpdate = false;
-let pendingUpdateInfo = null;
-let updateConfirmed = false;
-let dismissedVersion = null; // versão que o usuário já recusou — não perguntar de novo sozinho
-let promptOpen = false; // evita dois dialogs de update simultâneos (check manual + periódico)
+let updater = null;
 
 const isDev = process.env.NODE_ENV === 'development';
 const PROXY_PORT = 18900;
-const USE_MOCK = process.env.OPENPORTAL_MOCK === 'true'; // Ativar com: OPENPORTAL_MOCK=true npm run dev
 const UPDATE_CHECK_INTERVAL_MS = parseInt(process.env.OPENPORTAL_UPDATE_INTERVAL_MS || (isDev ? (5 * 60 * 1000) : (15 * 60 * 1000)), 10);
 const ALLOW_PRERELEASE = process.env.OPENPORTAL_ALLOW_PRERELEASE !== 'false';
 
@@ -101,119 +34,8 @@ const portStatus = {
   signal: { port: 18902, listening: false, error: null },
 };
 
-function createWindow() {
-  console.log('[main] Creating window...');
-
-  mainWindow = new BrowserWindow({
-    width: 1400,
-    height: 900,
-    minWidth: 900,
-    minHeight: 600,
-    title: 'OpenPortal Remote',
-    backgroundColor: '#0f172a',
-    autoHideMenuBar: true,
-    webPreferences: {
-      preload: path.join(__dirname, 'preload.js'),
-      contextIsolation: true,
-      nodeIntegration: false,
-      enableRemoteModule: false,
-    },
-  });
-  mainWindow.setMenuBarVisibility(false);
-
-  if (isDev) {
-    mainWindow.loadURL('http://127.0.0.1:5173');
-
-    mainWindow.webContents.on('console-message', (event, level, message) => {
-      const levels = ['verbose', 'info', 'warning', 'error'];
-      if (level >= 2) {
-        console.error(`[renderer ${levels[level]}] ${message}`);
-      } else {
-        console.log(`[renderer ${levels[level]}] ${message}`);
-      }
-    });
-  } else {
-    mainWindow.loadFile(path.join(__dirname, '..', '..', 'dist', 'renderer', 'index.html'));
-  }
-
-  // Prevent page zoom from affecting sidebar
-  mainWindow.webContents.on('zoom-changed', () => {
-    mainWindow.webContents.setZoomLevel(0);
-  });
-
-  mainWindow.on('closed', () => {
-    mainWindow = null;
-  });
-}
-
-// Daily update check timer
-let updateInterval = null;
-
-function startDailyUpdateCheck() {
-  if (!isDev) {
-    const intervalMs = UPDATE_CHECK_INTERVAL_MS;
-    console.log(`[auto-update] Periodic check every ${Math.round(intervalMs / 60000)} min`);
-    updateInterval = setInterval(() => {
-      console.log('[auto-update] Periodic check: checking for updates...');
-      getAutoUpdater().checkForUpdates();
-    }, intervalMs);
-  }
-}
-
-function closeUpdateProgressWindow() {
-  if (updateProgressWindow && !updateProgressWindow.isDestroyed()) {
-    updateProgressWindow.close();
-  }
-  updateProgressWindow = null;
-}
-
-function createUpdateProgressWindow() {
-  closeUpdateProgressWindow();
-  const win = new BrowserWindow({
-    width: 420, height: 300, resizable: false,
-    title: 'Atualização', backgroundColor: '#0f172a',
-    webPreferences: { nodeIntegration: false, contextIsolation: true }
-  });
-  win.loadFile(path.join(__dirname, '..', '..', 'resources', 'update-progress.html'));
-  win.on('closed', () => { updateProgressWindow = null; });
-  updateProgressWindow = win;
-}
-
-// Aviso persistente "alguém está conectado" enquanto uma sessão de túnel
-// recebida está ativa (ver comentário em ConnectionRequestServer sobre a
-// aproximação usada). Janela pequena, sempre no topo, canto superior
-// direito — não bloqueia o uso do PC, só avisa.
-function showControlBanner(fromName) {
-  if (controlBannerWindow && !controlBannerWindow.isDestroyed()) {
-    controlBannerWindow.webContents.executeJavaScript(`setName(${JSON.stringify(fromName || '')})`).catch(() => {});
-    return;
-  }
-  const { width: screenW } = screen.getPrimaryDisplay().workAreaSize;
-  const winWidth = 300;
-  const win = new BrowserWindow({
-    width: winWidth, height: 64,
-    x: screenW - winWidth - 12, y: 12,
-    resizable: false, movable: true, frame: false,
-    alwaysOnTop: true, skipTaskbar: true, transparent: true,
-    backgroundColor: '#00000000',
-    webPreferences: { nodeIntegration: false, contextIsolation: true }
-  });
-  win.setAlwaysOnTop(true, 'screen-saver');
-  win.loadFile(path.join(__dirname, '..', '..', 'resources', 'control-banner.html')).then(() => {
-    win.webContents.executeJavaScript(`setName(${JSON.stringify(fromName || '')})`).catch(() => {});
-  }).catch(() => {});
-  win.on('closed', () => { controlBannerWindow = null; });
-  controlBannerWindow = win;
-}
-
-function hideControlBanner() {
-  if (controlBannerWindow && !controlBannerWindow.isDestroyed()) {
-    controlBannerWindow.close();
-  }
-  controlBannerWindow = null;
-}
-
 function handleConnectionRequest(req, respond) {
+  const { dialog } = require('electron');
   const parent = (mainWindow && !mainWindow.isDestroyed()) ? mainWindow : undefined;
   const detail = req.capability === 'tunnel'
     ? `IP de origem: ${req.fromIp || 'desconhecido'}\n\nEsse PC poderá ver sua tela e listar, enviar e receber arquivos deste computador. Essa permissão não fica salva — será pedida de novo na próxima vez.\n\nAceita a conexão?`
@@ -232,128 +54,13 @@ function handleConnectionRequest(req, respond) {
   show.then(({ response }) => finish(response === 0)).catch(() => finish(false));
 }
 
-function updateWinJS(code) {
-  if (updateProgressWindow && !updateProgressWindow.isDestroyed()) {
-    updateProgressWindow.webContents.executeJavaScript(code).catch(() => {});
-  }
-}
-
-function beginUpdateDownload(info) {
-  updateConfirmed = true;
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.hide();
-  }
-  if (!updateProgressWindow || updateProgressWindow.isDestroyed()) {
-    createUpdateProgressWindow();
-  }
-  updateWinJS(`addLog('Baixando v${info.version}...')`);
-  updateWinJS(`setStatus('Baixando v${info.version}...')`);
-  updateWinJS('setProgress(0)');
-  getAutoUpdater().downloadUpdate();
-}
-
-function promptUpdate(info) {
-  // Sem isso, o check automático (a cada 15 min) reabre o mesmo popup
-  // repetidamente — tanto para uma versão já recusada quanto em cima de
-  // um prompt/download já em andamento (ex.: check manual concorrente).
-  if (promptOpen || updateConfirmed) return;
-  if (!isUserTriggeredUpdate && info.version === dismissedVersion) return;
-
-  const options = {
-    type: 'info',
-    title: 'Atualização disponível',
-    message: `Nova versão ${info.version} disponível.`,
-    detail: 'Deseja baixar e instalar agora? O aplicativo será fechado durante a instalação e reaberto automaticamente ao final.',
-    buttons: ['Baixar agora', 'Agora não'],
-    defaultId: 0,
-    cancelId: 1
-  };
-  const target = (mainWindow && !mainWindow.isDestroyed()) ? mainWindow : null;
-  if (!target) {
-    beginUpdateDownload(info);
-    return;
-  }
-  promptOpen = true;
-  dialog.showMessageBox(target, options).then(({ response }) => {
-    promptOpen = false;
-    if (response === 0) {
-      beginUpdateDownload(info);
-    } else {
-      dismissedVersion = info.version;
-      closeUpdateProgressWindow();
-      isUserTriggeredUpdate = false;
-    }
-  }).catch(() => {
-    promptOpen = false;
-    closeUpdateProgressWindow();
-    isUserTriggeredUpdate = false;
-  });
-}
-
-function buildAppMenu() {
-  const template = [
-    {
-      label: 'File',
-      submenu: [
-        { role: 'quit', label: 'Sair' }
-      ]
-    },
-    {
-      label: 'Edit',
-      submenu: [
-        { role: 'undo', label: 'Desfazer' },
-        { role: 'redo', label: 'Refazer' },
-        { type: 'separator' },
-        { role: 'cut', label: 'Recortar' },
-        { role: 'copy', label: 'Copiar' },
-        { role: 'paste', label: 'Colar' },
-        { role: 'selectAll', label: 'Selecionar Tudo' }
-      ]
-    },
-    {
-      label: 'View',
-      submenu: [
-        { role: 'reload', label: 'Recarregar' },
-        { role: 'forceReload', label: 'Forçar Recarga' },
-        { role: 'toggleDevTools', label: 'Ferramentas do Desenvolvedor' },
-        { type: 'separator' },
-        { role: 'resetZoom', label: 'Zoom Padrão' },
-        { role: 'zoomIn', label: 'Aumentar Zoom' },
-        { role: 'zoomOut', label: 'Diminuir Zoom' },
-        { type: 'separator' },
-        { role: 'togglefullscreen', label: 'Tela Cheia' }
-      ]
-    },
-    {
-      label: 'Help',
-      submenu: [
-        {
-          label: 'Ferramentas do Desenvolvedor',
-          accelerator: 'F12',
-          click: () => {
-            if (mainWindow && !mainWindow.isDestroyed()) {
-              if (mainWindow.webContents.isDevToolsOpened()) {
-                mainWindow.webContents.closeDevTools();
-              } else {
-                mainWindow.webContents.openDevTools({ mode: 'detach' });
-              }
-            }
-          }
-        }
-      ]
-    }
-  ];
-
-  const menu = Menu.buildFromTemplate(template);
-  Menu.setApplicationMenu(menu);
-}
-
 app.whenReady().then(() => {
   console.log('[main] App ready, starting...');
   console.log('[main] Proxy port:', PROXY_PORT);
-  if (USE_MOCK) console.log('[main] MOCK SERVER ENABLED (porta 18903)');
 
-  buildAppMenu();
+  mainWindow = createMainWindow(isDev);
+  buildAppMenu(() => mainWindow);
+
   wss = startWebSocketProxy(PROXY_PORT);
   wss.on('listening', () => { portStatus.proxy.listening = true; portStatus.proxy.error = null; });
   wss.on('error', (err) => {
@@ -372,40 +79,11 @@ app.whenReady().then(() => {
       ? `Porta ${portStatus.signal.port} já está em uso (outra instância do app rodando?)`
       : err.message;
   });
-  requestServer.on('tunnel-open', (req) => {
-    activeSessionCount += 1;
-    showControlBanner(req?.fromName);
-  });
-  requestServer.on('tunnel-close', () => {
-    activeSessionCount = Math.max(0, activeSessionCount - 1);
-    if (activeSessionCount === 0) hideControlBanner();
-  });
+  requestServer.on('file-session-open', (req) => onFileSessionOpen(req?.fromName));
+  requestServer.on('file-session-close', () => onFileSessionClose());
 
-  // Iniciar mock server se habilitado (teste local)
-  if (USE_MOCK) {
-    mockServer = new MockRemoteServer(18903);
-    mockServer.start();
-  }
-
-  createWindow();
   registerIpcHandlers(mainWindow);
   registerFileTransferIpc(mainWindow);
-
-  // Mock server controls (para testes locais)
-  ipcMain.handle('mock:setMode', (_, mode) => {
-    if (!mockServer) {
-      return { success: false, message: 'Mock server não está ativo. Feche o app e reabra com TESTE_LOCAL.bat' };
-    }
-    mockServer.setMode(mode);
-    return { success: true, message: `Mock server agora em modo: ${mode}` };
-  });
-
-  ipcMain.handle('mock:getStatus', () => {
-    if (!mockServer) {
-      return { active: false };
-    }
-    return { active: true, mode: mockServer.mode, listening: mockServer.listening, error: mockServer.lastError };
-  });
 
   // Diagnóstico completo de portas/servidores locais, para o painel de
   // Configurações mostrar status real (sem precisar ler log de terminal).
@@ -413,25 +91,18 @@ app.whenReady().then(() => {
     return {
       proxy: { ...portStatus.proxy },
       signal: { ...portStatus.signal },
-      mock: mockServer
-        ? { active: true, port: mockServer.port, listening: mockServer.listening, mode: mockServer.mode, error: mockServer.lastError }
-        : { active: false }
     };
   });
 
-  ipcMain.handle('app:checkUpdate', () => {
-    if (isDev) {
-      return { checking: false, message: 'Auto-update only in production' };
-    }
-    isUserTriggeredUpdate = true;
-    if (!updateProgressWindow || updateProgressWindow.isDestroyed()) {
-      createUpdateProgressWindow();
-    }
-    updateWinJS("addLog('Verificando atualizações...')");
-    updateWinJS("setStatus('Verificando...')");
-    getAutoUpdater().checkForUpdates();
-    return { checking: true };
+  updater = initAutoUpdater({
+    getMainWindow: () => mainWindow,
+    isDev,
+    allowPrerelease: ALLOW_PRERELEASE,
+    updateCheckIntervalMs: UPDATE_CHECK_INTERVAL_MS,
+    windows: { showUpdateProgress, closeUpdateProgress, sendToUpdateWindow, isUpdateProgressOpen },
   });
+
+  ipcMain.handle('app:checkUpdate', () => updater.checkForUpdatesManually());
 
   globalShortcut.register('F12', () => {
     if (mainWindow && !mainWindow.isDestroyed()) {
@@ -457,89 +128,8 @@ app.whenReady().then(() => {
     }
   });
 
-  if (!isDev) {
-    const autoUpdater = getAutoUpdater();
-    autoUpdater.logger = console;
-    autoUpdater.autoDownload = false;
-    autoUpdater.allowPrerelease = ALLOW_PRERELEASE;
-    autoUpdater.setFeedURL({
-      provider: 'github',
-      owner: 'alexmiguel011014-stack',
-      repo: 'TunelSSH_OpenPortal'
-    });
-    autoUpdater.checkForUpdates();
-    startDailyUpdateCheck();
-
-    autoUpdater.on('checking-for-update', () => {
-      console.log('[auto-update] Checking for updates...');
-    });
-
-    autoUpdater.on('update-available', (info) => {
-      console.log('[auto-update] Update available:', info.version);
-      pendingUpdateInfo = info;
-      promptUpdate(info);
-    });
-
-    autoUpdater.on('update-not-available', (info) => {
-      console.log('[auto-update] No update available');
-      if (isUserTriggeredUpdate) {
-        updateWinJS("addLog('Nenhuma atualização disponível')");
-        updateWinJS("setStatus('Sistema atualizado')");
-        setTimeout(() => {
-          closeUpdateProgressWindow();
-          dialog.showMessageBox(mainWindow, {
-            type: 'info',
-            title: 'Atualizações',
-            message: 'Nenhuma atualização disponível. O sistema está atualizado.',
-            buttons: ['OK']
-          });
-          isUserTriggeredUpdate = false;
-        }, 1500);
-      }
-    });
-
-    autoUpdater.on('download-progress', (progress) => {
-      const pct = Math.round(progress.percent);
-      const speed = (progress.bytesPerSecond / 1024).toFixed(0);
-      console.log(`[auto-update] Download: ${pct}% (${speed} KB/s)`);
-      updateWinJS(`setProgress(${pct})`);
-      updateWinJS(`addLog('Download: ${pct}% (${speed} KB/s)')`);
-    });
-
-    autoUpdater.on('update-downloaded', (info) => {
-      console.log('[auto-update] Update downloaded:', info.version);
-      updateWinJS(`addLog('Versão ${info.version} baixada com sucesso')`);
-      updateWinJS("setStatus('Reiniciando...')");
-      setTimeout(() => {
-        closeUpdateProgressWindow();
-        isUserTriggeredUpdate = false;
-        autoUpdater.quitAndInstall();
-      }, 2000);
-    });
-
-    autoUpdater.on('error', (err) => {
-      console.log('[auto-update] Erro:', err.message);
-      if (isUserTriggeredUpdate || (updateProgressWindow && !updateProgressWindow.isDestroyed())) {
-        updateWinJS(`addLog('Erro: ${err.message.replace(/'/g, "\\'")}')`);
-        setTimeout(() => {
-          closeUpdateProgressWindow();
-          if (mainWindow && !mainWindow.isDestroyed()) {
-            mainWindow.show();
-          }
-          dialog.showMessageBox(mainWindow, {
-            type: 'error',
-            title: 'Erro de Atualização',
-            message: `Erro ao verificar atualizações: ${err.message}`,
-            buttons: ['OK']
-          });
-          isUserTriggeredUpdate = false;
-        }, 2000);
-      }
-    });
-  }
-
   app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+    if (BrowserWindow.getAllWindows().length === 0) mainWindow = createMainWindow(isDev);
   });
 
   app.on('second-instance', () => {
@@ -554,6 +144,6 @@ app.on('window-all-closed', () => {
   globalShortcut.unregisterAll();
   if (wss) wss.close();
   if (requestServer) requestServer.stop();
-  if (updateInterval) clearInterval(updateInterval);
+  if (updater) updater.stop();
   if (process.platform !== 'darwin') app.quit();
 });

@@ -1,6 +1,6 @@
 import { useContext, useState } from 'react';
+import { ArrowLeft, Check, XCircle, AlertTriangle } from 'lucide-react';
 import { MachineContext } from '../../App';
-import MockPanel from '../debug/MockPanel';
 
 const MAX_PORT = 65535;
 
@@ -33,12 +33,12 @@ export default function ConfigPanel() {
       setTestResults((prev) => ({ ...prev, [index]: res }));
       if (addLog) {
         if (res.ok) {
-          addLog(`✓ Teste OK: ${host}:${machine.port} acessível em ${res.ms}ms`, 'info');
+          addLog(`Teste OK: ${host}:${machine.port} acessível em ${res.ms}ms`, 'info');
         } else {
           const hint = res.error?.includes('ECONNREFUSED') ? ' (VNC não está rodando?)' :
                        res.error?.includes('ENOTFOUND') ? ' (IP não resolvido ou offline)' :
                        res.error?.includes('ETIMEDOUT') ? ' (Tailscale não alcança?)' : '';
-          addLog(`✗ Teste falhou: ${host}:${machine.port} (${res.error})${hint}`, 'warn');
+          addLog(`Teste falhou: ${host}:${machine.port} (${res.error})${hint}`, 'warn');
         }
       }
     } catch (err) {
@@ -113,22 +113,18 @@ export default function ConfigPanel() {
   return (
     <div className="flex-1 overflow-y-auto p-8">
       <div className="max-w-2xl mx-auto">
-        <div className="mb-6">
-          <MockPanel />
-        </div>
-
         <div className="flex items-center justify-between mb-8">
           <div>
-            <h2 className="text-2xl font-semibold text-slate-100">Configurações</h2>
-            <p className="text-sm text-slate-400 mt-1">
+            <h2 className="text-2xl font-semibold text-text-primary">Configurações</h2>
+            <p className="text-sm text-text-muted mt-1">
               Configure os PCs remotos ({draft.length}/{maxMachines})
             </p>
           </div>
           <button
             onClick={() => setShowConfig(false)}
-            className="px-4 py-2 text-sm text-slate-400 hover:text-white transition-colors"
+            className="flex items-center gap-1.5 px-4 py-2 text-sm text-text-muted hover:text-text-primary transition-colors"
           >
-            ← Voltar
+            <ArrowLeft size={16} /> Voltar
           </button>
         </div>
 
@@ -136,14 +132,14 @@ export default function ConfigPanel() {
           {draft.map((machine, index) => (
             <div
               key={machine.id}
-              className={`bg-slate-800 rounded-xl p-5 border relative ${errors[index] ? 'border-red-700' : 'border-slate-700'}`}
+              className={`bg-surface rounded-xl p-5 border relative ${errors[index] ? 'border-danger/60' : 'border-line'}`}
             >
               <div className="flex items-center justify-between mb-4">
-                <h3 className="text-sm font-medium text-slate-300">{machine.name || `PC ${index + 1}`}</h3>
+                <h3 className="text-sm font-medium text-text-secondary">{machine.name || `PC ${index + 1}`}</h3>
                 {draft.length > 1 && (
                   <button
                     onClick={() => handleRemoveLocal(index)}
-                    className="text-xs text-red-400 hover:text-red-300 transition-colors bg-transparent border border-red-800/50 rounded px-2 py-1"
+                    className="text-xs text-danger hover:opacity-80 transition-opacity bg-transparent border border-danger/40 rounded px-2 py-1"
                   >
                     Remover
                   </button>
@@ -151,29 +147,30 @@ export default function ConfigPanel() {
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                 <div>
-                  <label className="block text-xs text-slate-500 mb-1">Nome</label>
+                  <label className="block text-xs text-text-faint mb-1">Nome</label>
                   <input
                     type="text"
                     value={machine.name}
                     onChange={(e) => updateField(index, 'name', e.target.value)}
-                    className={`w-full bg-slate-900 border rounded-lg px-3 py-2 text-sm text-slate-100 focus:outline-none focus:border-blue-500 transition-colors ${errors[index] && !machine.name.trim() ? 'border-red-600' : 'border-slate-600'}`}
+                    className={`w-full bg-inset border rounded-lg px-3 py-2 text-sm text-text-primary focus:outline-none focus:border-accent transition-colors ${errors[index] && !machine.name.trim() ? 'border-danger' : 'border-line'}`}
                     placeholder="Ex.: PC da Sala"
                   />
                 </div>
                 <div>
-                  <label className="block text-xs text-slate-500 mb-1">IP Tailscale</label>
+                  <label className="block text-xs text-text-faint mb-1">IP Tailscale</label>
                   <input
                     type="text"
                     value={machine.host}
                     onChange={(e) => updateField(index, 'host', e.target.value)}
-                    className={`w-full bg-slate-900 border rounded-lg px-3 py-2 text-sm text-slate-100 font-mono focus:outline-none focus:border-blue-500 transition-colors ${errors[index] && machine.host && !isValidHost(machine.host) ? 'border-red-600' : 'border-slate-600'}`}
+                    className={`w-full bg-inset border rounded-lg px-3 py-2 text-sm text-text-primary font-mono focus:outline-none focus:border-accent transition-colors ${errors[index] && machine.host && !isValidHost(machine.host) ? 'border-danger' : 'border-line'}`}
                     placeholder="100.x.x.x"
                   />
                   {testResults[index] && (
-                    <div className={`text-xs mt-1 ${testResults[index].ok ? 'text-green-400' : 'text-red-400'}`}>
+                    <div className={`flex items-center gap-1 text-xs mt-1 ${testResults[index].ok ? 'text-success' : 'text-danger'}`}>
+                      {testResults[index].ok ? <Check size={12} /> : <XCircle size={12} />}
                       {testResults[index].ok
-                        ? `✓ Acessível em ${testResults[index].ms}ms`
-                        : `✗ Falhou: ${testResults[index].error}`}
+                        ? `Acessível em ${testResults[index].ms}ms`
+                        : `Falhou: ${testResults[index].error}`}
                     </div>
                   )}
                   <button
@@ -182,48 +179,48 @@ export default function ConfigPanel() {
                     disabled={testing[index] || !(machine.host || '').trim()}
                     className={`mt-2 text-xs px-3 py-1.5 rounded-lg border transition-colors ${
                       testing[index]
-                        ? 'border-slate-600 text-slate-400 cursor-wait'
-                        : 'border-slate-600 text-slate-300 hover:border-blue-500 hover:text-blue-400'
+                        ? 'border-line text-text-muted cursor-wait'
+                        : 'border-line text-text-secondary hover:border-accent hover:text-accent'
                     }`}
                   >
                     {testing[index] ? 'Testando...' : 'Testar conexão'}
                   </button>
                 </div>
                 <div>
-                  <label className="block text-xs text-slate-500 mb-1">Porta VNC</label>
+                  <label className="block text-xs text-text-faint mb-1">Porta VNC</label>
                   <input
                     type="number"
                     min="1"
                     max={MAX_PORT}
                     value={machine.port}
                     onChange={(e) => updateField(index, 'port', parseInt(e.target.value) || 5900)}
-                    className={`w-full bg-slate-900 border rounded-lg px-3 py-2 text-sm text-slate-100 font-mono focus:outline-none focus:border-blue-500 transition-colors ${errors[index] && (machine.port < 1 || machine.port > MAX_PORT) ? 'border-red-600' : 'border-slate-600'}`}
+                    className={`w-full bg-inset border rounded-lg px-3 py-2 text-sm text-text-primary font-mono focus:outline-none focus:border-accent transition-colors ${errors[index] && (machine.port < 1 || machine.port > MAX_PORT) ? 'border-danger' : 'border-line'}`}
                     placeholder="5900"
                   />
                   {[18900, 18901, 18902, 18903].includes(Number(machine.port)) && (
-                    <p className="text-xs text-amber-400 mt-1">
-                      ⚠️ Essa é uma porta interna do OpenPortal, não do VNC. Use 5900 (padrão do TightVNC).
+                    <p className="flex items-center gap-1 text-xs text-warning mt-1">
+                      <AlertTriangle size={12} /> Essa é uma porta interna do OpenPortal, não do VNC. Use 5900 (padrão do TightVNC).
                     </p>
                   )}
                 </div>
               </div>
               <div className="mt-4">
-                <label className="block text-xs text-slate-500 mb-1">Senha VNC (opcional)</label>
+                <label className="block text-xs text-text-faint mb-1">Senha VNC (opcional)</label>
                 <input
                   type="password"
                   value={machine.password || ''}
                   onChange={(e) => updateField(index, 'password', e.target.value)}
-                  className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-100 font-mono focus:outline-none focus:border-blue-500 transition-colors"
+                  className="w-full bg-inset border border-line rounded-lg px-3 py-2 text-sm text-text-primary font-mono focus:outline-none focus:border-accent transition-colors"
                   placeholder="Deixe em branco se não tiver senha"
                 />
-                <p className="text-xs text-slate-600 mt-1">
+                <p className="text-xs text-text-faint mt-1">
                   Se o VNC tiver senha, configure aqui. Será usada como fallback se a conexão for recusada.
                 </p>
               </div>
               {errors[index] && (
                 <ul className="mt-3 space-y-1">
                   {errors[index].map((err) => (
-                    <li key={err} className="text-xs text-red-400">• {err}</li>
+                    <li key={err} className="text-xs text-danger">• {err}</li>
                   ))}
                 </ul>
               )}
@@ -234,7 +231,7 @@ export default function ConfigPanel() {
         {draft.length < maxMachines && (
           <button
             onClick={handleAddLocal}
-            className="w-full mt-4 p-3 rounded-xl border-2 border-dashed border-slate-700 text-slate-400 text-sm hover:border-slate-500 hover:text-slate-300 transition-colors bg-transparent cursor-pointer"
+            className="w-full mt-4 p-3 rounded-xl border-2 border-dashed border-line text-text-muted text-sm hover:border-text-faint hover:text-text-secondary transition-colors bg-transparent cursor-pointer"
           >
             + Adicionar PC
           </button>
@@ -243,29 +240,30 @@ export default function ConfigPanel() {
         <div className="mt-8 flex items-center gap-4">
           <button
             onClick={handleSave}
-            className="px-6 py-2.5 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-sm font-medium transition-colors"
+            className="flex items-center gap-1.5 px-6 py-2.5 bg-accent hover:bg-accent-strong text-white rounded-lg text-sm font-medium transition-colors"
           >
-            {saved ? '✓ Salvo' : 'Salvar configuração'}
+            {saved && <Check size={16} />} {saved ? 'Salvo' : 'Salvar configuração'}
           </button>
           {saved && (
-            <span className="text-sm text-emerald-400">Configuração salva</span>
+            <span className="text-sm text-success">Configuração salva</span>
           )}
           {!saved && Object.keys(errors).length > 0 && (
-            <span className="text-sm text-red-400">Corrija os campos destacados antes de salvar</span>
+            <span className="text-sm text-danger">Corrija os campos destacados antes de salvar</span>
           )}
         </div>
 
-        <div className="mt-6 p-4 bg-slate-800/50 rounded-lg border border-slate-700/50">
-          <p className="text-xs text-slate-500">
+        <div className="mt-6 p-4 bg-surface/50 rounded-lg border border-line-subtle">
+          <p className="text-xs text-text-faint">
             Informe o IP Tailscale de cada PC remoto. O TightVNC Server deve
             estar rodando na porta 5900 (ou na porta informada). Máximo de {maxMachines} PC(s).
             Por segurança, só são aceitos IPs Tailscale (100.x) — fora do túnel Tailscale a conexão não é criptografada.
           </p>
         </div>
 
-        <div className="mt-3 p-4 bg-amber-900/10 rounded-lg border border-amber-800/30">
-          <p className="text-xs text-amber-400/90">
-            ⚠️ Se uma conexão nunca chegar (fica "Aguardando aprovação" até dar timeout), verifique se o
+        <div className="mt-3 p-4 bg-warning/10 rounded-lg border border-warning/30 flex gap-2">
+          <AlertTriangle size={14} className="text-warning shrink-0 mt-0.5" />
+          <p className="text-xs text-warning/90">
+            Se uma conexão nunca chegar (fica "Aguardando aprovação" até dar timeout), verifique se o
             Firewall do Windows não bloqueou o OpenPortal Remote no PC de destino — isso costuma acontecer
             na primeira vez que o app roda lá. Vá em Firewall do Windows → Permitir um aplicativo e confirme
             que o OpenPortal Remote está marcado para redes privadas.

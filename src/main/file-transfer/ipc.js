@@ -1,14 +1,14 @@
 'use strict';
 
 // IPC do módulo de transferência de arquivos: expõe o painel local (fs
-// direto) e o painel remoto (via túnel — ver tunnel-manager.js) ao
-// renderer, e roda a fila de lote (upload/download em massa) sequencial
-// com progresso por arquivo e por lote.
+// direto) e o painel remoto (via sessão de arquivos — ver
+// file-transfer-session.js) ao renderer, e roda a fila de lote
+// (upload/download em massa) sequencial com progresso por arquivo e por lote.
 const { ipcMain } = require('electron');
 const fs = require('fs');
 const path = require('path');
 const localFs = require('./local-fs');
-const tunnelManager = require('./tunnel-manager');
+const fileTransferSession = require('./file-transfer-session');
 
 function send(mainWindow, channel, data) {
   if (mainWindow && !mainWindow.isDestroyed()) {
@@ -84,7 +84,7 @@ function makeEmitter(mainWindow, batchId, phase, batchTotal) {
 }
 
 async function runUploadBatch(mainWindow, sessionId, jobs, batchId) {
-  const client = tunnelManager.getClient(sessionId);
+  const client = fileTransferSession.getClient(sessionId);
   const fileJobs = jobs.filter((j) => j.kind === 'file');
   const batchTotal = fileJobs.reduce((sum, j) => sum + j.size, 0);
   const tracker = makeEmitter(mainWindow, batchId, 'upload', batchTotal);
@@ -121,7 +121,7 @@ async function runUploadBatch(mainWindow, sessionId, jobs, batchId) {
 }
 
 async function runDownloadBatch(mainWindow, sessionId, jobs, batchId) {
-  const client = tunnelManager.getClient(sessionId);
+  const client = fileTransferSession.getClient(sessionId);
   const fileJobs = jobs.filter((j) => j.kind === 'file');
   const batchTotal = fileJobs.reduce((sum, j) => sum + j.size, 0);
   const tracker = makeEmitter(mainWindow, batchId, 'download', batchTotal);
@@ -196,7 +196,7 @@ function registerFileTransferIpc(mainWindow) {
   });
 
   // Cópia de arquivo/pasta externo (drag&drop vindo do Explorer do Windows)
-  // para dentro do painel local — não passa pelo túnel.
+  // para dentro do painel local — não passa pela sessão de arquivos remota.
   ipcMain.handle('fs:copyExternal', async (_, srcPaths, destDir) => {
     let ok = 0;
     const errors = [];
@@ -215,7 +215,7 @@ function registerFileTransferIpc(mainWindow) {
   ipcMain.handle('ft:connect', async (_, host, opts) => {
     try {
       send(mainWindow, 'ft:status', { host, state: 'connecting' });
-      const res = await tunnelManager.connect(host, opts || {});
+      const res = await fileTransferSession.connect(host, opts || {});
       send(mainWindow, 'ft:status', { host, state: 'connected', sessionId: res.sessionId });
       return { success: true, sessionId: res.sessionId, reused: res.reused };
     } catch (err) {
@@ -225,30 +225,30 @@ function registerFileTransferIpc(mainWindow) {
   });
 
   ipcMain.handle('ft:disconnect', (_, sessionId) => {
-    tunnelManager.disconnect(sessionId);
+    fileTransferSession.disconnect(sessionId);
     send(mainWindow, 'ft:status', { sessionId, state: 'disconnected' });
     return { success: true };
   });
 
   ipcMain.handle('ft:list', async (_, sessionId, virtualPath) => {
-    const entries = await tunnelManager.getClient(sessionId).list(virtualPath);
+    const entries = await fileTransferSession.getClient(sessionId).list(virtualPath);
     return { entries };
   });
 
   ipcMain.handle('ft:stat', async (_, sessionId, virtualPath) => {
-    return tunnelManager.getClient(sessionId).stat(virtualPath);
+    return fileTransferSession.getClient(sessionId).stat(virtualPath);
   });
 
   ipcMain.handle('ft:mkdir', async (_, sessionId, virtualPath) => {
-    return tunnelManager.getClient(sessionId).mkdir(virtualPath);
+    return fileTransferSession.getClient(sessionId).mkdir(virtualPath);
   });
 
   ipcMain.handle('ft:delete', async (_, sessionId, virtualPath) => {
-    return tunnelManager.getClient(sessionId).remove(virtualPath);
+    return fileTransferSession.getClient(sessionId).remove(virtualPath);
   });
 
   ipcMain.handle('ft:rename', async (_, sessionId, virtualPath, newVirtualPath) => {
-    return tunnelManager.getClient(sessionId).rename(virtualPath, newVirtualPath);
+    return fileTransferSession.getClient(sessionId).rename(virtualPath, newVirtualPath);
   });
 
   // --- Lote (upload/download em massa, sequencial, com progresso) ---
@@ -265,7 +265,7 @@ function registerFileTransferIpc(mainWindow) {
 
   ipcMain.handle('ft:downloadBatch', async (_, sessionId, { remotePaths, destDir, batchId }) => {
     try {
-      const client = tunnelManager.getClient(sessionId);
+      const client = fileTransferSession.getClient(sessionId);
       const jobs = await expandRemoteDownloadJobs(client, remotePaths, destDir);
       const result = await runDownloadBatch(mainWindow, sessionId, jobs, batchId);
       return { success: true, ...result };

@@ -1,24 +1,14 @@
 import { useState, useContext } from 'react';
+import { Monitor } from 'lucide-react';
 import { MachineContext } from '../../App';
 import { isPrivateNetworkHost } from '../../shared/lib/net';
 
-const card = {
-  background: '#1e293b', borderRadius: '8px', border: '1px solid #334155',
-  padding: '18px', marginBottom: '16px'
-};
-const btn = {
-  padding: '6px 14px', borderRadius: '4px', border: '1px solid #475569',
-  background: '#1e293b', color: '#e2e8f0', cursor: 'pointer', fontSize: '12px'
-};
-const sectionTitle = {
-  fontSize: '12px', fontWeight: 600, marginBottom: '12px', textTransform: 'uppercase',
-  letterSpacing: '0.5px', color: '#94a3b8'
-};
+const sectionTitle = 'text-xs font-semibold mb-3 uppercase tracking-wide text-text-muted';
 
 // Mescla entradas consecutivas do mesmo PC (name+host) em uma só linha com
-// contador — evita poluir a lista quando o mock aprova/desconecta em
-// sequência rápida (sem VNC real por trás, isso gera várias linhas por
-// tentativa).
+// contador — evita poluir a lista quando uma conexão aprova/desconecta em
+// sequência rápida (ex.: retentativas), o que geraria várias linhas por
+// tentativa.
 function groupHistory(history) {
   const reversed = history.slice().reverse();
   const groups = [];
@@ -73,105 +63,88 @@ export default function Dashboard({ onConnect }) {
   const availableMachines = machines ? machines.filter(m => m.host) : [];
 
   return (
-    <div style={{
-      flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-      background: '#0f172a', color: '#e2e8f0', padding: '40px', overflow: 'auto'
-    }}>
-      <div style={{ maxWidth: '600px', width: '100%' }}>
-        <h1 style={{ fontSize: '24px', fontWeight: 300, marginBottom: '8px', color: '#e2e8f0' }}>OpenPortal Remote</h1>
-        <p style={{ fontSize: '14px', color: '#64748b', marginBottom: '24px' }}>
-          Acesso remoto seguro via Tailscale
-        </p>
+    <div className="flex-1 flex flex-col items-center bg-canvas text-text-primary p-10 overflow-auto">
+      <div className="max-w-3xl w-full">
+        <h1 className="text-2xl font-light mb-1 text-text-primary">OpenPortal Remote</h1>
+        <p className="text-sm text-text-faint mb-6">Acesso remoto seguro via Tailscale</p>
 
-        {/* Conectar a um PC card */}
-        <div style={card}>
-          <h2 style={sectionTitle}>
-            Conectar a um PC
-          </h2>
-          {availableMachines.length === 0 ? (
-            <div style={{ color: '#64748b', fontSize: '13px' }}>
-              Nenhum PC cadastrado.
-            </div>
-          ) : (
-            availableMachines.map((m) => (
-              <div key={m.id} style={{
-                display: 'flex', alignItems: 'center', gap: '10px',
-                padding: '10px 12px', marginBottom: '6px',
-                background: '#0f172a', borderRadius: '6px',
-                border: activeMachine?.id === m.id ? '1px solid #3b82f6' : '1px solid #1e293b'
-              }}>
-                <span style={{ fontSize: '16px' }}>{'\uD83D\uDDA5\uFE0F'}</span>
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: '14px', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{m.name}</div>
-                  <div style={{ fontSize: '11px', color: '#64748b', fontFamily: 'monospace' }}>{m.mask || `${m.host}${m.port !== 5900 ? ':' + m.port : ''}`}</div>
-                </div>
-                <button style={{ ...btn, background: '#2563eb', borderColor: '#2563eb', color: '#fff' }} onClick={() => handleConnectMachine(m)}>
-                  {activeMachine?.id === m.id ? 'Visualizando' : 'Conectar'}
-                </button>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div className="bg-surface rounded-xl border border-line-subtle p-5">
+            <h2 className={sectionTitle}>Conectar a um PC</h2>
+            {availableMachines.length === 0 ? (
+              <div className="text-text-faint text-sm">Nenhum PC cadastrado.</div>
+            ) : (
+              <div className="space-y-1.5">
+                {availableMachines.map((m) => (
+                  <div
+                    key={m.id}
+                    className={`flex items-center gap-2.5 px-3 py-2.5 rounded-lg border ${
+                      activeMachine?.id === m.id ? 'border-accent bg-inset' : 'border-line-subtle bg-inset'
+                    }`}
+                  >
+                    <Monitor size={16} className="text-text-muted shrink-0" />
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm font-medium truncate">{m.name}</div>
+                      <div className="text-[11px] text-text-faint font-mono truncate">
+                        {m.mask || `${m.host}${m.port !== 5900 ? ':' + m.port : ''}`}
+                      </div>
+                    </div>
+                    <button
+                      className="px-3.5 py-1.5 rounded-md text-xs font-medium bg-accent hover:bg-accent-strong text-white transition-colors whitespace-nowrap"
+                      onClick={() => handleConnectMachine(m)}
+                    >
+                      {activeMachine?.id === m.id ? 'Visualizando' : 'Conectar'}
+                    </button>
+                  </div>
+                ))}
               </div>
-            ))
-          )}
-        </div>
+            )}
+          </div>
 
-        {/* Conectar por IP card */}
-        <div style={card}>
-          <h2 style={sectionTitle}>
-            Conectar por IP
-          </h2>
-          <div style={{ display: 'flex', gap: '8px', alignItems: 'flex-end' }}>
-            <div style={{ flex: 1 }}>
-              <label style={{ display: 'block', fontSize: '11px', color: '#64748b', marginBottom: '4px' }}>
-                Endereço IP do PC remoto
-              </label>
-              <input
-                type="text"
-                value={quickIp}
-                onChange={(e) => setQuickIp(e.target.value)}
-                onKeyDown={(e) => { if (e.key === 'Enter') handleQuickConnect(); }}
-                placeholder="100.x.x.x"
-                style={{
-                  width: '100%', padding: '8px 10px', borderRadius: '6px',
-                  border: '1px solid #475569', background: '#0f172a', color: '#e2e8f0',
-                  fontSize: '14px', fontFamily: 'monospace', outline: 'none',
-                  boxSizing: 'border-box'
-                }}
-              />
+          <div className="bg-surface rounded-xl border border-line-subtle p-5">
+            <h2 className={sectionTitle}>Conectar por IP</h2>
+            <div className="flex gap-2 items-end">
+              <div className="flex-1">
+                <label className="block text-[11px] text-text-faint mb-1">Endereço IP do PC remoto</label>
+                <input
+                  type="text"
+                  value={quickIp}
+                  onChange={(e) => setQuickIp(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') handleQuickConnect(); }}
+                  placeholder="100.x.x.x"
+                  className="w-full px-2.5 py-2 rounded-lg border border-line bg-inset text-text-primary text-sm font-mono outline-none focus:border-accent transition-colors"
+                />
+              </div>
+              <button
+                onClick={handleQuickConnect}
+                disabled={connecting}
+                className="px-4 py-2 rounded-lg text-sm font-medium bg-accent hover:bg-accent-strong text-white transition-colors whitespace-nowrap disabled:opacity-60"
+              >
+                {connecting ? 'Solicitando...' : 'Solicitar'}
+              </button>
             </div>
-            <button onClick={handleQuickConnect} disabled={connecting} style={{
-              ...btn, padding: '8px 16px', background: '#2563eb', borderColor: '#2563eb',
-              color: '#fff', fontWeight: 500, whiteSpace: 'nowrap',
-              opacity: connecting ? 0.6 : 1
-            }}>
-              {connecting ? 'Solicitando...' : 'Solicitar'}
-            </button>
-          </div>
-          <div style={{ fontSize: '11px', color: '#64748b', marginTop: '8px' }}>
-            Apenas o IP, sem porta (a porta VNC padrão 5900 é usada automaticamente). O PC remoto receberá um pedido de conexão e precisa aceitar.
+            <div className="text-[11px] text-text-faint mt-2">
+              Apenas o IP, sem porta (a porta VNC padrão 5900 é usada automaticamente). O PC remoto receberá um pedido de conexão e precisa aceitar.
+            </div>
           </div>
         </div>
 
-        {/* Histórico de conexões */}
-        <div style={{ ...card, marginTop: '20px' }}>
-          <h2 style={sectionTitle}>
-            Histórico de Conexões
-          </h2>
+        <div className="bg-surface rounded-xl border border-line-subtle p-5 mt-4">
+          <h2 className={sectionTitle}>Histórico de Conexões</h2>
           {!connHistory || connHistory.length === 0 ? (
-            <div style={{ color: '#64748b', fontSize: '12px' }}>Nenhuma conexão registrada ainda.</div>
+            <div className="text-text-faint text-xs">Nenhuma conexão registrada ainda.</div>
           ) : (
-            <div style={{ maxHeight: '220px', overflow: 'auto' }}>
+            <div className="max-h-56 overflow-auto">
               {groupHistory(connHistory).map((c) => (
-                <div key={c.id} style={{
-                  display: 'flex', alignItems: 'center', gap: '8px',
-                  fontSize: '12px', padding: '5px 4px',
-                  borderBottom: '1px solid #1e293b'
-                }}>
-                  <span style={{ width: '8px', height: '8px', borderRadius: '50%', display: 'inline-block', flexShrink: 0,
-                    background: c.state === 'connect' ? '#22c55e' : c.state === 'error' ? '#ef4444' : '#94a3b8' }} />
-                  <span style={{ color: '#94a3b8', flexShrink: 0 }}>{c.date} {c.time}</span>
-                  <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.name} · {c.host || '-'}</span>
-                  <span style={{ color: '#64748b' }}>{c.message || c.state}</span>
+                <div key={c.id} className="flex items-center gap-2 text-xs py-1.5 border-b border-line-subtle last:border-0">
+                  <span className={`w-2 h-2 rounded-full shrink-0 ${
+                    c.state === 'connect' ? 'bg-success' : c.state === 'error' ? 'bg-danger' : 'bg-text-muted'
+                  }`} />
+                  <span className="text-text-muted shrink-0">{c.date} {c.time}</span>
+                  <span className="flex-1 truncate">{c.name} · {c.host || '-'}</span>
+                  <span className="text-text-faint">{c.message || c.state}</span>
                   {c.count > 1 && (
-                    <span style={{ color: '#64748b', background: '#0f172a', borderRadius: '10px', padding: '1px 7px', fontSize: '11px', flexShrink: 0 }}>
+                    <span className="text-text-faint bg-inset rounded-full px-2 py-0.5 text-[11px] shrink-0">
                       {c.count}x
                     </span>
                   )}

@@ -1,4 +1,5 @@
 import { useState, useEffect, createContext, useCallback, useRef } from 'react';
+import { PanelLeftOpen } from 'lucide-react';
 import Sidebar from './shared/Sidebar';
 import RemoteViewer from './modules/connection/RemoteViewer';
 import ConfigPanel from './modules/config/ConfigPanel';
@@ -143,9 +144,9 @@ export default function App() {
 
   // Ponto único de conexão: cobre PCs cadastrados (Sidebar/Dashboard) e IP
   // avulso. Nunca reaproveita aprovação anterior — pede permissão ao PC
-  // remoto sempre, e essa MESMA aprovação já libera o túnel de arquivos
-  // (ver tunnel-manager.js no main), então a tela de Arquivos nunca precisa
-  // pedir IP nem permissão de novo.
+  // remoto sempre, e essa MESMA aprovação já libera a sessão de arquivos
+  // (ver file-transfer-session.js no main), então a tela de Arquivos nunca
+  // precisa pedir IP nem permissão de novo.
   const connectMachine = useCallback(async (machine) => {
     if (!machine || !machine.host) return;
     if (activeMachine) {
@@ -186,7 +187,7 @@ export default function App() {
       setFtSessionId(res.sessionId);
       const identity = machines.some((m) => m.id === machine.id) ? machine.id : machine;
       setActiveMachineId(identity);
-      console.log(`[app] Connection approved, tunnel session: ${res.sessionId}, connecting VNC...`);
+      console.log(`[app] Connection approved, file session: ${res.sessionId}, connecting VNC...`);
       window.electronAPI?.connectVnc(machine).catch((e) => console.warn('[app] VNC connect error:', e));
       addLog(`Conexão aprovada por ${machine.name}.`);
     } catch (err) {
@@ -276,9 +277,9 @@ export default function App() {
 
   return (
     <MachineContext.Provider value={contextValue}>
-      <div style={{ display: 'flex', height: '100vh', width: '100vw', position: 'relative' }}>
+      <div className="flex h-screen w-screen relative overflow-hidden">
         <Sidebar />
-        <main style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+        <main className="flex-1 flex flex-col overflow-hidden">
           {showConfig ? (
             <ConfigPanel />
           ) : showFiles ? (
@@ -295,28 +296,9 @@ export default function App() {
           <button
             onClick={toggleSidebar}
             title="Mostrar barra lateral"
-            style={{
-              position: 'fixed',
-              top: 8,
-              left: 8,
-              zIndex: 99999,
-              background: 'rgba(30, 41, 59, 0.85)',
-              border: '1px solid #334155',
-              borderRadius: '6px',
-              cursor: 'pointer',
-              padding: '8px 10px',
-              opacity: 0.85,
-              transition: 'opacity 0.2s',
-              display: 'flex',
-              flexDirection: 'column',
-              gap: '3px',
-            }}
-            onMouseEnter={(e) => e.currentTarget.style.opacity = '1'}
-            onMouseLeave={(e) => e.currentTarget.style.opacity = '0.85'}
+            className="fixed top-2 left-2 z-[9999] p-2 rounded-md bg-surface/85 border border-line hover:opacity-100 opacity-85 transition-opacity text-text-secondary"
           >
-            <div style={{ width: '18px', height: '2px', background: '#e2e8f0', borderRadius: '1px' }} />
-            <div style={{ width: '18px', height: '2px', background: '#e2e8f0', borderRadius: '1px' }} />
-            <div style={{ width: '18px', height: '2px', background: '#e2e8f0', borderRadius: '1px' }} />
+            <PanelLeftOpen size={18} />
           </button>
         )}
       </div>

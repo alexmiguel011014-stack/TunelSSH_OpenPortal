@@ -1,6 +1,6 @@
 'use strict';
 
-// Compartilhado entre proxy.js (VNC) e tunnel-manager.js (arquivos): só
+// Compartilhado entre proxy.js (VNC) e file-transfer-session.js (arquivos): só
 // permite discar hosts da rede Tailscale, nunca IP público nem LAN pura.
 // Restrito a 100.x de propósito: fora do túnel Tailscale (WireGuard,
 // criptografado) o protocolo VNC e o de arquivos trafegam em texto puro —

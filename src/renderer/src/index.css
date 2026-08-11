@@ -20,11 +20,6 @@ body,
   display: block;
 }
 
-/* Show remove button on hover */
-div:hover > .remove-machine-btn {
-  display: block !important;
-}
-
 /* File list hover */
 .file-row:hover {
   background: rgba(148, 163, 184, 0.08);
@@ -36,14 +31,14 @@ div:hover > .remove-machine-btn {
 }
 
 ::-webkit-scrollbar-track {
-  background: #1e293b;
+  background: rgb(var(--color-bg-surface));
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #475569;
+  background: rgb(var(--color-bg-surface-2));
   border-radius: 4px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #64748b;
+  background: rgb(var(--color-text-faint));
 }
