@@ -1,0 +1,7 @@
+dist/
+dist-electron/
+node_modules/
+graphify-out/
+strix_runs/
+src/renderer/public/noVNC/
+package-lock.json

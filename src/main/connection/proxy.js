@@ -5,8 +5,8 @@ const { isAllowedHost } = require('./net-guard');
 
 const CONNECT_TIMEOUT = 10000;
 const IDLE_TIMEOUT = 30 * 60 * 1000;
-const HEARTBEAT_INTERVAL = 30000;   // ping WS a cada 30s
-const HEARTBEAT_MAX_MISSED = 2;     // encerra após ~60s sem pong
+const HEARTBEAT_INTERVAL = 30000; // ping WS a cada 30s
+const HEARTBEAT_MAX_MISSED = 2; // encerra após ~60s sem pong
 
 function startWebSocketProxy(port = 18900) {
   const wss = new WebSocket.Server({ port });
@@ -53,7 +53,9 @@ function startWebSocketProxy(port = 18900) {
           return;
         }
         if (missedPongs >= HEARTBEAT_MAX_MISSED) {
-          console.error(`[proxy] Heartbeat lost for ${targetHost}:${targetPort} (${missedPongs + 1} missed pongs). Closing.`);
+          console.error(
+            `[proxy] Heartbeat lost for ${targetHost}:${targetPort} (${missedPongs + 1} missed pongs). Closing.`,
+          );
           if (tcpSocket && !tcpSocket.destroyed) tcpSocket.destroy();
           ws.close(4004, 'Heartbeat timeout');
           stopHeartbeat();
@@ -62,7 +64,7 @@ function startWebSocketProxy(port = 18900) {
         missedPongs++;
         try {
           ws.ping();
-        } catch (e) {}
+        } catch {}
       }, HEARTBEAT_INTERVAL);
     };
 

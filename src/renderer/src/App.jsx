@@ -89,26 +89,32 @@ export default function App() {
   // Hidrata o histórico salvo em disco (sobrevive a reinícios do app) —
   // se falhar, mantém o array vazio do useState e segue normalmente.
   useEffect(() => {
-    window.electronAPI?.getHistory?.().then((entries) => {
-      if (Array.isArray(entries) && entries.length > 0) {
-        setConnHistory(entries.slice(-49));
-      }
-    }).catch(() => {});
+    window.electronAPI
+      ?.getHistory?.()
+      .then((entries) => {
+        if (Array.isArray(entries) && entries.length > 0) {
+          setConnHistory(entries.slice(-49));
+        }
+      })
+      .catch(() => {});
   }, []);
 
   useEffect(() => {
-    window.electronAPI?.getConfig?.().then((config) => {
-      if (config?.machines) {
-        let changed = false;
-        const withMasks = config.machines.map((m) => {
-          if (m.mask) return m;
-          changed = true;
-          return { ...m, mask: genMask() };
-        });
-        setMachines(withMasks);
-        if (changed) window.electronAPI?.saveConfig?.({ machines: withMasks });
-      }
-    }).catch(() => {});
+    window.electronAPI
+      ?.getConfig?.()
+      .then((config) => {
+        if (config?.machines) {
+          let changed = false;
+          const withMasks = config.machines.map((m) => {
+            if (m.mask) return m;
+            changed = true;
+            return { ...m, mask: genMask() };
+          });
+          setMachines(withMasks);
+          if (changed) window.electronAPI?.saveConfig?.({ machines: withMasks });
+        }
+      })
+      .catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -120,21 +126,38 @@ export default function App() {
       }));
       const m = machines.find((x) => x.id === status.machineId);
       const stateLabel = status.state === 'connected' ? 'connect' : status.state;
-      if (m && (status.state === 'connected' || status.state === 'error' || status.state === 'disconnected')) {
-        recordConn({ name: m.name, host: m.host, state: stateLabel, message: status.state });
+      if (
+        m &&
+        (status.state === 'connected' ||
+          status.state === 'error' ||
+          status.state === 'disconnected')
+      ) {
+        recordConn({
+          name: m.name,
+          host: m.host,
+          state: stateLabel,
+          message: status.state,
+        });
       }
       if (status.state === 'connected' && m) {
-        window.electronAPI?.notify({ title: 'Conexão estabelecida', body: `${m.name} (${m.host}) conectado.` });
+        window.electronAPI?.notify({
+          title: 'Conexão estabelecida',
+          body: `${m.name} (${m.host}) conectado.`,
+        });
       } else if (status.state === 'error' && m) {
-        window.electronAPI?.notify({ title: 'Falha na conexão', body: `Não foi possível conectar a ${m.name} (${m.host}).` });
+        window.electronAPI?.notify({
+          title: 'Falha na conexão',
+          body: `Não foi possível conectar a ${m.name} (${m.host}).`,
+        });
       }
     });
     return unsub;
-  }, [machines, recordConn]);
+  }, [machines, recordConn, addLog]);
 
-  const activeMachine = typeof activeMachineId === 'string'
-    ? machines.find((m) => m.id === activeMachineId)
-    : activeMachineId;
+  const activeMachine =
+    typeof activeMachineId === 'string'
+      ? machines.find((m) => m.id === activeMachineId)
+      : activeMachineId;
 
   const disconnectMachine = useCallback(async () => {
     addLog('Disconnected');
@@ -143,7 +166,12 @@ export default function App() {
       window.electronAPI?.ftDisconnect(ftSessionId).catch(() => {});
     }
     if (activeMachine) {
-      recordConn({ name: activeMachine.name, host: activeMachine.host, state: 'disconnect', message: 'Desconectado' });
+      recordConn({
+        name: activeMachine.name,
+        host: activeMachine.host,
+        state: 'disconnect',
+        message: 'Desconectado',
+      });
     }
     setActiveMachineId(null);
     setFtSessionId(null);
@@ -155,96 +183,140 @@ export default function App() {
   // remoto sempre, e essa MESMA aprovação já libera a sessão de arquivos
   // (ver file-transfer-session.js no main), então a tela de Arquivos nunca
   // precisa pedir IP nem permissão de novo.
-  const connectMachine = useCallback(async (machine) => {
-    if (!machine || !machine.host) return;
-    if (activeMachine) {
-      await disconnectMachine();
-    }
-    setShowConfig(false);
-    setShowFiles(false);
-    addLog(`Solicitando conexão a ${machine.name} (${machine.host})...`);
-    recordConn({ name: machine.name, host: machine.host, state: 'connecting', message: `Aguardando aprovação de ${machine.host}` });
-
-    let fromIp = '';
-    try {
-      const res = await window.electronAPI.getLocalIp();
-      fromIp = (res && res.ip) || '';
-    } catch {}
-
-    try {
-      console.log(`[app] Connecting to ${machine.name} (${machine.host}:${machine.port}) with fromIp=${fromIp}`);
-      const res = await window.electronAPI.ftConnect(machine.host, { fromIp });
-      if (!res || !res.success) {
-        const rejected = res?.rejected === true;
-        const message = (res && res.message) || 'Conexão recusada ou sem resposta';
-        if (rejected) {
-          console.warn(`[app] Connection explicitly rejected by user: ${message}`);
-          addLog(`Conexão recusada pelo PC remoto: ${message}`, 'error');
-          setWasRejected(true);
-          recordConn({ name: machine.name, host: machine.host, state: 'error', message: 'Conexão recusada pelo usuário' });
-        } else {
-          console.warn(`[app] Connection failed: ${message}`);
-          addLog(`Falha na conexão: ${message}`, 'error');
-          setWasRejected(false);
-          recordConn({ name: machine.name, host: machine.host, state: 'error', message });
-        }
-        window.electronAPI?.notify?.({ title: 'Conexão falhou', body: `${machine.name}: ${message}` });
-        return;
+  const connectMachine = useCallback(
+    async (machine) => {
+      if (!machine || !machine.host) return;
+      if (activeMachine) {
+        await disconnectMachine();
       }
-      setWasRejected(false);
-      setFtSessionId(res.sessionId);
-      const identity = machines.some((m) => m.id === machine.id) ? machine.id : machine;
-      setActiveMachineId(identity);
-      console.log(`[app] Connection approved, file session: ${res.sessionId}, connecting VNC...`);
-      window.electronAPI?.connectVnc(machine).catch((e) => console.warn('[app] VNC connect error:', e));
-      addLog(`Conexão aprovada por ${machine.name}.`);
-    } catch (err) {
-      console.error(`[app] Connection error:`, err);
-      addLog(`Erro ao conectar: ${err.message}`, 'error');
-      setWasRejected(false);
-      recordConn({ name: machine.name, host: machine.host, state: 'error', message: err.message });
-    }
-  }, [activeMachine, disconnectMachine, machines, addLog, recordConn]);
+      setShowConfig(false);
+      setShowFiles(false);
+      addLog(`Solicitando conexão a ${machine.name} (${machine.host})...`);
+      recordConn({
+        name: machine.name,
+        host: machine.host,
+        state: 'connecting',
+        message: `Aguardando aprovação de ${machine.host}`,
+      });
 
-  const saveMachines = useCallback((newMachines) => {
-    setMachines(newMachines);
-    window.electronAPI?.saveConfig({ machines: newMachines });
-    addLog('Config saved');
-  }, [addLog]);
+      let fromIp = '';
+      try {
+        const res = await window.electronAPI.getLocalIp();
+        fromIp = (res && res.ip) || '';
+      } catch {}
+
+      try {
+        console.log(
+          `[app] Connecting to ${machine.name} (${machine.host}:${machine.port}) with fromIp=${fromIp}`,
+        );
+        const res = await window.electronAPI.ftConnect(machine.host, {
+          fromIp,
+        });
+        if (!res || !res.success) {
+          const rejected = res?.rejected === true;
+          const message = (res && res.message) || 'Conexão recusada ou sem resposta';
+          if (rejected) {
+            console.warn(`[app] Connection explicitly rejected by user: ${message}`);
+            addLog(`Conexão recusada pelo PC remoto: ${message}`, 'error');
+            setWasRejected(true);
+            recordConn({
+              name: machine.name,
+              host: machine.host,
+              state: 'error',
+              message: 'Conexão recusada pelo usuário',
+            });
+          } else {
+            console.warn(`[app] Connection failed: ${message}`);
+            addLog(`Falha na conexão: ${message}`, 'error');
+            setWasRejected(false);
+            recordConn({
+              name: machine.name,
+              host: machine.host,
+              state: 'error',
+              message,
+            });
+          }
+          window.electronAPI?.notify?.({
+            title: 'Conexão falhou',
+            body: `${machine.name}: ${message}`,
+          });
+          return;
+        }
+        setWasRejected(false);
+        setFtSessionId(res.sessionId);
+        const identity = machines.some((m) => m.id === machine.id) ? machine.id : machine;
+        setActiveMachineId(identity);
+        console.log(`[app] Connection approved, file session: ${res.sessionId}, connecting VNC...`);
+        window.electronAPI
+          ?.connectVnc(machine)
+          .catch((e) => console.warn('[app] VNC connect error:', e));
+        addLog(`Conexão aprovada por ${machine.name}.`);
+      } catch (err) {
+        console.error(`[app] Connection error:`, err);
+        addLog(`Erro ao conectar: ${err.message}`, 'error');
+        setWasRejected(false);
+        recordConn({
+          name: machine.name,
+          host: machine.host,
+          state: 'error',
+          message: err.message,
+        });
+      }
+    },
+    [activeMachine, disconnectMachine, machines, addLog, recordConn],
+  );
+
+  const saveMachines = useCallback(
+    (newMachines) => {
+      setMachines(newMachines);
+      window.electronAPI?.saveConfig({ machines: newMachines });
+      addLog('Config saved');
+    },
+    [addLog],
+  );
 
   const addMachine = useCallback(() => {
     if (machines.length >= MAX_MACHINES) {
       addLog(`Max ${MAX_MACHINES} machines reached`, 'warn');
       return;
     }
-    const newMachine = { id: genId(machines), name: `PC ${machines.length + 1}`, host: '', port: 5900, mask: genMask() };
+    const newMachine = {
+      id: genId(machines),
+      name: `PC ${machines.length + 1}`,
+      host: '',
+      port: 5900,
+      mask: genMask(),
+    };
     const updated = [...machines, newMachine];
     setMachines(updated);
     window.electronAPI?.saveConfig({ machines: updated });
     addLog(`Added machine: ${newMachine.name}`);
   }, [machines, addLog]);
 
-  const removeMachine = useCallback((id) => {
-    if (machines.length <= 1) {
-      addLog('Cannot remove last machine', 'warn');
-      return;
-    }
-    const updated = machines.filter(m => m.id !== id);
-    setMachines(updated);
-    if (activeMachineId === id) {
-      disconnectMachine();
-    }
-    window.electronAPI?.saveConfig({ machines: updated });
-    addLog(`Removed machine ${id}`);
-  }, [machines, activeMachineId, disconnectMachine, addLog]);
+  const removeMachine = useCallback(
+    (id) => {
+      if (machines.length <= 1) {
+        addLog('Cannot remove last machine', 'warn');
+        return;
+      }
+      const updated = machines.filter((m) => m.id !== id);
+      setMachines(updated);
+      if (activeMachineId === id) {
+        disconnectMachine();
+      }
+      window.electronAPI?.saveConfig({ machines: updated });
+      addLog(`Removed machine ${id}`);
+    },
+    [machines, activeMachineId, disconnectMachine, addLog],
+  );
 
   const triggerReconnect = useCallback(() => {
-    setReconnectFlag(f => f + 1);
+    setReconnectFlag((f) => f + 1);
     addLog('Reconnect triggered');
   }, [addLog]);
 
   const toggleSidebar = useCallback(() => {
-    setSidebarCollapsed(c => !c);
+    setSidebarCollapsed((c) => !c);
   }, []);
 
   const contextValue = {
@@ -293,7 +365,11 @@ export default function App() {
           ) : showFiles ? (
             <FileExplorer />
           ) : activeMachine ? (
-            <RemoteViewer machine={activeMachine} reconnectFlag={reconnectFlag} wasRejected={wasRejected} />
+            <RemoteViewer
+              machine={activeMachine}
+              reconnectFlag={reconnectFlag}
+              wasRejected={wasRejected}
+            />
           ) : (
             <Dashboard />
           )}

@@ -35,20 +35,32 @@ export default function RemoteViewer({ machine, reconnectFlag, wasRejected }) {
   const reconnectTimerRef = useRef(null);
   const mountedRef = useRef(true);
 
-  const scheduleReconnect = useCallback((why) => {
-    if (!mountedRef.current) return;
-    if (retryCountRef.current >= MAX_VNC_RETRIES) {
-      if (addLog) addLog(`Conexão perdida e não reconectou após ${MAX_VNC_RETRIES} tentativas. Use "Reconectar".`, 'warn');
-      return;
-    }
-    retryCountRef.current++;
-    const delay = VNC_RETRY_DELAYS[Math.min(retryCountRef.current - 1, VNC_RETRY_DELAYS.length - 1)];
-    if (addLog) addLog(`Conexão perdida (${why}). Reconectando em ${delay / 1000}s (tentativa ${retryCountRef.current}).`, 'warn');
-    if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
-    reconnectTimerRef.current = setTimeout(() => {
-      if (mountedRef.current) setIframeKey((k) => k + 1);
-    }, delay);
-  }, [addLog]);
+  const scheduleReconnect = useCallback(
+    (why) => {
+      if (!mountedRef.current) return;
+      if (retryCountRef.current >= MAX_VNC_RETRIES) {
+        if (addLog)
+          addLog(
+            `Conexão perdida e não reconectou após ${MAX_VNC_RETRIES} tentativas. Use "Reconectar".`,
+            'warn',
+          );
+        return;
+      }
+      retryCountRef.current++;
+      const delay =
+        VNC_RETRY_DELAYS[Math.min(retryCountRef.current - 1, VNC_RETRY_DELAYS.length - 1)];
+      if (addLog)
+        addLog(
+          `Conexão perdida (${why}). Reconectando em ${delay / 1000}s (tentativa ${retryCountRef.current}).`,
+          'warn',
+        );
+      if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
+      reconnectTimerRef.current = setTimeout(() => {
+        if (mountedRef.current) setIframeKey((k) => k + 1);
+      }, delay);
+    },
+    [addLog],
+  );
 
   // A aprovação remota (dialogo Aceitar/Rejeitar) já é a trava de acesso.
   // Se rejeitada, VNC pede senha. Se aprovada, conecta direto.
@@ -60,13 +72,13 @@ export default function RemoteViewer({ machine, reconnectFlag, wasRejected }) {
   const sendResize = useCallback(() => {
     try {
       iframeRef.current?.contentWindow?.postMessage({ type: 'resize-viewport' }, '*');
-    } catch (e) {}
+    } catch {}
   }, []);
 
   const sendQuality = useCallback((level) => {
     try {
       iframeRef.current?.contentWindow?.postMessage({ type: 'set-quality', level }, '*');
-    } catch (e) {}
+    } catch {}
   }, []);
 
   const handleReconnect = useCallback(() => {
@@ -77,7 +89,7 @@ export default function RemoteViewer({ machine, reconnectFlag, wasRejected }) {
   const handleDisconnect = useCallback(() => {
     try {
       iframeRef.current?.contentWindow?.postMessage({ type: 'vnc-disconnect' }, '*');
-    } catch (e) {}
+    } catch {}
     if (disconnectMachine) disconnectMachine();
   }, [disconnectMachine]);
 
@@ -90,9 +102,11 @@ export default function RemoteViewer({ machine, reconnectFlag, wasRejected }) {
         if (document.exitFullscreen) document.exitFullscreen();
         setIsFullscreen(false);
       } else if (el.requestFullscreen) {
-        el.requestFullscreen().then(() => setIsFullscreen(true)).catch(() => {});
+        el.requestFullscreen()
+          .then(() => setIsFullscreen(true))
+          .catch(() => {});
       }
-    } catch (e) {}
+    } catch {}
   }, []);
 
   useEffect(() => {
@@ -105,12 +119,12 @@ export default function RemoteViewer({ machine, reconnectFlag, wasRejected }) {
   }, [sendResize]);
 
   useEffect(() => {
-    setIframeKey(k => k + 1);
+    setIframeKey((k) => k + 1);
   }, [machine.id, machine.host, machine.port]);
 
   useEffect(() => {
     if (reconnectFlag > 0) {
-      setIframeKey(k => k + 1);
+      setIframeKey((k) => k + 1);
     }
   }, [reconnectFlag]);
 
@@ -173,7 +187,10 @@ export default function RemoteViewer({ machine, reconnectFlag, wasRejected }) {
     };
     poll();
     const interval = setInterval(poll, 5000);
-    return () => { cancelled = true; clearInterval(interval); };
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
   }, [vncState, machine.host, machine.port]);
 
   useEffect(() => {
@@ -193,10 +210,13 @@ export default function RemoteViewer({ machine, reconnectFlag, wasRejected }) {
       });
     });
     ro.observe(containerRef.current);
-    return () => { ro.disconnect(); };
+    return () => {
+      ro.disconnect();
+    };
   }, [sendResize]);
 
-  const ctrlBtnClass = 'flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-md border border-line bg-surface text-text-secondary hover:bg-surface-2 transition-colors whitespace-nowrap';
+  const ctrlBtnClass =
+    'flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-md border border-line bg-surface text-text-secondary hover:bg-surface-2 transition-colors whitespace-nowrap';
   const ctrlLabelClass = 'text-[11px] text-text-muted';
 
   return (
@@ -211,18 +231,28 @@ export default function RemoteViewer({ machine, reconnectFlag, wasRejected }) {
         <button className={ctrlBtnClass} onClick={handleReconnect} title="Reconectar">
           <RefreshCw size={13} /> Reconectar
         </button>
-        <button className={ctrlBtnClass} onClick={toggleFullscreen} title={isFullscreen ? 'Sair da tela cheia' : 'Tela cheia'}>
+        <button
+          className={ctrlBtnClass}
+          onClick={toggleFullscreen}
+          title={isFullscreen ? 'Sair da tela cheia' : 'Tela cheia'}
+        >
           {isFullscreen ? <Minimize2 size={13} /> : <Maximize2 size={13} />}
           {isFullscreen ? 'Sair da tela' : 'Tela cheia'}
         </button>
         <select
           title="Qualidade"
           value={quality}
-          onChange={(e) => { const lv = parseInt(e.target.value, 10); setQuality(lv); sendQuality(lv); }}
+          onChange={(e) => {
+            const lv = parseInt(e.target.value, 10);
+            setQuality(lv);
+            sendQuality(lv);
+          }}
           className={`${ctrlBtnClass} py-1.5`}
         >
           {QUALITY_LEVELS.map((q) => (
-            <option key={q.level} value={q.level}>Qualidade: {q.label}</option>
+            <option key={q.level} value={q.level}>
+              Qualidade: {q.label}
+            </option>
           ))}
         </select>
         <button
@@ -238,7 +268,9 @@ export default function RemoteViewer({ machine, reconnectFlag, wasRejected }) {
           {health.label}
           {pingMs !== null && <span>· {pingMs}ms</span>}
         </span>
-        <span className={ctrlLabelClass}>{machine.name} · {machine.mask || `${machine.host}:${machine.port}`}</span>
+        <span className={ctrlLabelClass}>
+          {machine.name} · {machine.mask || `${machine.host}:${machine.port}`}
+        </span>
       </div>
 
       {/* Canvas viewport */}

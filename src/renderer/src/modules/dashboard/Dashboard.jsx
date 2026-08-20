@@ -25,8 +25,9 @@ function groupHistory(history) {
   return groups;
 }
 
-export default function Dashboard({ onConnect }) {
-  const { machines, activeMachine, connectMachine, addLog, connHistory } = useContext(MachineContext);
+export default function Dashboard() {
+  const { machines, activeMachine, connectMachine, addLog, connHistory } =
+    useContext(MachineContext);
   const [quickIp, setQuickIp] = useState('');
   const [connecting, setConnecting] = useState(false);
 
@@ -54,13 +55,18 @@ export default function Dashboard({ onConnect }) {
     if (connecting) return;
     setConnecting(true);
     try {
-      await connectMachine({ id: 'quick-' + Date.now(), name: 'Conexão Direta', host: ip, port: 5900 });
+      await connectMachine({
+        id: 'quick-' + Date.now(),
+        name: 'Conexão Direta',
+        host: ip,
+        port: 5900,
+      });
     } finally {
       setConnecting(false);
     }
   };
 
-  const availableMachines = machines ? machines.filter(m => m.host) : [];
+  const availableMachines = machines ? machines.filter((m) => m.host) : [];
 
   return (
     <div className="flex-1 flex flex-col items-center bg-canvas text-text-primary p-10 overflow-auto">
@@ -79,7 +85,9 @@ export default function Dashboard({ onConnect }) {
                   <div
                     key={m.id}
                     className={`flex items-center gap-2.5 px-3 py-2.5 rounded-lg border ${
-                      activeMachine?.id === m.id ? 'border-accent bg-inset' : 'border-line-subtle bg-inset'
+                      activeMachine?.id === m.id
+                        ? 'border-accent bg-inset'
+                        : 'border-line-subtle bg-inset'
                     }`}
                   >
                     <Monitor size={16} className="text-text-muted shrink-0" />
@@ -105,12 +113,16 @@ export default function Dashboard({ onConnect }) {
             <h2 className={sectionTitle}>Conectar por IP</h2>
             <div className="flex gap-2 items-end">
               <div className="flex-1">
-                <label className="block text-[11px] text-text-faint mb-1">Endereço IP do PC remoto</label>
+                <label className="block text-[11px] text-text-faint mb-1">
+                  Endereço IP do PC remoto
+                </label>
                 <input
                   type="text"
                   value={quickIp}
                   onChange={(e) => setQuickIp(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === 'Enter') handleQuickConnect(); }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') handleQuickConnect();
+                  }}
                   placeholder="100.x.x.x"
                   className="w-full px-2.5 py-2 rounded-lg border border-line bg-inset text-text-primary text-sm font-mono outline-none focus:border-accent transition-colors"
                 />
@@ -124,7 +136,8 @@ export default function Dashboard({ onConnect }) {
               </button>
             </div>
             <div className="text-[11px] text-text-faint mt-2">
-              Apenas o IP, sem porta (a porta VNC padrão 5900 é usada automaticamente). O PC remoto receberá um pedido de conexão e precisa aceitar.
+              Apenas o IP, sem porta (a porta VNC padrão 5900 é usada automaticamente). O PC remoto
+              receberá um pedido de conexão e precisa aceitar.
             </div>
           </div>
         </div>
@@ -136,12 +149,25 @@ export default function Dashboard({ onConnect }) {
           ) : (
             <div className="max-h-56 overflow-auto">
               {groupHistory(connHistory).map((c) => (
-                <div key={c.id} className="flex items-center gap-2 text-xs py-1.5 border-b border-line-subtle last:border-0">
-                  <span className={`w-2 h-2 rounded-full shrink-0 ${
-                    c.state === 'connect' ? 'bg-success' : c.state === 'error' ? 'bg-danger' : 'bg-text-muted'
-                  }`} />
-                  <span className="text-text-muted shrink-0">{c.date} {c.time}</span>
-                  <span className="flex-1 truncate">{c.name} · {c.host || '-'}</span>
+                <div
+                  key={c.id}
+                  className="flex items-center gap-2 text-xs py-1.5 border-b border-line-subtle last:border-0"
+                >
+                  <span
+                    className={`w-2 h-2 rounded-full shrink-0 ${
+                      c.state === 'connect'
+                        ? 'bg-success'
+                        : c.state === 'error'
+                          ? 'bg-danger'
+                          : 'bg-text-muted'
+                    }`}
+                  />
+                  <span className="text-text-muted shrink-0">
+                    {c.date} {c.time}
+                  </span>
+                  <span className="flex-1 truncate">
+                    {c.name} · {c.host || '-'}
+                  </span>
                   <span className="text-text-faint">{c.message || c.state}</span>
                   {c.count > 1 && (
                     <span className="text-text-faint bg-inset rounded-full px-2 py-0.5 text-[11px] shrink-0">

@@ -21,6 +21,9 @@ external/
 # Grafo de conhecimento
 graphify-out/
 
+# Saída de scans do Strix
+strix_runs/
+
 # Mapa XML do RepoMix
 repomix-output.xml
 

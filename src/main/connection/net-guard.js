@@ -14,7 +14,10 @@ function isAllowedHost(host) {
   const parts = host.split('.');
   if (parts.length !== 4) return false;
   const a = parseInt(parts[0], 10);
-  if (a === 100) return true;                                    // Tailscale (CGNAT 100.64/10)
+  const b = parseInt(parts[1], 10);
+  // Tailscale CGNAT é 100.64.0.0/10 (segundo octeto 64-127), não o
+  // 100.0.0.0/8 inteiro — o resto de 100.x.x.x é espaço público normal.
+  if (a === 100 && b >= 64 && b <= 127) return true;
   return false;
 }
 

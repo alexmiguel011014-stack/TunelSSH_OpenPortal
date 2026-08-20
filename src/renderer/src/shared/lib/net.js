@@ -4,11 +4,12 @@
 export function isPrivateNetworkHost(host) {
   if (!host) return false;
   const trimmed = (host || '').trim();
-  if (/^[A-Za-z]/.test(trimmed)) return true;            // hostname: aceita (MagicDNS do Tailscale)
+  if (/^[A-Za-z]/.test(trimmed)) return true; // hostname: aceita (MagicDNS do Tailscale)
   const parts = trimmed.split('.');
   if (parts.length !== 4) return false;
   const a = parseInt(parts[0], 10);
-  if (isNaN(a)) return false;
-  if (a === 100) return true;                            // Tailscale CGNAT 100.64/10
+  const b = parseInt(parts[1], 10);
+  if (isNaN(a) || isNaN(b)) return false;
+  if (a === 100 && b >= 64 && b <= 127) return true; // Tailscale CGNAT 100.64/10
   return false;
 }

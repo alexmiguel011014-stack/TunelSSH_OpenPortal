@@ -3,13 +3,43 @@ name: Build Dev Pre-release
 on:
   push:
     branches: [master]
+  pull_request:
+    branches: [master]
   workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
+  lint-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci --no-audit
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Test
+        run: npm test
+
   build:
+    needs: lint-test
+    # A build assina e publica um instalador com GITHUB_TOKEN de escrita —
+    # não roda em PR (poderia vir de fork), só em push direto/master ou
+    # disparo manual. O lint-test acima cobre PRs sem tocar em secrets.
+    if: github.event_name != 'pull_request'
     runs-on: windows-latest
     timeout-minutes: 30
 
@@ -36,7 +66,10 @@ jobs:
         shell: pwsh
         run: |
           $pfx = "resources/cert.pfx"
-          $pwd = "openportal123"
+          # Gerada em runtime: só protege o .pfx dentro deste mesmo job (o
+          # cert é self-signed e nunca sai do runner), não precisa ser um
+          # valor fixo/conhecido.
+          $pwd = [System.Guid]::NewGuid().ToString("N")
           $cer = "resources/cert.cer"
           if (-not (Test-Path $pfx)) {
             $sec = ConvertTo-SecureString $pwd -Force -AsPlainText

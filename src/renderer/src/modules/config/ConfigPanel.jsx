@@ -12,7 +12,7 @@ function isValidHost(host) {
 }
 
 export default function ConfigPanel() {
-  const { machines, saveMachines, addMachine, removeMachine, setShowConfig, maxMachines, addLog } = useContext(MachineContext);
+  const { machines, saveMachines, setShowConfig, maxMachines, addLog } = useContext(MachineContext);
 
   const [draft, setDraft] = useState(() => machines.map((m) => ({ ...m })));
   const [saved, setSaved] = useState(false);
@@ -22,7 +22,10 @@ export default function ConfigPanel() {
   const [localIp, setLocalIp] = useState(null); // null = carregando, '' = não achou
 
   useEffect(() => {
-    window.electronAPI?.getLocalIp?.().then((res) => setLocalIp(res?.ip || '')).catch(() => setLocalIp(''));
+    window.electronAPI
+      ?.getLocalIp?.()
+      .then((res) => setLocalIp(res?.ip || ''))
+      .catch(() => setLocalIp(''));
   }, []);
 
   const copyLocalIp = () => {
@@ -44,14 +47,21 @@ export default function ConfigPanel() {
         if (res.ok) {
           addLog(`Teste OK: ${host}:${machine.port} acessível em ${res.ms}ms`, 'info');
         } else {
-          const hint = res.error?.includes('ECONNREFUSED') ? ' (VNC não está rodando?)' :
-                       res.error?.includes('ENOTFOUND') ? ' (IP não resolvido ou offline)' :
-                       res.error?.includes('ETIMEDOUT') ? ' (Tailscale não alcança?)' : '';
+          const hint = res.error?.includes('ECONNREFUSED')
+            ? ' (VNC não está rodando?)'
+            : res.error?.includes('ENOTFOUND')
+              ? ' (IP não resolvido ou offline)'
+              : res.error?.includes('ETIMEDOUT')
+                ? ' (Tailscale não alcança?)'
+                : '';
           addLog(`Teste falhou: ${host}:${machine.port} (${res.error})${hint}`, 'warn');
         }
       }
     } catch (err) {
-      setTestResults((prev) => ({ ...prev, [index]: { ok: false, error: err.message } }));
+      setTestResults((prev) => ({
+        ...prev,
+        [index]: { ok: false, error: err.message },
+      }));
       if (addLog) addLog(`✗ Erro no teste: ${err.message}`, 'error');
     } finally {
       setTesting((prev) => ({ ...prev, [index]: false }));
@@ -102,13 +112,18 @@ export default function ConfigPanel() {
       if (addLog) addLog(`Máximo de ${maxMachines} PC(s) atingido`, 'warn');
       return;
     }
-    const newMachine = { id: 'tmp-' + Date.now(), name: `PC ${draft.length + 1}`, host: '', port: 5900 };
-    setDraft(prev => [...prev, newMachine]);
+    const newMachine = {
+      id: 'tmp-' + Date.now(),
+      name: `PC ${draft.length + 1}`,
+      host: '',
+      port: 5900,
+    };
+    setDraft((prev) => [...prev, newMachine]);
   };
 
   const handleRemoveLocal = (index) => {
     if (draft.length <= 1) return;
-    setDraft(prev => prev.filter((_, i) => i !== index));
+    setDraft((prev) => prev.filter((_, i) => i !== index));
     setErrors((prev) => {
       const next = {};
       Object.keys(prev).forEach((k) => {
@@ -140,11 +155,14 @@ export default function ConfigPanel() {
         <div className="mb-6 p-4 bg-accent/10 rounded-xl border border-accent/30">
           <p className="text-xs text-text-faint mb-1">
             Este é o IP Tailscale <strong>deste</strong> PC — passe ele para quem for conectar aqui.
-            Para conectar <strong>neste app</strong> em outro PC, use o IP Tailscale do PC remoto (visto lá, não aqui).
+            Para conectar <strong>neste app</strong> em outro PC, use o IP Tailscale do PC remoto
+            (visto lá, não aqui).
           </p>
           <div className="flex items-center gap-2 mt-2">
             <code className="flex-1 px-3 py-2 bg-inset rounded-lg text-sm font-mono text-text-primary border border-line">
-              {localIp === null ? 'Detectando...' : localIp || 'Não encontrado — Tailscale está instalado e conectado?'}
+              {localIp === null
+                ? 'Detectando...'
+                : localIp || 'Não encontrado — Tailscale está instalado e conectado?'}
             </code>
             {localIp && (
               <button
@@ -165,7 +183,9 @@ export default function ConfigPanel() {
               className={`bg-surface rounded-xl p-5 border relative ${errors[index] ? 'border-danger/60' : 'border-line'}`}
             >
               <div className="flex items-center justify-between mb-4">
-                <h3 className="text-sm font-medium text-text-secondary">{machine.name || `PC ${index + 1}`}</h3>
+                <h3 className="text-sm font-medium text-text-secondary">
+                  {machine.name || `PC ${index + 1}`}
+                </h3>
                 {draft.length > 1 && (
                   <button
                     onClick={() => handleRemoveLocal(index)}
@@ -196,7 +216,9 @@ export default function ConfigPanel() {
                     placeholder="100.x.x.x"
                   />
                   {testResults[index] && (
-                    <div className={`flex items-center gap-1 text-xs mt-1 ${testResults[index].ok ? 'text-success' : 'text-danger'}`}>
+                    <div
+                      className={`flex items-center gap-1 text-xs mt-1 ${testResults[index].ok ? 'text-success' : 'text-danger'}`}
+                    >
                       {testResults[index].ok ? <Check size={12} /> : <XCircle size={12} />}
                       {testResults[index].ok
                         ? `Acessível em ${testResults[index].ms}ms`
@@ -229,7 +251,8 @@ export default function ConfigPanel() {
                   />
                   {[18900, 18901, 18902, 18903].includes(Number(machine.port)) && (
                     <p className="flex items-center gap-1 text-xs text-warning mt-1">
-                      <AlertTriangle size={12} /> Essa é uma porta interna do OpenPortal, não do VNC. Use 5900 (padrão do TightVNC).
+                      <AlertTriangle size={12} /> Essa é uma porta interna do OpenPortal, não do
+                      VNC. Use 5900 (padrão do TightVNC).
                     </p>
                   )}
                 </div>
@@ -244,13 +267,16 @@ export default function ConfigPanel() {
                   placeholder="Deixe em branco se não tiver senha"
                 />
                 <p className="text-xs text-text-faint mt-1">
-                  Se o VNC tiver senha, configure aqui. Será usada como fallback se a conexão for recusada.
+                  Se o VNC tiver senha, configure aqui. Será usada como fallback se a conexão for
+                  recusada.
                 </p>
               </div>
               {errors[index] && (
                 <ul className="mt-3 space-y-1">
                   {errors[index].map((err) => (
-                    <li key={err} className="text-xs text-danger">• {err}</li>
+                    <li key={err} className="text-xs text-danger">
+                      • {err}
+                    </li>
                   ))}
                 </ul>
               )}
@@ -274,29 +300,30 @@ export default function ConfigPanel() {
           >
             {saved && <Check size={16} />} {saved ? 'Salvo' : 'Salvar configuração'}
           </button>
-          {saved && (
-            <span className="text-sm text-success">Configuração salva</span>
-          )}
+          {saved && <span className="text-sm text-success">Configuração salva</span>}
           {!saved && Object.keys(errors).length > 0 && (
-            <span className="text-sm text-danger">Corrija os campos destacados antes de salvar</span>
+            <span className="text-sm text-danger">
+              Corrija os campos destacados antes de salvar
+            </span>
           )}
         </div>
 
         <div className="mt-6 p-4 bg-surface/50 rounded-lg border border-line-subtle">
           <p className="text-xs text-text-faint">
-            Informe o IP Tailscale de cada PC remoto. O TightVNC Server deve
-            estar rodando na porta 5900 (ou na porta informada). Máximo de {maxMachines} PC(s).
-            Por segurança, só são aceitos IPs Tailscale (100.x) — fora do túnel Tailscale a conexão não é criptografada.
+            Informe o IP Tailscale de cada PC remoto. O TightVNC Server deve estar rodando na porta
+            5900 (ou na porta informada). Máximo de {maxMachines} PC(s). Por segurança, só são
+            aceitos IPs Tailscale (100.x) — fora do túnel Tailscale a conexão não é criptografada.
           </p>
         </div>
 
         <div className="mt-3 p-4 bg-warning/10 rounded-lg border border-warning/30 flex gap-2">
           <AlertTriangle size={14} className="text-warning shrink-0 mt-0.5" />
           <p className="text-xs text-warning/90">
-            Se uma conexão nunca chegar (fica "Aguardando aprovação" até dar timeout), verifique se o
-            Firewall do Windows não bloqueou o OpenPortal Remote no PC de destino — isso costuma acontecer
-            na primeira vez que o app roda lá. Vá em Firewall do Windows → Permitir um aplicativo e confirme
-            que o OpenPortal Remote está marcado para redes privadas.
+            Se uma conexão nunca chegar (fica &quot;Aguardando aprovação&quot; até dar timeout),
+            verifique se o Firewall do Windows não bloqueou o OpenPortal Remote no PC de destino —
+            isso costuma acontecer na primeira vez que o app roda lá. Vá em Firewall do Windows →
+            Permitir um aplicativo e confirme que o OpenPortal Remote está marcado para redes
+            privadas.
           </p>
         </div>
       </div>

@@ -1,4 +1,4 @@
-import { useContext, useMemo } from 'react';
+import { useContext } from 'react';
 import { Home, Settings, FolderOpen, Download, Sun, Moon, PanelLeftClose, X } from 'lucide-react';
 import { MachineContext } from '../App';
 import StatusBadge from './StatusBadge';
@@ -10,7 +10,9 @@ function NavButton({ active, onClick, icon, children, title }) {
       onClick={onClick}
       title={title}
       className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm transition-colors ${
-        active ? 'bg-surface-2 text-text-primary' : 'text-text-muted hover:bg-surface-2 hover:text-text-secondary'
+        active
+          ? 'bg-surface-2 text-text-primary'
+          : 'text-text-muted hover:bg-surface-2 hover:text-text-secondary'
       }`}
     >
       {icon}
@@ -49,7 +51,11 @@ export default function Sidebar() {
       return;
     }
     if (!isPrivateNetworkHost(machine.host)) {
-      if (addLog) addLog(`Aviso: ${machine.host} não parece ser da rede Tailscale. A conexão pode falhar.`, 'warn');
+      if (addLog)
+        addLog(
+          `Aviso: ${machine.host} não parece ser da rede Tailscale. A conexão pode falhar.`,
+          'warn',
+        );
     }
     if (addLog) addLog(`Sidebar: connecting to ${machine.host}:${machine.port}`);
     connectMachine(machine);
@@ -105,9 +111,7 @@ export default function Sidebar() {
           PCs ({machines.length}/{maxMachines})
         </p>
         {machines.length === 0 && (
-          <div className="px-2 py-3 text-xs text-text-faint text-center">
-            Nenhum PC cadastrado
-          </div>
+          <div className="px-2 py-3 text-xs text-text-faint text-center">Nenhum PC cadastrado</div>
         )}
         {machines.map((machine) => {
           const isConfigured = machine.host && machine.host.trim() !== '';
@@ -117,8 +121,11 @@ export default function Sidebar() {
               <button
                 onClick={() => handleClickMachine(machine)}
                 className={`w-full text-left px-3 py-2.5 rounded-lg border-none ${
-                  isActive ? 'bg-surface-2 text-text-primary' :
-                  isConfigured ? 'cursor-pointer text-text-secondary hover:bg-surface-2' : 'cursor-not-allowed text-text-faint'
+                  isActive
+                    ? 'bg-surface-2 text-text-primary'
+                    : isConfigured
+                      ? 'cursor-pointer text-text-secondary hover:bg-surface-2'
+                      : 'cursor-not-allowed text-text-faint'
                 } bg-transparent transition-colors`}
               >
                 <div className="flex items-center justify-between">
@@ -155,17 +162,41 @@ export default function Sidebar() {
       </nav>
 
       <nav className="flex flex-col gap-0.5 p-2 border-t border-line-subtle">
-        <NavButton active={isHome} onClick={goHome} icon={<Home size={16} />}>Início</NavButton>
-        <NavButton active={showConfig} onClick={() => { setShowFiles(false); setShowConfig(!showConfig); }} icon={<Settings size={16} />}>
+        <NavButton active={isHome} onClick={goHome} icon={<Home size={16} />}>
+          Início
+        </NavButton>
+        <NavButton
+          active={showConfig}
+          onClick={() => {
+            setShowFiles(false);
+            setShowConfig(!showConfig);
+          }}
+          icon={<Settings size={16} />}
+        >
           Configurações
         </NavButton>
-        <NavButton active={showFiles} onClick={() => { setShowConfig(false); setShowFiles(!showFiles); }} icon={<FolderOpen size={16} />}>
+        <NavButton
+          active={showFiles}
+          onClick={() => {
+            setShowConfig(false);
+            setShowFiles(!showFiles);
+          }}
+          icon={<FolderOpen size={16} />}
+        >
           Arquivos
         </NavButton>
-        <NavButton onClick={handleCheckUpdate} icon={<Download size={16} />} title="Verificar atualizações">
+        <NavButton
+          onClick={handleCheckUpdate}
+          icon={<Download size={16} />}
+          title="Verificar atualizações"
+        >
           Atualizações
         </NavButton>
-        <NavButton onClick={toggleTheme} icon={theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />} title="Alternar tema claro/escuro">
+        <NavButton
+          onClick={toggleTheme}
+          icon={theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}
+          title="Alternar tema claro/escuro"
+        >
           {theme === 'dark' ? 'Tema claro' : 'Tema escuro'}
         </NavButton>
       </nav>
