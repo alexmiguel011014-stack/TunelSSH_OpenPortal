@@ -246,7 +246,7 @@ flowchart TD
     F --> G[Docs: ARQUITETURA_CONEXAO.md + setup guide]
 ```
 
-- [ ] **Design rationale**: each target machine's `config.json` (via
+- [x] **Design rationale**: each target machine's `config.json` (via
   `src/main/config/config-manager.js`) gets a new `allowedUsers: string[]` field — the
   list of Tailscale login emails auto-approved on that specific machine. This is separate
   from the existing `machines` array (which is "who I want to connect to," client-side);
@@ -257,7 +257,7 @@ flowchart TD
   locally on that machine, matching how VNC passwords already work per-machine. Done
   when: the schema and the "unlisted identity falls back to manual dialog, never
   auto-rejects" behavior are written down before any code changes.
-- [ ] **Implementation — identity resolution**: new module (e.g.
+- [x] **Implementation — identity resolution**: new module (e.g.
   `src/main/connection/identity.js`) that shells out to
   `tailscale.exe whois --json <ip>` (locate the binary the same defensive way
   `net-guard.js`'s Tailscale-IP checks already assume Tailscale is installed; if the
@@ -266,7 +266,7 @@ flowchart TD
   `UserProfile.LoginName`. Done when: calling this against a real Tailscale peer IP on
   this dev machine returns the correct email, and calling it against a non-Tailscale IP
   (or with Tailscale stopped) returns "unknown" without throwing.
-- [ ] **Implementation — auto-approval gate**: in `handleConnectionRequest`
+- [x] **Implementation — auto-approval gate**: in `handleConnectionRequest`
   (`src/main/main.js:37`), resolve identity via the module above *before* building the
   `dialog.showMessageBox` call; if the resolved login is in `allowedUsers`, call
   `finish(true)` immediately and skip the dialog entirely; otherwise fall through to
@@ -275,13 +275,13 @@ flowchart TD
   `src/main/logging.js` — this log is also GOALS 4's event source, see below. Done when:
   a listed identity connects with zero dialog shown, and an unlisted identity still sees
   today's exact dialog.
-- [ ] **Implementation — allow-list UI**: new section in
+- [x] **Implementation — allow-list UI**: new section in
   `src/renderer/src/modules/config/ConfigPanel.jsx` (this machine's own settings, not the
   remote-machines list) to add/remove allowed Tailscale login emails, persisted via the
   existing `readConfig`/`writeConfig` IPC round-trip. Done when: adding an email here and
   restarting the request flow (no app restart needed, config is read live per request)
   actually changes whether that identity is auto-approved.
-- [ ] **Tests**: unit-test the allow-list matching logic and the whois-failure fallback
+- [x] **Tests**: unit-test the allow-list matching logic and the whois-failure fallback
   path in isolation (mock the `tailscale whois` shell-out) — same Vitest pattern as
   `src/main/connection/__tests__/net-guard.test.js`. Done when: a test proves an
   allow-listed login auto-approves, a non-listed login does not, and a whois failure
@@ -290,7 +290,7 @@ flowchart TD
   (matching the P/E1/E2 shape) and 2 machines, confirm: the professor's identity
   auto-approves on both; a student's identity auto-approves only on their assigned
   machine and still shows the manual dialog on the other.
-- [ ] **Docs**: update `docs/ARQUITETURA_CONEXAO.md` with the new auto-authorization flow
+- [x] **Docs**: update `docs/ARQUITETURA_CONEXAO.md` with the new auto-authorization flow
   (§2's approval description no longer says "aprovação manual obrigatória" unconditionally),
   and add a short setup note: every person needing auto-approval must be invited to the
   tailnet with their **own** Tailscale account (shared logins break identity resolution

@@ -72,17 +72,23 @@ class ConnectionRequestServer extends EventEmitter {
           const req = {
             requestId: msg.requestId || String(Date.now()),
             fromName: msg.fromName || 'Desconhecido',
+            // Self-reported by the client — display-only (e.g. in the
+            // approval dialog). Never use this for an authorization
+            // decision: remoteAddress below is the value that can't be
+            // spoofed by the payload.
             fromIp: msg.fromIp || '',
-            capability: wantsTunnel ? 'tunnel' : 'vnc'
+            remoteAddress: socket.remoteAddress || '',
+            capability: wantsTunnel ? 'tunnel' : 'vnc',
           };
 
           const respond = (payload) => {
             if (socket.destroyed) return;
             const approved = !!payload.approved;
             // Se rejeitado explicitamente, marca para o cliente saber
-            const finalPayload = wantsTunnel && approved
-              ? { ...payload, tunnel: true }
-              : { ...payload, rejected: !approved };
+            const finalPayload =
+              wantsTunnel && approved
+                ? { ...payload, tunnel: true }
+                : { ...payload, rejected: !approved };
             socket.write(JSON.stringify(finalPayload));
             if (wantsTunnel && approved) {
               upgradeToFileSession(req);
@@ -94,11 +100,22 @@ class ConnectionRequestServer extends EventEmitter {
           if (this.onRequest) {
             this.onRequest(req, respond);
           } else {
-            respond({ type: 'connect-response', requestId: req.requestId, approved: false, message: 'Server not ready' });
+            respond({
+              type: 'connect-response',
+              requestId: req.requestId,
+              approved: false,
+              message: 'Server not ready',
+            });
           }
         } else {
           if (!socket.destroyed) {
-            socket.write(JSON.stringify({ type: 'connect-response', approved: false, message: 'Unknown request' }));
+            socket.write(
+              JSON.stringify({
+                type: 'connect-response',
+                approved: false,
+                message: 'Unknown request',
+              }),
+            );
             socket.end();
           }
         }
@@ -151,17 +168,23 @@ function sendConnectRequestOnce(host, fromName, fromIp, port = SIGNAL_PORT, opts
     };
 
     timer = setTimeout(() => {
-      fail(new Error('Sem resposta do PC remoto (timeout de 15s) — verifique se o OpenPortal está aberto lá e se o Firewall do Windows não bloqueou o app na primeira execução'));
+      fail(
+        new Error(
+          'Sem resposta do PC remoto (timeout de 15s) — verifique se o OpenPortal está aberto lá e se o Firewall do Windows não bloqueou o app na primeira execução',
+        ),
+      );
     }, REQUEST_TIMEOUT);
 
     socket.on('connect', () => {
-      socket.write(JSON.stringify({
-        type: 'connect-request',
-        requestId: String(Date.now()),
-        fromName,
-        fromIp,
-        capability: wantsTunnel ? 'tunnel' : undefined
-      }));
+      socket.write(
+        JSON.stringify({
+          type: 'connect-request',
+          requestId: String(Date.now()),
+          fromName,
+          fromIp,
+          capability: wantsTunnel ? 'tunnel' : undefined,
+        }),
+      );
     });
 
     socket.on('data', (d) => {
@@ -196,8 +219,11 @@ function sendConnectRequestOnce(host, fromName, fromIp, port = SIGNAL_PORT, opts
     });
 
     socket.on('error', (err) => {
-      const hint = err.code === 'ECONNREFUSED' ? ' — verifique se o OpenPortal está aberto no PC remoto' : '';
-      fail(new Error(`Não foi possível contactar ${host}:${port} (${err.code || err.message})${hint}`));
+      const hint =
+        err.code === 'ECONNREFUSED' ? ' — verifique se o OpenPortal está aberto no PC remoto' : '';
+      fail(
+        new Error(`Não foi possível contactar ${host}:${port} (${err.code || err.message})${hint}`),
+      );
     });
 
     socket.on('close', () => {
@@ -218,7 +244,9 @@ function sendConnectRequest(host, fromName, fromIp, port = SIGNAL_PORT, opts = {
         return res;
       } catch (err) {
         lastError = err;
-        console.error(`[connection-request] Tentativa ${attempt}/${MAX_ATTEMPTS} falhou para ${host}:${port}: ${err.message}`);
+        console.error(
+          `[connection-request] Tentativa ${attempt}/${MAX_ATTEMPTS} falhou para ${host}:${port}: ${err.message}`,
+        );
       }
     }
     throw lastError || new Error('Falha ao contactar o PC remoto');

@@ -11,6 +11,10 @@ function isValidHost(host) {
   return false;
 }
 
+function isValidLogin(login) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test((login || '').trim());
+}
+
 export default function ConfigPanel() {
   const { machines, saveMachines, setShowConfig, maxMachines, addLog } = useContext(MachineContext);
 
@@ -21,6 +25,11 @@ export default function ConfigPanel() {
   const [testResults, setTestResults] = useState({});
   const [localIp, setLocalIp] = useState(null); // null = carregando, '' = não achou
 
+  const [allowedUsers, setAllowedUsers] = useState([]);
+  const [newAllowedUser, setNewAllowedUser] = useState('');
+  const [allowedUsersSaved, setAllowedUsersSaved] = useState(false);
+  const [allowedUsersError, setAllowedUsersError] = useState('');
+
   useEffect(() => {
     window.electronAPI
       ?.getLocalIp?.()
@@ -28,8 +37,43 @@ export default function ConfigPanel() {
       .catch(() => setLocalIp(''));
   }, []);
 
+  useEffect(() => {
+    window.electronAPI
+      ?.getConfig?.()
+      .then((cfg) => setAllowedUsers(Array.isArray(cfg?.allowedUsers) ? cfg.allowedUsers : []))
+      .catch(() => setAllowedUsers([]));
+  }, []);
+
   const copyLocalIp = () => {
     if (localIp) navigator.clipboard?.writeText(localIp);
+  };
+
+  const saveAllowedUsers = (next) => {
+    setAllowedUsers(next);
+    window.electronAPI?.saveConfig({ allowedUsers: next });
+    setAllowedUsersSaved(true);
+    setTimeout(() => setAllowedUsersSaved(false), 2000);
+  };
+
+  const handleAddAllowedUser = () => {
+    const login = newAllowedUser.trim();
+    if (!isValidLogin(login)) {
+      setAllowedUsersError('Informe um e-mail de login Tailscale válido');
+      return;
+    }
+    if (allowedUsers.includes(login)) {
+      setAllowedUsersError('Esse e-mail já está na lista');
+      return;
+    }
+    setAllowedUsersError('');
+    setNewAllowedUser('');
+    saveAllowedUsers([...allowedUsers, login]);
+    if (addLog) addLog(`Adicionado à lista de auto-aprovação: ${login}`, 'info');
+  };
+
+  const handleRemoveAllowedUser = (login) => {
+    saveAllowedUsers(allowedUsers.filter((u) => u !== login));
+    if (addLog) addLog(`Removido da lista de auto-aprovação: ${login}`, 'info');
   };
 
   const handleTest = async (index, machine) => {
@@ -305,6 +349,60 @@ export default function ConfigPanel() {
             <span className="text-sm text-danger">
               Corrija os campos destacados antes de salvar
             </span>
+          )}
+        </div>
+
+        <div className="mt-10 pt-8 border-t border-line">
+          <h3 className="text-sm font-medium text-text-secondary mb-1">
+            Auto-aprovação de conexões
+          </h3>
+          <p className="text-xs text-text-faint mb-4">
+            Logins Tailscale (e-mail) que se conectam a <strong>este</strong> PC sem precisar do
+            diálogo Aceitar/Rejeitar. Quem não estiver nesta lista continua vendo o diálogo manual
+            normalmente.
+          </p>
+
+          {allowedUsers.length > 0 && (
+            <ul className="space-y-2 mb-3">
+              {allowedUsers.map((login) => (
+                <li
+                  key={login}
+                  className="flex items-center justify-between bg-surface rounded-lg px-3 py-2 border border-line"
+                >
+                  <span className="text-sm text-text-primary font-mono">{login}</span>
+                  <button
+                    onClick={() => handleRemoveAllowedUser(login)}
+                    className="text-xs text-danger hover:opacity-80 transition-opacity bg-transparent border border-danger/40 rounded px-2 py-1"
+                  >
+                    Remover
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+
+          <div className="flex items-center gap-2">
+            <input
+              type="text"
+              value={newAllowedUser}
+              onChange={(e) => {
+                setNewAllowedUser(e.target.value);
+                setAllowedUsersError('');
+              }}
+              onKeyDown={(e) => e.key === 'Enter' && handleAddAllowedUser()}
+              className="flex-1 bg-inset border border-line rounded-lg px-3 py-2 text-sm text-text-primary font-mono focus:outline-none focus:border-accent transition-colors"
+              placeholder="usuario@exemplo.com"
+            />
+            <button
+              onClick={handleAddAllowedUser}
+              className="px-4 py-2 text-sm rounded-lg border border-line text-text-secondary hover:border-accent hover:text-accent transition-colors"
+            >
+              Adicionar
+            </button>
+          </div>
+          {allowedUsersError && <p className="text-xs text-danger mt-2">{allowedUsersError}</p>}
+          {allowedUsersSaved && (
+            <p className="text-xs text-success mt-2">Lista de auto-aprovação salva</p>
           )}
         </div>
 

@@ -91,7 +91,12 @@ CLIENTE (App local)               SERVIDOR (App remoto)
 - Servidor DEVE estar rodando
 
 ✅ **Autenticação**
-- Aprovação manual obrigatória
+- Aprovação manual por padrão — **mas** identidades Tailscale (e-mail de login,
+  resolvido via `tailscale whois` sobre o IP real do socket) cadastradas na
+  lista `allowedUsers` desta máquina pulam o diálogo e entram direto. Quem não
+  está na lista continua vendo o diálogo manual normalmente. Ver
+  `src/main/connection/identity.js` e a seção "Auto-aprovação de conexões" em
+  Configurações.
 - Sem senha (você removeu propositalmente)
 - Fallback: senha VNC opcional (o que implementamos)
 
@@ -104,6 +109,12 @@ CLIENTE (App local)               SERVIDOR (App remoto)
 - Apenas UM usuário remoto por vez
 - Aprova conexão a cada tentativa (não fica salvo)
 
+> **Setup da auto-aprovação:** cada pessoa que deve auto-aprovar precisa do
+> **próprio** login Tailscale — um login compartilhado entre várias pessoas
+> quebra a identificação, já que `tailscale whois` devolveria o mesmo e-mail
+> para todo mundo que o usa. O plano gratuito do Tailscale já suporta até 6
+> contas de usuário separadas em uma tailnet.
+
 ---
 
 ## 3. Comparação Lado-a-Lado
@@ -112,7 +123,7 @@ CLIENTE (App local)               SERVIDOR (App remoto)
 |---------|-------------------|------------------|
 | **Identificação** | ID global único | IP Tailscale (deve saber antes) |
 | **Discovery** | Fácil (qualquer um descobre seu ID) | Difícil (precisa estar na rede Tailscale) |
-| **Aprovação** | Obrigatória + Opcional senha | Obrigatória + Opcional senha |
+| **Aprovação** | Obrigatória + Opcional senha | Manual, com auto-aprovação opcional por identidade Tailscale allow-listada |
 | **Identidade do Servidor** | ID público | IP privado (Tailscale) |
 | **Conhecimento prévio** | Não (só o ID) | Sim (precisa do IP) |
 | **Transportes** | TCP + UDP, próprio protocolo | Tailscale + WebSocket + RFB |

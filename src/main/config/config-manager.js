@@ -12,6 +12,10 @@ const DEFAULT_CONFIG = {
     { id: 'pc-3', name: 'PC 3', host: '', port: 5900 },
   ],
   proxyPort: 18900,
+  // Tailscale login emails auto-approved on THIS machine (who may connect to
+  // me), independent of `machines` above (who I connect out to). See
+  // identity.js.
+  allowedUsers: [],
 };
 
 // Senha VNC nunca é gravada em texto puro no disco — usa o cofre do SO
@@ -39,7 +43,7 @@ function readConfig() {
   try {
     if (fs.existsSync(CONFIG_FILE)) {
       let raw = fs.readFileSync(CONFIG_FILE, 'utf-8');
-      if (raw.charCodeAt(0) === 0xFEFF) raw = raw.slice(1);
+      if (raw.charCodeAt(0) === 0xfeff) raw = raw.slice(1);
       const config = JSON.parse(raw);
       if (Array.isArray(config.machines)) {
         config.machines = config.machines.map((m) => {
@@ -61,7 +65,11 @@ function writeConfig(config) {
     if (!fs.existsSync(CONFIG_DIR)) {
       fs.mkdirSync(CONFIG_DIR, { recursive: true });
     }
-    const toWrite = { ...config };
+    // Merge onto the existing on-disk config rather than replacing it
+    // outright: callers like App.jsx's saveMachines() only ever send
+    // { machines }, and a plain overwrite would silently drop unrelated
+    // top-level fields (allowedUsers) not part of this particular save.
+    const toWrite = { ...readConfig(), ...config };
     if (Array.isArray(toWrite.machines)) {
       toWrite.machines = toWrite.machines.map((m) => {
         if (!m.password) return m;
