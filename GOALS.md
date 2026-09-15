@@ -121,43 +121,74 @@ the way a user would use it, not just present in the diff.
 Adds Windows' native Remote Desktop as an alternative transport to VNC, embedded in the
 app the same way noVNC is today (per the user's explicit preference over an external
 `mstsc.exe` window). Selectable **per machine** in `ConfigPanel` rather than a hard
-cutover — VNC keeps working for any machine not yet migrated, which matters given the
-open dependency-risk and NLA tradeoff below.
+cutover — VNC keeps working for any machine not yet migrated.
+
+**Revised after re-running the research gate (2026-09-14):** `citronneur/node-rdpjs`
+(last commit 2017) and `citronneur/mstsc.js` (last commit 2021) are both confirmed dead —
+worse than "little recent activity," genuinely abandoned. The community
+"node-rdpjs-2" fork is dead too (2020) and never added NLA. A third option surfaced
+during this check — MeshCentral (actively maintained) vendors an NLA-patched node-rdpjs
+fork — but it's GPL-3.0, which conflicts with this project's MIT license
+(`docs/LICENSE.txt`) if distributed, so it was **not** adopted.
+
+**Decided path (user's explicit choice, given all three above): native Windows RDP
+ActiveX control (`MSTSCLib`, via `mstscax.dll`, already present on every target
+Windows machine).** This sidesteps the NLA tradeoff entirely instead of accepting it —
+`MSTSCLib` is Microsoft's own client (the same control `mstsc.exe` itself embeds) and
+already speaks NLA natively, so **no registry change, no security downgrade, and no
+GPL code** are needed on any target machine. The tradeoff moves from "security" to
+"build complexity": Electron/Chromium cannot host an ActiveX/COM control inside its own
+renderer, so this needs a small **native Windows sidecar process** (C#/.NET Framework
+4.8 WinForms — chosen over modern .NET so no new SDK install is required; this machine
+already has MSBuild + .NET Framework reference assemblies via VS Build Tools) that
+hosts the control in its own native window, parented under the Electron window's HWND
+(`BrowserWindow.getNativeWindowHandle()` + Win32 `SetParent`) so it visually sits inside
+the app like noVNC's iframe does. Interop uses
+[`Devolutions/MsRdpEx`](https://github.com/Devolutions/MsRdpEx) (MIT, actively
+maintained, built exactly for this) rather than hand-rolling `aximp`/`tlbimp` COM
+interop generation.
+
+**Also simplifies the transport plan:** unlike VNC/noVNC (browser code, can only reach
+the network via `proxy.js`'s WS→TCP bridge), the sidecar is a native process that opens
+its own raw TCP connection to port 3389 — **no `proxy.js` changes needed**. The existing
+connect-request/approval flow (`connection-request.js`) still gates whether a connection
+is allowed at all, same as VNC and file transfer today.
 
 ```mermaid
 flowchart TD
-    A[Verify node-rdpjs/mstsc.js maintenance state] --> B[Design: NLA tradeoff decision - manual]
-    B --> C[Provisioning: enable RDP hosting on target - manual per machine]
-    C --> D[Provisioning: dedicated RDP credential]
-    D --> E[Main process: RDP bridge on proxy pattern]
-    E --> F[Renderer: embedded RDP viewer]
-    F --> G[ConfigPanel: per-machine transport selection]
-    G --> H[Manual E2E test: real Pro-edition machine]
-    H --> I[Docs: ARQUITETURA_CONEXAO.md RDP path]
+    A[Research gate: verify library state - done] --> B[User decision: ActiveX/MSTSCLib - done]
+    B --> C[Sidecar scaffold: WinForms + MsRdpEx, prove HWND parenting]
+    C --> D[Provisioning: enable RDP hosting on target - manual per machine]
+    D --> E[Provisioning: dedicated RDP credential]
+    E --> F[Main process: launch/manage sidecar + IPC protocol]
+    F --> G[Renderer: RDP viewer placeholder + resize/position forwarding]
+    G --> H[ConfigPanel: per-machine transport selection]
+    H --> I[Manual E2E test: real Pro-edition machine, NLA on]
+    I --> J[Docs: ARQUITETURA_CONEXAO.md RDP path]
 ```
 
-- [ ] **Research gate (do this first, it can invalidate the rest of this section)**:
-      re-check the current state of `citronneur/node-rdpjs` and `citronneur/mstsc.js` (and
-      the `node-rdpjs-2` fork mentioned in community discussion as a maintained-newer-Node
-      fork) — commit recency, unresolved critical issues, whether NLA support has landed
-      since this plan was written. These libraries showed little recent maintenance activity
-      and GPL-3.0 licensing as of this writing. If both are now abandoned or broken against
-      current Node, stop and reconsider: either the native Windows RDP ActiveX control
-      (`MSTSCLib`, via a native Node addon — Windows-only, no NLA gap, more build complexity)
-      or shipping the external-`mstsc.exe`-window fallback the user already said they'd
-      rather avoid. Done when: this is checked against the live repos, not assumed from this
-      file.
-- [ ] **Design rationale — NLA tradeoff `(manual)`**: `node-rdpjs`/`mstsc.js` only speak
-      the SSL security layer, not NLA. Modern Windows defaults to requiring NLA for RDP.
-      Shipping this path means disabling NLA (`UserAuthentication` registry value, see
-      provisioning item below) on every migrated machine. This is a real reduction in RDP's
-      own defense-in-depth, mitigated but not eliminated by the fact that network access is
-      already gated by Tailscale (WireGuard-authenticated peers only — an attacker would need
-      to already be an authorized Tailscale node to reach port 3389 at all). **This needs the
-      user's explicit sign-off before implementation starts**, not a default silently baked
-      in. Alternative if they decline: native ActiveX embedding (secure, NLA-capable, Windows-only
-      native module — bigger implementation lift, not scoped in detail here since it's the
-      fallback path, not the primary one).
+- [x] **Research gate (do this first, it can invalidate the rest of this section)**:
+      re-checked `citronneur/node-rdpjs`, `citronneur/mstsc.js`, and the `node-rdpjs-2`
+      fork against their live repos (commit dates, issues) — all three confirmed
+      abandoned, not just "little recent activity." Also found and evaluated MeshCentral's
+      maintained-but-GPL-3.0 fork as a fourth data point. Done when: checked against live
+      repos, not assumed from this file — done, see revision note above.
+- [x] **Design rationale — transport decision `(manual)`**: presented the research above
+      plus 4 concrete paths (native ActiveX, accept SSL-only/no-NLA, vendor the GPL-3.0
+      MeshCentral fork, external `mstsc.exe` window) to the user. **Decided: native
+      ActiveX/MSTSCLib**, sidestepping the NLA tradeoff rather than accepting it, at the
+      cost of a new native-sidecar build target (see revision note above for the concrete
+      architecture). Done when: written down before implementation — done, this section.
+- [ ] **Sidecar scaffold**: new `sidecar/` (or similar) folder — minimal C#/.NET
+      Framework 4.8 WinForms project referencing `MsRdpEx` (NuGet), built via the
+      already-installed MSBuild (`MSBuild/Current/Bin/amd64/MSBuild.exe` under this
+      machine's VS Build Tools install — no new SDK install). First milestone is
+      deliberately narrow: prove a native window from this sidecar can be parented under
+      an Electron `BrowserWindow`'s HWND and tracks its position/size — before spending any
+      effort on the RDP control itself. Done when: launching the sidecar from the Electron
+      app shows a native window overlaying a placeholder area in the renderer, and moving/
+      resizing the Electron window moves/resizes the overlay in lockstep — verified
+      visually, not just "process started."
 - [ ] **Provisioning — enable RDP hosting `(manual, one-time per machine)`**: add an
       "Enable Remote Desktop hosting" action to the target-side app (the same "OpenPortal
       Remote" instance that already runs on each of the 10 PCs), triggered from its own
@@ -166,44 +197,45 @@ flowchart TD
   Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name 'fDenyTSConnections' -Value 0
   Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
   ```
-  plus, only after the NLA design item above is resolved in favor of the embedded path,
-  disabling `UserAuthentication` under
-  `HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp`. Verify
-  success by reading the registry value back, not just trusting a zero exit code. Done
-  when: running this action on a fresh Pro-edition VM actually allows an incoming RDP
-  connection.
+  No `UserAuthentication`/NLA registry change — NLA stays on (that's the whole point of
+  this path). Verify success by reading the registry value back, not just trusting a zero
+  exit code. Done when: running this action on a fresh Pro-edition VM actually allows an
+  incoming RDP connection with NLA still enabled.
 - [ ] **Provisioning — dedicated RDP credential**: create a dedicated local Windows
       account for the app's own RDP use during provisioning (strong random password,
       generated once, stored via Electron's `safeStorage` — not the target user's personal
       Windows login). Recommended over reusing the logged-in user's own password so the admin
       never needs to know or handle it. Done when: the app can authenticate an RDP session
       using only this generated account, with no manual credential entry per connection.
-- [ ] **Implementation — main process bridge**: extend the existing WS↔TCP bridge pattern
-      (`src/main/connection/proxy.js`) to target port 3389 for machines configured for RDP,
-      reusing `isAllowedHost` (`src/main/connection/net-guard.js`) unchanged — the
-      Tailscale-CGNAT allowlist doesn't care which protocol rides over the tunnel. The
-      existing connect-request/approval flow (`connection-request.js`) stays as the gate
-      before any bridge opens, same as VNC today.
+- [ ] **Implementation — main process sidecar management + IPC**: launch/stop the sidecar
+      process per RDP-mode connection (mirroring how `connectMachine`/`disconnectMachine`
+      already manage per-machine lifecycle after GOALS 1), passing host/credential over a
+      local IPC channel (named pipe or loopback socket — not argv, to avoid the password
+      appearing in `Get-Process`/Task Manager command lines), and forwarding
+      position/size updates so the sidecar's native window tracks the renderer's RDP
+      viewer placeholder. Reuses `connection-request.js`'s existing approval gate before
+      ever launching the sidecar — same as VNC and file transfer today. No `proxy.js`
+      change needed (see revision note above).
 - [ ] **Implementation — renderer RDP viewer**: new module mirroring
       `src/renderer/src/modules/connection/RemoteViewer.jsx`'s shape and lifecycle (same
-      connection banner, same mount/unmount behavior once GOALS 1's multi-instance model
-      exists), rendering `node-rdpjs`/`mstsc.js` bitmap-update events to a `<canvas>` instead
-      of an iframe. Reuse GOALS 1's per-machine connection-state model rather than adding a
-      second, parallel state shape for RDP-mode machines.
+      connection banner, same mount/unmount behavior per GOALS 1's multi-instance model),
+      but rendering a positioned placeholder `<div>` (the sidecar's native window overlays
+      it) instead of a `<canvas>` or iframe. Reuse GOALS 1's per-machine connection-state
+      model rather than adding a second, parallel state shape for RDP-mode machines.
 - [ ] **Implementation — ConfigPanel transport selection**: per-machine setting (VNC vs
       RDP) in `src/renderer/src/modules/config/ConfigPanel.jsx`, defaulting existing machines
       to VNC (no forced migration). Done when: a machine's transport can be switched without
       affecting any other machine's configuration.
-- [ ] **Tests**: unit-test the transport-selection logic and the port-targeting decision
-      in the main-process bridge (VNC machine → 5900, RDP machine → 3389) — pure logic, no
-      real network needed. Full RDP wire-protocol behavior (auth, bitmap rendering, input
-      forwarding) is **not** realistically unit-testable — mark end-to-end verification
-      `(manual)`: connect to a real Pro-edition Tailscale-networked machine with RDP hosting
-      enabled and confirm mouse, keyboard, and screen updates all work, then confirm the same
+- [ ] **Tests**: unit-test the transport-selection logic and the main-process IPC message
+      shapes (connect/disconnect/resize) — pure logic, no real sidecar process needed. Full
+      RDP behavior (auth, rendering, input forwarding, HWND parenting itself) is **not**
+      realistically unit-testable — mark end-to-end verification `(manual)`: connect to a
+      real Pro-edition Tailscale-networked machine with RDP hosting enabled and NLA still
+      on, confirm mouse, keyboard, and screen updates all work, then confirm the same
       machine still works if switched back to VNC.
-- [ ] **Docs**: update `docs/ARQUITETURA_CONEXAO.md` with the RDP path — the NLA
-      tradeoff, the provisioning steps, and per-machine migration guidance (nothing forces a
-      machine off VNC).
+- [ ] **Docs**: update `docs/ARQUITETURA_CONEXAO.md` with the RDP path — the sidecar
+      architecture, why NLA needed no tradeoff this time, the provisioning steps, and
+      per-machine migration guidance (nothing forces a machine off VNC).
 
 **Done when (feature-level):** a Pro-edition machine configured for RDP connects, shows
 its live screen embedded in the app next to the file explorer exactly like VNC does

@@ -41,3 +41,7 @@ eco_tokens/
 
 # Artefato acidental de certificados do Windows
 Trusted Root Certification Authorities
+
+# Build output do sidecar C#/.NET (GOALS 2)
+sidecar/bin/
+sidecar/obj/
