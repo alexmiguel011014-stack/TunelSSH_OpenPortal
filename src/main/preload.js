@@ -32,6 +32,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   getDiagStatus: () => ipcRenderer.invoke('diag:getStatus'),
 
+  // Painel de Atividade (GOALS 4) — histórico local + push ao vivo de
+  // eventos de sessão reportados por outras máquinas configuradas.
+  getActivityLog: () => ipcRenderer.invoke('activity:get'),
+  onActivityEvent: (callback) => {
+    const handler = (_, event) => callback(event);
+    ipcRenderer.on('activity:new', handler);
+    return () => ipcRenderer.removeListener('activity:new', handler);
+  },
+
   // Transferência de arquivos — painel local (fs direto nesta máquina)
   fsListRoots: () => ipcRenderer.invoke('fs:listRoots'),
   fsListDir: (dirPath) => ipcRenderer.invoke('fs:listDir', dirPath),

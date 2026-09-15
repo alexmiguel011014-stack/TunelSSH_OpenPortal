@@ -16,6 +16,8 @@ const RETRY_DELAY = 5000;
 // servidor, então não há como observar seu início/fim de verdade — mas como
 // o App.jsx abre e fecha a sessão de arquivos junto com a sessão VNC (mesmo
 // clique de conectar/desconectar), esse sinal reflete bem a sessão na prática.
+// Também emite 'activity-event' (GOALS 4): mensagem fire-and-forget enviada
+// por OUTRA instância deste app para reportar uma sessão que aconteceu lá.
 class ConnectionRequestServer extends EventEmitter {
   constructor(onRequest) {
     super();
@@ -52,6 +54,9 @@ class ConnectionRequestServer extends EventEmitter {
         const onFileSessionEnd = () => {
           if (closed) return;
           closed = true;
+          // GOALS 4 lê isso em 'file-session-close' para contar arquivos
+          // movidos na sessão — ver file-agent.js's filesTransferred.
+          req.filesTransferred = session.filesTransferred;
           session.destroy();
           this.emit('file-session-close', req);
         };
@@ -107,6 +112,12 @@ class ConnectionRequestServer extends EventEmitter {
               message: 'Server not ready',
             });
           }
+        } else if (msg.type === 'activity-event') {
+          // Fire-and-forget (GOALS 4): sem resposta esperada, nunca abre
+          // sessão de arquivos nem interfere num connect-request em curso
+          // na mesma porta.
+          this.emit('activity-event', msg.event);
+          if (!socket.destroyed) socket.end();
         } else {
           if (!socket.destroyed) {
             socket.write(
@@ -253,4 +264,24 @@ function sendConnectRequest(host, fromName, fromIp, port = SIGNAL_PORT, opts = {
   })();
 }
 
-module.exports = { ConnectionRequestServer, sendConnectRequest, SIGNAL_PORT };
+// Push best-effort usado por GOALS 4: sem retry (ao contrário de
+// sendConnectRequest) e sem resposta esperada — se o peer estiver
+// inalcançável, o erro é simplesmente descartado. A sessão em si já
+// aconteceu e não é perdida, só o aviso ao vivo é que fica sem entrega.
+function sendActivityEvent(host, event, port = SIGNAL_PORT) {
+  try {
+    const socket = net.createConnection(port, host);
+    socket.setTimeout(4000, () => socket.destroy());
+    socket.on('connect', () => {
+      socket.end(JSON.stringify({ type: 'activity-event', event }));
+    });
+    socket.on('error', () => {});
+  } catch {}
+}
+
+module.exports = {
+  ConnectionRequestServer,
+  sendConnectRequest,
+  sendActivityEvent,
+  SIGNAL_PORT,
+};

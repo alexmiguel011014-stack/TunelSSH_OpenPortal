@@ -348,7 +348,7 @@ flowchart TD
     J --> K[Docs: setup guide]
 ```
 
-- [ ] **Design rationale**: event schema —
+- [x] **Design rationale**: event schema —
       `{ identity, machineName, startedAt, endedAt, durationMs, filesTransferred }`
       (`identity` from GOALS 3's verified `tailscale whois` resolution, never the
       self-reported `fromName`). Each target machine gets a new config field
@@ -363,7 +363,7 @@ flowchart TD
       happened and isn't lost, only the _live_ notice is. Done when: this schema, the
       `reportTo` config shape, and the best-effort (not guaranteed) delivery guarantee are
       written down before implementation.
-- [ ] **Implementation — wire protocol**: extend
+- [x] **Implementation — wire protocol**: extend
       `src/main/connection/connection-request.js`'s `dataHandler` to recognize
       `{ type: 'activity-event', ... }` alongside the existing `{ type: 'connect-request' }`
       handling — routed to a new `onActivityEvent` callback (mirroring the existing
@@ -372,20 +372,20 @@ flowchart TD
       sending a hand-crafted `activity-event` message to a running instance's signal port is
       received and dispatched without disturbing any in-progress `connect-request` handling
       on the same port.
-- [ ] **Implementation — target-side push**: on `'file-session-close'` (already emitted
+- [x] **Implementation — target-side push**: on `'file-session-close'` (already emitted
       by `ConnectionRequestServer`, paired with `'file-session-open'` by `requestId` to
       compute `durationMs`), for each configured `reportTo` identity: resolve its live
       Tailscale IP (`tailscale status --json`, matching by `UserProfile.LoginName`) and send
       the `activity-event` message to that IP's signal port. Reuses GOALS 3's identity module
       for the `whois`/`status` shell-outs rather than duplicating Tailscale CLI handling.
-- [ ] **Verify file-transfer counting**: check whether
+- [x] **Verify file-transfer counting**: check whether
       `src/main/file-transfer/file-agent.js` (target-side handler) exposes a hookable event
       or count for completed downloads specifically — this was assumed easy in conversation
       but not yet confirmed against the actual code; if no such hook exists yet, add one
       (count frames/operations of the download type) rather than re-deriving it after the
       fact. Done when: a real file download during a session shows up in the count reported
       at session-end.
-- [ ] **Implementation — professor-side receive + persist**: in `src/main/main.js`,
+- [x] **Implementation — professor-side receive + persist**: in `src/main/main.js`,
       handle incoming `activity-event` messages by appending to a new local activity log
       (new module, e.g. `src/main/config/activity-log.js`, following the exact
       read/write/trim pattern `history-manager.js` already uses — same `userData`-relative
@@ -393,7 +393,7 @@ flowchart TD
       (already used elsewhere in this codebase, see `src/main/core/ipc-handlers.js`) for the
       real-time-push feel. Expose the log to the renderer via IPC, same request/response
       pattern as `getHistory`/`addHistoryEntry` already use.
-- [ ] **Implementation — Activity panel (renderer)**: new module under
+- [x] **Implementation — Activity panel (renderer)**: new module under
       `src/renderer/src/modules/` (e.g. `activity/ActivityPanel.jsx`), reachable from
       `Sidebar.jsx` like the existing Dashboard/Config/Files sections. Shows the activity log
       as a live-updating feed — a monospace/terminal-styled dark feed is a reasonable default
@@ -402,7 +402,7 @@ flowchart TD
       Done when: an `activity-event` arriving while the panel is open appends to the visible
       feed without a manual refresh (same live-IPC-push pattern the app already uses for VNC
       status via `onVncStatus`).
-- [ ] **Implementation — optional Telegram alert (opt-in)**: add `telegraf` (recommended
+- [x] **Implementation — optional Telegram alert (opt-in)**: add `telegraf` (recommended
       over `node-telegram-bot-api` — that one's active development has slowed — and
       preferred over `grammy` here since Telegraf is the more established default for a
       simple send-only bot with no need for its full middleware/session system) as a
@@ -413,11 +413,11 @@ flowchart TD
 {endedAt} ({duration}). Arquivos transferidos: {filesTransferred}."` Send failures (bad
       token, network down) log and continue — never let a Telegram failure affect the actual
       remote-control session or the in-app log, which stays the source of truth regardless.
-- [ ] **Implementation — config UI**: `reportTo` list and the Telegram opt-in
+- [x] **Implementation — config UI**: `reportTo` list and the Telegram opt-in
       (token/chat-id, encrypted via `safeStorage` like the existing VNC password field) live
       together in this machine's own settings, near GOALS 3's allow-list section — both are
       "what this machine reports, and to whom/how."
-- [ ] **Tests**: unit-test the event schema, the `reportTo`→live-IP resolution (mock the
+- [x] **Tests**: unit-test the event schema, the `reportTo`→live-IP resolution (mock the
       `tailscale status --json` shell-out), and the Telegram summary-message formatting —
       pure logic, same Vitest pattern as the rest of this project. Mock any Telegraf send
       call and any real network send in tests; never hit real Tailscale/Telegram from the
@@ -428,7 +428,7 @@ flowchart TD
       live on the professor's side with correct identity/duration/file-count — then
       separately enable the Telegram opt-in and confirm the same event also produces a
       Telegram message.
-- [ ] **Docs**: update `docs/ARQUITETURA_CONEXAO.md` with the push architecture and
+- [x] **Docs**: update `docs/ARQUITETURA_CONEXAO.md` with the push architecture and
       `reportTo` config, plus a short setup guide (can live there or in a new
       `docs/TELEGRAM_SETUP.md`) for the optional Telegram bot — creating it via @BotFather,
       getting its token, finding the destination chat id.

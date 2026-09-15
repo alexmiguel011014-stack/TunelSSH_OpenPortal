@@ -16,18 +16,28 @@ const DEFAULT_CONFIG = {
   // me), independent of `machines` above (who I connect out to). See
   // identity.js.
   allowedUsers: [],
+  // GOALS 4: Tailscale login emails THIS machine pushes its own session
+  // activity to (e.g. the professor's identity, for a classroom machine).
+  // Independent of allowedUsers — a machine can auto-approve someone without
+  // reporting to them, and vice versa.
+  reportTo: [],
+  // GOALS 4: optional Telegram alert layered on top of the reportTo push,
+  // off by default. token is encrypted at rest the same way machine
+  // passwords are — see encryptSecret/decryptSecret below.
+  telegram: { enabled: false, token: '', chatId: '' },
 };
 
-// Senha VNC nunca é gravada em texto puro no disco — usa o cofre do SO
-// (DPAPI no Windows via Electron safeStorage). Chamado só dentro de
-// readConfig/writeConfig, que só rodam via IPC após app.whenReady().
-function encryptPassword(plain) {
+// Segredos (senha VNC, token do Telegram) nunca são gravados em texto puro
+// no disco — usa o cofre do SO (DPAPI no Windows via Electron safeStorage).
+// Chamado só dentro de readConfig/writeConfig, que só rodam via IPC após
+// app.whenReady().
+function encryptSecret(plain) {
   if (!plain) return undefined;
   if (!safeStorage.isEncryptionAvailable()) return { plain };
   return { enc: safeStorage.encryptString(plain).toString('base64') };
 }
 
-function decryptPassword(field) {
+function decryptSecret(field) {
   if (!field) return '';
   if (field.enc) {
     try {
@@ -49,8 +59,12 @@ function readConfig() {
         config.machines = config.machines.map((m) => {
           if (!m.passwordEnc) return m;
           const { passwordEnc, ...rest } = m;
-          return { ...rest, password: decryptPassword(passwordEnc) };
+          return { ...rest, password: decryptSecret(passwordEnc) };
         });
+      }
+      if (config.telegram?.tokenEnc) {
+        const { tokenEnc, ...rest } = config.telegram;
+        config.telegram = { ...rest, token: decryptSecret(tokenEnc) };
       }
       return config;
     }
@@ -68,14 +82,19 @@ function writeConfig(config) {
     // Merge onto the existing on-disk config rather than replacing it
     // outright: callers like App.jsx's saveMachines() only ever send
     // { machines }, and a plain overwrite would silently drop unrelated
-    // top-level fields (allowedUsers) not part of this particular save.
+    // top-level fields (allowedUsers, reportTo, telegram) not part of this
+    // particular save.
     const toWrite = { ...readConfig(), ...config };
     if (Array.isArray(toWrite.machines)) {
       toWrite.machines = toWrite.machines.map((m) => {
         if (!m.password) return m;
         const { password, ...rest } = m;
-        return { ...rest, passwordEnc: encryptPassword(password) };
+        return { ...rest, passwordEnc: encryptSecret(password) };
       });
+    }
+    if (toWrite.telegram && toWrite.telegram.token) {
+      const { token, ...rest } = toWrite.telegram;
+      toWrite.telegram = { ...rest, tokenEnc: encryptSecret(token) };
     }
     const tmp = CONFIG_FILE + '.tmp';
     fs.writeFileSync(tmp, JSON.stringify(toWrite, null, 2), 'utf-8');

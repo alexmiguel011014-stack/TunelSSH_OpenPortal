@@ -4,6 +4,7 @@ import Sidebar from './shared/Sidebar';
 import RemoteViewer from './modules/connection/RemoteViewer';
 import ConfigPanel from './modules/config/ConfigPanel';
 import FileExplorer from './modules/file-transfer/FileExplorer';
+import ActivityPanel from './modules/activity/ActivityPanel';
 import Dashboard from './modules/dashboard/Dashboard';
 import {
   connectMachineEntry,
@@ -52,6 +53,7 @@ export default function App() {
   const [statuses, setStatuses] = useState({});
   const [showConfig, setShowConfig] = useState(false);
   const [showFiles, setShowFiles] = useState(false);
+  const [showActivity, setShowActivity] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [reconnectFlag, setReconnectFlag] = useState(0);
   const [logs, setLogs] = useState([]);
@@ -367,6 +369,8 @@ export default function App() {
     setShowConfig,
     showFiles,
     setShowFiles,
+    showActivity,
+    setShowActivity,
     sidebarCollapsed,
     toggleSidebar,
     maxMachines: MAX_MACHINES,
@@ -390,15 +394,19 @@ export default function App() {
         <Sidebar />
         <main className="flex-1 flex flex-col overflow-hidden relative">
           {/* Uma instância de RemoteViewer por máquina conectada, sempre
-              montada — só a focada (e só quando não estamos em Config/Arquivos)
-              fica visível. Isso evita derrubar a sessão VNC das outras ao
-              trocar de foco (ver docs/ARQUITETURA_CONEXAO.md). */}
+              montada — só a focada (e só quando não estamos em
+              Config/Arquivos/Atividade) fica visível. Isso evita derrubar a
+              sessão VNC das outras ao trocar de foco (ver
+              docs/ARQUITETURA_CONEXAO.md). */}
           {Object.entries(connectedMachines).map(([id, entry]) => (
             <div
               key={id}
               className="absolute inset-0 flex flex-col overflow-hidden"
               style={{
-                display: !showConfig && !showFiles && id === focusedMachineId ? 'flex' : 'none',
+                display:
+                  !showConfig && !showFiles && !showActivity && id === focusedMachineId
+                    ? 'flex'
+                    : 'none',
               }}
             >
               <RemoteViewer
@@ -413,6 +421,8 @@ export default function App() {
             <ConfigPanel />
           ) : showFiles ? (
             <FileExplorer />
+          ) : showActivity ? (
+            <ActivityPanel />
           ) : !focusedMachineId ? (
             <Dashboard />
           ) : null}

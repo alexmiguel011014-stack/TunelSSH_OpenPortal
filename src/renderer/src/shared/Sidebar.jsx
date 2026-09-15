@@ -3,6 +3,7 @@ import {
   Home,
   Settings,
   FolderOpen,
+  Activity,
   Download,
   Sun,
   Moon,
@@ -45,6 +46,8 @@ export default function Sidebar() {
     setShowConfig,
     showFiles,
     setShowFiles,
+    showActivity,
+    setShowActivity,
     sidebarCollapsed,
     toggleSidebar,
     maxMachines,
@@ -101,9 +104,10 @@ export default function Sidebar() {
     setFocusedMachineId(null);
     setShowConfig(false);
     setShowFiles(false);
+    setShowActivity(false);
   };
 
-  const isHome = !focusedMachineId && !showConfig && !showFiles;
+  const isHome = !focusedMachineId && !showConfig && !showFiles && !showActivity;
 
   return (
     <aside className="w-64 min-w-64 bg-surface border-r border-line flex flex-col">
@@ -195,9 +199,21 @@ export default function Sidebar() {
           Início
         </NavButton>
         <NavButton
+          active={showActivity}
+          onClick={() => {
+            setShowConfig(false);
+            setShowFiles(false);
+            setShowActivity(!showActivity);
+          }}
+          icon={<Activity size={16} />}
+        >
+          Atividade
+        </NavButton>
+        <NavButton
           active={showConfig}
           onClick={() => {
             setShowFiles(false);
+            setShowActivity(false);
             setShowConfig(!showConfig);
           }}
           icon={<Settings size={16} />}
@@ -208,6 +224,7 @@ export default function Sidebar() {
           active={showFiles}
           onClick={() => {
             setShowConfig(false);
+            setShowActivity(false);
             setShowFiles(!showFiles);
           }}
           icon={<FolderOpen size={16} />}

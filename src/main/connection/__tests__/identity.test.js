@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { resolveIdentity, normalizeIp, isAllowed } from '../identity.js';
+import { resolveIdentity, resolveLoginToIp, normalizeIp, isAllowed } from '../identity.js';
 
 describe('normalizeIp', () => {
   it('strips the IPv4-mapped IPv6 prefix', () => {
@@ -80,5 +80,70 @@ describe('resolveIdentity', () => {
     const execFile = vi.fn((_bin, _args, _opts, cb) => cb(new Error('ENOENT')));
     const existsSync = vi.fn(() => true);
     await expect(resolveIdentity('100.64.1.4', { execFile, existsSync })).resolves.toBe('unknown');
+  });
+});
+
+// resolveLoginToIp: `deps` injection mirrors resolveIdentity's tests above —
+// same reason (real tailscale.exe otherwise gets invoked despite module
+// mocks). Fixture matches the real `tailscale status --json` shape confirmed
+// against a live install: peers carry only a UserID, resolved through the
+// top-level User map — not an embedded UserProfile.
+function statusFixture({ login = 'prof@example.com', peerIp = '100.64.1.9', online = true } = {}) {
+  return {
+    User: { 42: { LoginName: login } },
+    Peer: {
+      'nodekey:abc': {
+        UserID: 42,
+        Online: online,
+        TailscaleIPs: [peerIp, 'fd7a:115c:a1e0::1'],
+      },
+    },
+  };
+}
+
+describe('resolveLoginToIp', () => {
+  it('returns the IPv4 address of the peer matching the login', async () => {
+    const execFile = vi.fn((_bin, _args, _opts, cb) => cb(null, JSON.stringify(statusFixture())));
+    await expect(
+      resolveLoginToIp('prof@example.com', {
+        execFile,
+        existsSync: vi.fn(() => false),
+      }),
+    ).resolves.toBe('100.64.1.9');
+  });
+
+  it('returns null when no peer matches the login', async () => {
+    const execFile = vi.fn((_bin, _args, _opts, cb) => cb(null, JSON.stringify(statusFixture())));
+    await expect(
+      resolveLoginToIp('nobody@example.com', {
+        execFile,
+        existsSync: vi.fn(() => false),
+      }),
+    ).resolves.toBe(null);
+  });
+
+  it('returns null for an empty login without shelling out', async () => {
+    const execFile = vi.fn();
+    await expect(resolveLoginToIp('', { execFile, existsSync: vi.fn() })).resolves.toBe(null);
+    expect(execFile).not.toHaveBeenCalled();
+  });
+
+  it('degrades to null when the tailscale binary is missing entirely', async () => {
+    const execFile = vi.fn((_bin, _args, _opts, cb) => cb(new Error('ENOENT')));
+    const existsSync = vi.fn(() => false);
+    await expect(resolveLoginToIp('prof@example.com', { execFile, existsSync })).resolves.toBe(
+      null,
+    );
+  });
+
+  it('falls back to the default Windows install path when the bare binary is not on PATH', async () => {
+    const execFile = vi.fn((bin, _args, _opts, cb) => {
+      if (bin === 'tailscale') return cb(new Error('ENOENT'));
+      cb(null, JSON.stringify(statusFixture({ login: 'e1@example.com', peerIp: '100.64.2.5' })));
+    });
+    const existsSync = vi.fn(() => true);
+    await expect(resolveLoginToIp('e1@example.com', { execFile, existsSync })).resolves.toBe(
+      '100.64.2.5',
+    );
   });
 });

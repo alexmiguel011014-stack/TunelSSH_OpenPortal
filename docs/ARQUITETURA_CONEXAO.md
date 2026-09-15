@@ -140,6 +140,38 @@ CLIENTE (App local)               SERVIDOR (App remoto)
 > para todo mundo que o usa. O plano gratuito do Tailscale já suporta até 6
 > contas de usuário separadas em uma tailnet.
 
+### Painel de Atividade (push entre máquinas)
+
+Cada sessão de arquivos que termina numa máquina pode ser reportada, em
+tempo real, para outras identidades Tailscale — pensado para um professor
+acompanhar o uso de várias máquinas de alunos sem precisar entrar em cada
+uma. Nenhum servidor novo: reaproveita a mesma porta de sinalização (18902)
+que já recebe pedidos de conexão, com um novo tipo de mensagem
+`{ type: 'activity-event', ... }` — fire-and-forget, sem diálogo, sem
+resposta esperada (ver `src/main/connection/connection-request.js`).
+
+**Fluxo:**
+
+1. Uma sessão de arquivos fecha (`file-session-close`) em `src/main/main.js`.
+2. Monta o evento `{ identity, machineName, startedAt, endedAt, durationMs,
+filesTransferred }` — `identity` vem sempre da resolução `tailscale whois`
+   (GOALS 3), nunca do nome auto-declarado pelo cliente.
+3. Para cada login em `reportTo` (configurado em Configurações, nesta
+   máquina), resolve o IP Tailscale atual via `tailscale status --json`
+   (`resolveLoginToIp` em `identity.js`) e envia o evento para a porta 18902
+   daquele IP.
+4. Se o destino estiver inalcançável, o envio é descartado silenciosamente —
+   best-effort, não há fila nem retry. A sessão em si não é afetada, só o
+   aviso ao vivo não chega.
+5. Quem recebe (qualquer instância do app, também sempre ouvindo na 18902)
+   persiste em `activity.json` (`src/main/config/activity-log.js`), mostra
+   uma notificação do SO e atualiza o painel "Atividade" ao vivo via IPC.
+
+**Alerta opcional por Telegram:** o mesmo evento, se habilitado nas
+Configurações desta máquina, também vira uma mensagem de texto enviada via
+`telegraf` — ver `docs/TELEGRAM_SETUP.md`. É uma camada extra, não o
+mecanismo de entrega: o painel in-app funciona inteiro sem isso.
+
 ---
 
 ## 3. Comparação Lado-a-Lado

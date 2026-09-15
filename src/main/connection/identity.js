@@ -63,4 +63,58 @@ function isAllowed(identity, allowedUsers) {
   return identity !== 'unknown' && Array.isArray(allowedUsers) && allowedUsers.includes(identity);
 }
 
-module.exports = { resolveIdentity, normalizeIp, isAllowed };
+function runStatus(execFile, binary) {
+  return new Promise((resolve) => {
+    execFile(binary, ['status', '--json'], { timeout: 5000, windowsHide: true }, (err, stdout) => {
+      if (err) return resolve(null);
+      try {
+        resolve(JSON.parse(stdout));
+      } catch {
+        resolve(null);
+      }
+    });
+  });
+}
+
+// Resolves a Tailscale login (email) to that peer's current IPv4 Tailscale
+// address via `tailscale status --json` — used by GOALS 4 to push activity
+// events to each configured `reportTo` identity without hardcoding its IP
+// (a peer's IP is stable per-device, but this also means the professor can
+// switch devices later without reconfiguring every target machine).
+// Peers only carry a UserID in modern `tailscale status --json` output; the
+// login (LoginName) lives in the top-level `User` map keyed by that same id
+// — confirmed against a live install rather than assumed. Never throws:
+// missing binary, stopped tailscaled, or no matching/reachable peer all
+// resolve to null, which callers treat as "drop this push silently".
+async function resolveLoginToIp(login, deps = {}) {
+  const execFile = deps.execFile || nodeExecFile;
+  const existsSync = deps.existsSync || nodeFs.existsSync;
+  if (!login) return null;
+
+  const tryBinary = async (binary) => {
+    const status = await runStatus(execFile, binary);
+    if (!status) return null;
+    const users = status.User || {};
+    const matchingIds = new Set(
+      Object.entries(users)
+        .filter(([, u]) => u?.LoginName === login)
+        .map(([id]) => id),
+    );
+    if (matchingIds.size === 0) return null;
+    for (const peer of Object.values(status.Peer || {})) {
+      if (!matchingIds.has(String(peer.UserID)) || !Array.isArray(peer.TailscaleIPs)) continue;
+      const ipv4 = peer.TailscaleIPs.find((ip) => ip.includes('.'));
+      if (ipv4) return ipv4;
+    }
+    return null;
+  };
+
+  const ip = await tryBinary('tailscale');
+  if (ip) return ip;
+  if (existsSync(FALLBACK_BINARY)) {
+    return await tryBinary(FALLBACK_BINARY);
+  }
+  return null;
+}
+
+module.exports = { resolveIdentity, resolveLoginToIp, normalizeIp, isAllowed };

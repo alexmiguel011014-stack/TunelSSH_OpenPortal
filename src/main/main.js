@@ -1,4 +1,5 @@
-const { app, BrowserWindow, ipcMain, globalShortcut } = require('electron');
+const { app, BrowserWindow, ipcMain, globalShortcut, Notification } = require('electron');
+const os = require('os');
 const { initLogging } = require('./logging');
 const { createMainWindow } = require('./windows/main-window');
 const { onFileSessionOpen, onFileSessionClose } = require('./windows/control-banner');
@@ -12,10 +13,12 @@ const { initAutoUpdater } = require('./updater/auto-updater');
 const { buildAppMenu } = require('./app-menu');
 const { startWebSocketProxy } = require('./connection/proxy');
 const { registerIpcHandlers } = require('./core/ipc-handlers');
-const { ConnectionRequestServer } = require('./connection/connection-request');
+const { ConnectionRequestServer, sendActivityEvent } = require('./connection/connection-request');
 const { registerFileTransferIpc } = require('./file-transfer/ipc');
-const { resolveIdentity, isAllowed } = require('./connection/identity');
+const { resolveIdentity, isAllowed, resolveLoginToIp } = require('./connection/identity');
 const { readConfig } = require('./config/config-manager');
+const { addActivityEntry } = require('./config/activity-log');
+const { sendTelegramAlert } = require('./activity/telegram');
 
 initLogging();
 
@@ -44,28 +47,80 @@ const portStatus = {
   signal: { port: 18902, listening: false, error: null },
 };
 
+function send(channel, data) {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send(channel, data);
+  }
+}
+
+// GOALS 4: requestId -> { startedAt, identity } enquanto a sessão de
+// arquivos está aberta, só para calcular a duração no fechamento — não
+// precisa sobreviver a um restart do app (uma sessão não atravessa isso).
+const activitySessions = new Map();
+
+// Sessão de arquivos fechou: monta o evento de atividade e dispara
+// best-effort para cada `reportTo` (push) e, se habilitado, Telegram. Nunca
+// bloqueia o fechamento real da sessão — tudo aqui é fire-and-forget e
+// nenhuma falha de rede/Telegram propaga para fora desta função.
+function reportSessionActivity(req) {
+  const started = activitySessions.get(req.requestId);
+  activitySessions.delete(req.requestId);
+  if (!started) return;
+
+  const event = {
+    identity: started.identity,
+    machineName: os.hostname(),
+    startedAt: started.startedAt,
+    endedAt: Date.now(),
+    durationMs: Date.now() - started.startedAt,
+    filesTransferred: req.filesTransferred || 0,
+  };
+
+  const config = readConfig();
+  const reportTo = Array.isArray(config.reportTo) ? config.reportTo : [];
+  (async () => {
+    for (const login of reportTo) {
+      try {
+        const ip = await resolveLoginToIp(login);
+        if (ip) sendActivityEvent(ip, event);
+      } catch (err) {
+        console.error(`[main] Failed to push activity to ${login}:`, err.message);
+      }
+    }
+  })();
+
+  if (config.telegram?.enabled) {
+    sendTelegramAlert(config.telegram, event).catch((err) =>
+      console.error('[main] Telegram alert failed:', err.message),
+    );
+  }
+}
+
 async function handleConnectionRequest(req, respond) {
   const { dialog } = require('electron');
   const finish = (approved) =>
     respond({ type: 'connect-response', requestId: req.requestId, approved });
 
-  // Auto-approve a verified, allow-listed Tailscale identity before ever
-  // showing the manual dialog. Identity comes from the real socket address
-  // (req.remoteAddress), never the self-reported req.fromIp — see
-  // connection-request.js. Any resolution failure (Tailscale not installed,
-  // whois failure, IP not a tailnet peer) yields 'unknown', which never
-  // matches an allow-list entry and falls through to the manual dialog
-  // below exactly like today — this never auto-rejects, only auto-approves.
+  // Resolvido sempre (não só quando allowedUsers existe): GOALS 4 usa essa
+  // identidade verificada para atribuir sessões no log de atividade, mesmo
+  // em conexões aprovadas manualmente. Identity vem do IP real do socket
+  // (req.remoteAddress), nunca do req.fromIp auto-declarado — ver
+  // connection-request.js. Qualquer falha de resolução (Tailscale não
+  // instalado, whois falhou, IP não é peer da tailnet) vira 'unknown', que
+  // nunca casa com a allow-list nem é útil como identidade de atividade.
+  req.identity = await resolveIdentity(req.remoteAddress);
+
   const { allowedUsers } = readConfig();
-  if (Array.isArray(allowedUsers) && allowedUsers.length > 0) {
-    const identity = await resolveIdentity(req.remoteAddress);
-    if (isAllowed(identity, allowedUsers)) {
-      console.log(
-        `[main] Auto-approved connection request ${req.requestId} from ${identity} (${req.fromName}, ${req.remoteAddress})`,
-      );
-      finish(true);
-      return;
-    }
+  if (
+    Array.isArray(allowedUsers) &&
+    allowedUsers.length > 0 &&
+    isAllowed(req.identity, allowedUsers)
+  ) {
+    console.log(
+      `[main] Auto-approved connection request ${req.requestId} from ${req.identity} (${req.fromName}, ${req.remoteAddress})`,
+    );
+    finish(true);
+    return;
   }
 
   const parent = mainWindow && !mainWindow.isDestroyed() ? mainWindow : undefined;
@@ -121,8 +176,31 @@ app.whenReady().then(() => {
         ? `Porta ${portStatus.signal.port} já está em uso (outra instância do app rodando?)`
         : err.message;
   });
-  requestServer.on('file-session-open', (req) => onFileSessionOpen(req?.fromName));
-  requestServer.on('file-session-close', () => onFileSessionClose());
+  requestServer.on('file-session-open', (req) => {
+    onFileSessionOpen(req?.fromName);
+    activitySessions.set(req.requestId, {
+      startedAt: Date.now(),
+      identity: req.identity || 'unknown',
+    });
+  });
+  requestServer.on('file-session-close', (req) => {
+    onFileSessionClose();
+    reportSessionActivity(req);
+  });
+  requestServer.on('activity-event', (event) => {
+    addActivityEntry(event);
+    send('activity:new', event);
+    try {
+      if (Notification.isSupported()) {
+        new Notification({
+          title: 'Nova atividade',
+          body: `${event.identity} conectou-se a ${event.machineName}`,
+        }).show();
+      }
+    } catch (err) {
+      console.error('[main] Notification error:', err.message);
+    }
+  });
 
   registerIpcHandlers(mainWindow);
   registerFileTransferIpc(mainWindow);

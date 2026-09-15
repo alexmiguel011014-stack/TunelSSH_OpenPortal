@@ -15,6 +15,8 @@ function isValidLogin(login) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test((login || '').trim());
 }
 
+const DEFAULT_TELEGRAM = { enabled: false, token: '', chatId: '' };
+
 export default function ConfigPanel() {
   const { machines, saveMachines, setShowConfig, maxMachines, addLog } = useContext(MachineContext);
 
@@ -30,6 +32,18 @@ export default function ConfigPanel() {
   const [allowedUsersSaved, setAllowedUsersSaved] = useState(false);
   const [allowedUsersError, setAllowedUsersError] = useState('');
 
+  // GOALS 4: para quem ESTA máquina empurra o resumo de cada sessão (push
+  // best-effort, ver docs/ARQUITETURA_CONEXAO.md). Independente da lista de
+  // auto-aprovação acima — uma coisa é quem pode entrar, outra é pra quem eu
+  // aviso que entrou.
+  const [reportTo, setReportTo] = useState([]);
+  const [newReportTo, setNewReportTo] = useState('');
+  const [reportToSaved, setReportToSaved] = useState(false);
+  const [reportToError, setReportToError] = useState('');
+
+  const [telegram, setTelegram] = useState(DEFAULT_TELEGRAM);
+  const [telegramSaved, setTelegramSaved] = useState(false);
+
   useEffect(() => {
     window.electronAPI
       ?.getLocalIp?.()
@@ -40,8 +54,16 @@ export default function ConfigPanel() {
   useEffect(() => {
     window.electronAPI
       ?.getConfig?.()
-      .then((cfg) => setAllowedUsers(Array.isArray(cfg?.allowedUsers) ? cfg.allowedUsers : []))
-      .catch(() => setAllowedUsers([]));
+      .then((cfg) => {
+        setAllowedUsers(Array.isArray(cfg?.allowedUsers) ? cfg.allowedUsers : []);
+        setReportTo(Array.isArray(cfg?.reportTo) ? cfg.reportTo : []);
+        setTelegram({ ...DEFAULT_TELEGRAM, ...(cfg?.telegram || {}) });
+      })
+      .catch(() => {
+        setAllowedUsers([]);
+        setReportTo([]);
+        setTelegram(DEFAULT_TELEGRAM);
+      });
   }, []);
 
   const copyLocalIp = () => {
@@ -74,6 +96,45 @@ export default function ConfigPanel() {
   const handleRemoveAllowedUser = (login) => {
     saveAllowedUsers(allowedUsers.filter((u) => u !== login));
     if (addLog) addLog(`Removido da lista de auto-aprovação: ${login}`, 'info');
+  };
+
+  const saveReportTo = (next) => {
+    setReportTo(next);
+    window.electronAPI?.saveConfig({ reportTo: next });
+    setReportToSaved(true);
+    setTimeout(() => setReportToSaved(false), 2000);
+  };
+
+  const handleAddReportTo = () => {
+    const login = newReportTo.trim();
+    if (!isValidLogin(login)) {
+      setReportToError('Informe um e-mail de login Tailscale válido');
+      return;
+    }
+    if (reportTo.includes(login)) {
+      setReportToError('Esse e-mail já está na lista');
+      return;
+    }
+    setReportToError('');
+    setNewReportTo('');
+    saveReportTo([...reportTo, login]);
+    if (addLog) addLog(`Adicionado ao envio de atividade: ${login}`, 'info');
+  };
+
+  const handleRemoveReportTo = (login) => {
+    saveReportTo(reportTo.filter((u) => u !== login));
+    if (addLog) addLog(`Removido do envio de atividade: ${login}`, 'info');
+  };
+
+  const saveTelegram = (next) => {
+    setTelegram(next);
+    window.electronAPI?.saveConfig({ telegram: next });
+    setTelegramSaved(true);
+    setTimeout(() => setTelegramSaved(false), 2000);
+  };
+
+  const handleToggleTelegram = () => {
+    saveTelegram({ ...telegram, enabled: !telegram.enabled });
   };
 
   const handleTest = async (index, machine) => {
@@ -404,6 +465,115 @@ export default function ConfigPanel() {
           {allowedUsersSaved && (
             <p className="text-xs text-success mt-2">Lista de auto-aprovação salva</p>
           )}
+        </div>
+
+        <div className="mt-10 pt-8 border-t border-line">
+          <h3 className="text-sm font-medium text-text-secondary mb-1">Reportar atividade para</h3>
+          <p className="text-xs text-text-faint mb-4">
+            Logins Tailscale (e-mail) que recebem um resumo (identidade, duração, arquivos
+            transferidos) toda vez que uma sessão nesta máquina termina — aparece no painel
+            &quot;Atividade&quot; de quem estiver na lista, em tempo real. Envio best-effort: se a
+            pessoa estiver offline, o aviso é só descartado (a sessão em si não é afetada).
+          </p>
+
+          {reportTo.length > 0 && (
+            <ul className="space-y-2 mb-3">
+              {reportTo.map((login) => (
+                <li
+                  key={login}
+                  className="flex items-center justify-between bg-surface rounded-lg px-3 py-2 border border-line"
+                >
+                  <span className="text-sm text-text-primary font-mono">{login}</span>
+                  <button
+                    onClick={() => handleRemoveReportTo(login)}
+                    className="text-xs text-danger hover:opacity-80 transition-opacity bg-transparent border border-danger/40 rounded px-2 py-1"
+                  >
+                    Remover
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+
+          <div className="flex items-center gap-2">
+            <input
+              type="text"
+              value={newReportTo}
+              onChange={(e) => {
+                setNewReportTo(e.target.value);
+                setReportToError('');
+              }}
+              onKeyDown={(e) => e.key === 'Enter' && handleAddReportTo()}
+              className="flex-1 bg-inset border border-line rounded-lg px-3 py-2 text-sm text-text-primary font-mono focus:outline-none focus:border-accent transition-colors"
+              placeholder="professor@exemplo.com"
+            />
+            <button
+              onClick={handleAddReportTo}
+              className="px-4 py-2 text-sm rounded-lg border border-line text-text-secondary hover:border-accent hover:text-accent transition-colors"
+            >
+              Adicionar
+            </button>
+          </div>
+          {reportToError && <p className="text-xs text-danger mt-2">{reportToError}</p>}
+          {reportToSaved && <p className="text-xs text-success mt-2">Lista de envio salva</p>}
+        </div>
+
+        <div className="mt-10 pt-8 border-t border-line">
+          <div className="flex items-center justify-between mb-1">
+            <h3 className="text-sm font-medium text-text-secondary">
+              Alertas do Telegram (opcional)
+            </h3>
+            <button
+              onClick={handleToggleTelegram}
+              className={`text-xs px-3 py-1.5 rounded-lg border transition-colors ${
+                telegram.enabled
+                  ? 'border-success/50 text-success bg-success/10'
+                  : 'border-line text-text-muted hover:border-text-faint'
+              }`}
+            >
+              {telegram.enabled ? 'Ativado' : 'Desativado'}
+            </button>
+          </div>
+          <p className="text-xs text-text-faint mb-4">
+            Envia o mesmo resumo de &quot;Reportar atividade para&quot; também como mensagem no
+            Telegram — um alerta a mais, não o único lugar onde a atividade aparece. Requer
+            <code className="mx-1 px-1 py-0.5 bg-inset rounded text-[11px]">
+              npm install telegraf
+            </code>
+            no app (ver <code className="text-[11px]">docs/TELEGRAM_SETUP.md</code>) e um bot criado
+            com o @BotFather.
+          </p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-xs text-text-faint mb-1">Token do bot</label>
+              <input
+                type="password"
+                value={telegram.token}
+                onChange={(e) => setTelegram((prev) => ({ ...prev, token: e.target.value }))}
+                className="w-full bg-inset border border-line rounded-lg px-3 py-2 text-sm text-text-primary font-mono focus:outline-none focus:border-accent transition-colors"
+                placeholder="123456:ABC-DEF..."
+              />
+            </div>
+            <div>
+              <label className="block text-xs text-text-faint mb-1">Chat ID de destino</label>
+              <input
+                type="text"
+                value={telegram.chatId}
+                onChange={(e) => setTelegram((prev) => ({ ...prev, chatId: e.target.value }))}
+                className="w-full bg-inset border border-line rounded-lg px-3 py-2 text-sm text-text-primary font-mono focus:outline-none focus:border-accent transition-colors"
+                placeholder="123456789"
+              />
+            </div>
+          </div>
+          <div className="mt-3 flex items-center gap-3">
+            <button
+              onClick={() => saveTelegram(telegram)}
+              className="px-4 py-2 text-sm rounded-lg border border-line text-text-secondary hover:border-accent hover:text-accent transition-colors"
+            >
+              Salvar Telegram
+            </button>
+            {telegramSaved && <span className="text-xs text-success">Configuração salva</span>}
+          </div>
         </div>
 
         <div className="mt-6 p-4 bg-surface/50 rounded-lg border border-line-subtle">

@@ -1,8 +1,9 @@
-﻿'use strict';
+'use strict';
 
 const { ipcMain, app, Notification } = require('electron');
 const { readConfig, writeConfig } = require('../config/config-manager');
 const { readHistory, addEntry } = require('../config/history-manager');
+const { readActivityLog } = require('../config/activity-log');
 const { execSync } = require('child_process');
 const os = require('os');
 const net = require('net');
@@ -30,6 +31,10 @@ function registerIpcHandlers(mainWindow) {
 
   ipcMain.handle('history:add', (_, entry) => {
     return addEntry(entry);
+  });
+
+  ipcMain.handle('activity:get', () => {
+    return readActivityLog();
   });
 
   ipcMain.handle('vnc:connect', (_, machine) => {

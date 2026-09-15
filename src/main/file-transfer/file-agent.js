@@ -6,7 +6,14 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { encodeJson, encodeBinary, encodeBinaryEnd, FRAME_JSON, FRAME_BINARY, FRAME_BINARY_END } = require('./protocol');
+const {
+  encodeJson,
+  encodeBinary,
+  encodeBinaryEnd,
+  FRAME_JSON,
+  FRAME_BINARY,
+  FRAME_BINARY_END,
+} = require('./protocol');
 
 const CHUNK_SIZE = 64 * 1024;
 
@@ -31,6 +38,11 @@ class FileAgentSession {
     this.socket = socket;
     this.root = root || os.homedir();
     this.uploads = new Map(); // channelId -> { stream }
+    // GOALS 4: contagem simples de arquivos que efetivamente terminaram de
+    // ir/vir nesta sessão (envio + recebimento) — lida por
+    // connection-request.js ao fechar a sessão para compor o evento de
+    // atividade. Não distingue direção nem tamanho, só "quantos arquivos".
+    this.filesTransferred = 0;
   }
 
   send(frame) {
@@ -67,6 +79,7 @@ class FileAgentSession {
       if (!up) return;
       up.stream.end(() => {
         this.uploads.delete(channelId);
+        this.filesTransferred += 1;
         this.send(encodeJson(channelId, { cmd: 'put_done', ok: true }));
       });
     }
@@ -77,22 +90,44 @@ class FileAgentSession {
       switch (msg.cmd) {
         case 'list': {
           const nativeDir = resolveNative(this.root, msg.path);
-          const entries = await fs.promises.readdir(nativeDir, { withFileTypes: true });
+          const entries = await fs.promises.readdir(nativeDir, {
+            withFileTypes: true,
+          });
           const items = [];
           for (const entry of entries) {
             try {
               const st = await fs.promises.stat(path.join(nativeDir, entry.name));
-              items.push({ name: entry.name, dir: entry.isDirectory(), size: st.size, mtime: st.mtimeMs });
+              items.push({
+                name: entry.name,
+                dir: entry.isDirectory(),
+                size: st.size,
+                mtime: st.mtimeMs,
+              });
             } catch {}
           }
-          this.send(encodeJson(channelId, { cmd: 'list_res', ok: true, path: msg.path, entries: items }));
+          this.send(
+            encodeJson(channelId, {
+              cmd: 'list_res',
+              ok: true,
+              path: msg.path,
+              entries: items,
+            }),
+          );
           break;
         }
 
         case 'stat': {
           const nativePath = resolveNative(this.root, msg.path);
           const st = await fs.promises.stat(nativePath);
-          this.send(encodeJson(channelId, { cmd: 'stat_res', ok: true, dir: st.isDirectory(), size: st.size, mtime: st.mtimeMs }));
+          this.send(
+            encodeJson(channelId, {
+              cmd: 'stat_res',
+              ok: true,
+              dir: st.isDirectory(),
+              size: st.size,
+              mtime: st.mtimeMs,
+            }),
+          );
           break;
         }
 
@@ -127,14 +162,24 @@ class FileAgentSession {
         case 'get': {
           const nativePath = resolveNative(this.root, msg.path);
           const st = await fs.promises.stat(nativePath);
-          this.send(encodeJson(channelId, { cmd: 'get_res', ok: true, size: st.size, name: path.basename(nativePath) }));
+          this.send(
+            encodeJson(channelId, {
+              cmd: 'get_res',
+              ok: true,
+              size: st.size,
+              name: path.basename(nativePath),
+            }),
+          );
           await this.streamFileOut(channelId, nativePath);
+          this.filesTransferred += 1;
           break;
         }
 
         case 'put': {
           const nativePath = resolveNative(this.root, msg.path);
-          await fs.promises.mkdir(path.dirname(nativePath), { recursive: true });
+          await fs.promises.mkdir(path.dirname(nativePath), {
+            recursive: true,
+          });
           const stream = fs.createWriteStream(nativePath);
           this.uploads.set(channelId, { stream });
           stream.on('error', (err) => {
@@ -146,7 +191,12 @@ class FileAgentSession {
         }
 
         default:
-          this.send(encodeJson(channelId, { ok: false, error: `Comando desconhecido: ${msg.cmd}` }));
+          this.send(
+            encodeJson(channelId, {
+              ok: false,
+              error: `Comando desconhecido: ${msg.cmd}`,
+            }),
+          );
       }
     } catch (err) {
       this.send(encodeJson(channelId, { ok: false, error: err.message }));
@@ -155,7 +205,9 @@ class FileAgentSession {
 
   streamFileOut(channelId, nativePath) {
     return new Promise((resolve, reject) => {
-      const readStream = fs.createReadStream(nativePath, { highWaterMark: CHUNK_SIZE });
+      const readStream = fs.createReadStream(nativePath, {
+        highWaterMark: CHUNK_SIZE,
+      });
 
       readStream.on('data', (chunk) => {
         const flushed = this.socket.write(encodeBinary(channelId, chunk));
