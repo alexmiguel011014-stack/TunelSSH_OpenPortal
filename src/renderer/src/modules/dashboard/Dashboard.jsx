@@ -26,13 +26,14 @@ function groupHistory(history) {
 }
 
 export default function Dashboard() {
-  const { machines, activeMachine, connectMachine, addLog, connHistory } =
+  const { machines, connectedMachines, focusedMachineId, connectMachine, addLog, connHistory } =
     useContext(MachineContext);
   const [quickIp, setQuickIp] = useState('');
   const [connecting, setConnecting] = useState(false);
 
+  // connectMachine já resolve sozinho: se a máquina estiver conectada, só
+  // troca o foco; senão, inicia uma conexão nova. Nenhum guard extra aqui.
   const handleConnectMachine = async (machine) => {
-    if (activeMachine && activeMachine.id === machine.id) return;
     await connectMachine(machine);
   };
 
@@ -81,30 +82,32 @@ export default function Dashboard() {
               <div className="text-text-faint text-sm">Nenhum PC cadastrado.</div>
             ) : (
               <div className="space-y-1.5">
-                {availableMachines.map((m) => (
-                  <div
-                    key={m.id}
-                    className={`flex items-center gap-2.5 px-3 py-2.5 rounded-lg border ${
-                      activeMachine?.id === m.id
-                        ? 'border-accent bg-inset'
-                        : 'border-line-subtle bg-inset'
-                    }`}
-                  >
-                    <Monitor size={16} className="text-text-muted shrink-0" />
-                    <div className="flex-1 min-w-0">
-                      <div className="text-sm font-medium truncate">{m.name}</div>
-                      <div className="text-[11px] text-text-faint font-mono truncate">
-                        {m.mask || `${m.host}${m.port !== 5900 ? ':' + m.port : ''}`}
-                      </div>
-                    </div>
-                    <button
-                      className="px-3.5 py-1.5 rounded-md text-xs font-medium bg-accent hover:bg-accent-strong text-white transition-colors whitespace-nowrap"
-                      onClick={() => handleConnectMachine(m)}
+                {availableMachines.map((m) => {
+                  const isConnected = !!connectedMachines[m.id];
+                  const isFocused = focusedMachineId === m.id;
+                  return (
+                    <div
+                      key={m.id}
+                      className={`flex items-center gap-2.5 px-3 py-2.5 rounded-lg border ${
+                        isFocused ? 'border-accent bg-inset' : 'border-line-subtle bg-inset'
+                      }`}
                     >
-                      {activeMachine?.id === m.id ? 'Visualizando' : 'Conectar'}
-                    </button>
-                  </div>
-                ))}
+                      <Monitor size={16} className="text-text-muted shrink-0" />
+                      <div className="flex-1 min-w-0">
+                        <div className="text-sm font-medium truncate">{m.name}</div>
+                        <div className="text-[11px] text-text-faint font-mono truncate">
+                          {m.mask || `${m.host}${m.port !== 5900 ? ':' + m.port : ''}`}
+                        </div>
+                      </div>
+                      <button
+                        className="px-3.5 py-1.5 rounded-md text-xs font-medium bg-accent hover:bg-accent-strong text-white transition-colors whitespace-nowrap"
+                        onClick={() => handleConnectMachine(m)}
+                      >
+                        {isFocused ? 'Visualizando' : isConnected ? 'Focar' : 'Conectar'}
+                      </button>
+                    </div>
+                  );
+                })}
               </div>
             )}
           </div>

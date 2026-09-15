@@ -5,6 +5,11 @@ import RemoteViewer from './modules/connection/RemoteViewer';
 import ConfigPanel from './modules/config/ConfigPanel';
 import FileExplorer from './modules/file-transfer/FileExplorer';
 import Dashboard from './modules/dashboard/Dashboard';
+import {
+  connectMachineEntry,
+  disconnectMachineEntry,
+  pickFocusAfterDisconnect,
+} from './shared/lib/connectionState';
 
 export const MachineContext = createContext(null);
 
@@ -39,7 +44,11 @@ function genId(existingMachines) {
 
 export default function App() {
   const [machines, setMachines] = useState(DEFAULT_MACHINES);
-  const [activeMachineId, setActiveMachineId] = useState(null);
+  // Mapa de máquinas conectadas (id -> { machine, ftSessionId }). Trocar de
+  // foco não mexe aqui — só desconectar remove uma entrada. Ver
+  // docs/ARQUITETURA_CONEXAO.md, "Modelo de estado (multi-sessão)".
+  const [connectedMachines, setConnectedMachines] = useState({});
+  const [focusedMachineId, setFocusedMachineId] = useState(null);
   const [statuses, setStatuses] = useState({});
   const [showConfig, setShowConfig] = useState(false);
   const [showFiles, setShowFiles] = useState(false);
@@ -49,7 +58,6 @@ export default function App() {
   const [showLogs, setShowLogs] = useState(false);
   const [connHistory, setConnHistory] = useState([]);
   const [theme, setTheme] = useState(() => localStorage.getItem('openportal-theme') || 'dark');
-  const [ftSessionId, setFtSessionId] = useState(null);
   const [wasRejected, setWasRejected] = useState(false);
   const logIdRef = useRef(0);
 
@@ -124,7 +132,11 @@ export default function App() {
         ...prev,
         [status.machineId || 'global']: status.state,
       }));
-      const m = machines.find((x) => x.id === status.machineId);
+      // Cobre máquinas cadastradas E conexões avulsas (IP direto), que não
+      // aparecem em `machines` mas têm entrada própria em connectedMachines.
+      const m =
+        connectedMachines[status.machineId]?.machine ||
+        machines.find((x) => x.id === status.machineId);
       const stateLabel = status.state === 'connected' ? 'connect' : status.state;
       if (
         m &&
@@ -152,42 +164,58 @@ export default function App() {
       }
     });
     return unsub;
-  }, [machines, recordConn, addLog]);
+  }, [machines, connectedMachines, recordConn, addLog]);
 
-  const activeMachine =
-    typeof activeMachineId === 'string'
-      ? machines.find((m) => m.id === activeMachineId)
-      : activeMachineId;
+  const focusedMachine = focusedMachineId
+    ? connectedMachines[focusedMachineId]?.machine || null
+    : null;
+  const ftSessionId = focusedMachineId
+    ? connectedMachines[focusedMachineId]?.ftSessionId || null
+    : null;
 
-  const disconnectMachine = useCallback(async () => {
-    addLog('Disconnected');
-    window.electronAPI?.disconnectVnc();
-    if (ftSessionId) {
-      window.electronAPI?.ftDisconnect(ftSessionId).catch(() => {});
-    }
-    if (activeMachine) {
+  // Desconecta uma máquina específica sem afetar as outras conectadas — o id
+  // é sempre explícito agora que várias podem estar conectadas ao mesmo tempo.
+  const disconnectMachine = useCallback(
+    (id) => {
+      const entry = connectedMachines[id];
+      if (!entry) return;
+      addLog(`Disconnected: ${entry.machine.name}`);
+      window.electronAPI?.disconnectVnc(id);
+      if (entry.ftSessionId) {
+        window.electronAPI?.ftDisconnect(entry.ftSessionId).catch(() => {});
+      }
       recordConn({
-        name: activeMachine.name,
-        host: activeMachine.host,
+        name: entry.machine.name,
+        host: entry.machine.host,
         state: 'disconnect',
         message: 'Desconectado',
       });
-    }
-    setActiveMachineId(null);
-    setFtSessionId(null);
-    setStatuses({});
-  }, [addLog, activeMachine, recordConn, ftSessionId]);
+      setConnectedMachines((prev) => disconnectMachineEntry(prev, id));
+      setStatuses((prev) => {
+        if (!(id in prev)) return prev;
+        const next = { ...prev };
+        delete next[id];
+        return next;
+      });
+      setFocusedMachineId((prev) => pickFocusAfterDisconnect(connectedMachines, prev, id));
+    },
+    [addLog, connectedMachines, recordConn],
+  );
 
   // Ponto único de conexão: cobre PCs cadastrados (Sidebar/Dashboard) e IP
-  // avulso. Nunca reaproveita aprovação anterior — pede permissão ao PC
-  // remoto sempre, e essa MESMA aprovação já libera a sessão de arquivos
-  // (ver file-transfer-session.js no main), então a tela de Arquivos nunca
-  // precisa pedir IP nem permissão de novo.
+  // avulso. Se a máquina já está conectada, só troca o foco — nunca
+  // desconecta as outras. Nunca reaproveita aprovação anterior num connect
+  // novo: pede permissão ao PC remoto sempre, e essa MESMA aprovação já
+  // libera a sessão de arquivos (ver file-transfer-session.js no main),
+  // então a tela de Arquivos nunca precisa pedir IP nem permissão de novo.
   const connectMachine = useCallback(
     async (machine) => {
       if (!machine || !machine.host) return;
-      if (activeMachine) {
-        await disconnectMachine();
+      if (connectedMachines[machine.id]) {
+        setShowConfig(false);
+        setShowFiles(false);
+        setFocusedMachineId(machine.id);
+        return;
       }
       setShowConfig(false);
       setShowFiles(false);
@@ -243,9 +271,10 @@ export default function App() {
           return;
         }
         setWasRejected(false);
-        setFtSessionId(res.sessionId);
-        const identity = machines.some((m) => m.id === machine.id) ? machine.id : machine;
-        setActiveMachineId(identity);
+        setConnectedMachines((prev) =>
+          connectMachineEntry(prev, machine, { ftSessionId: res.sessionId }),
+        );
+        setFocusedMachineId(machine.id);
         console.log(`[app] Connection approved, file session: ${res.sessionId}, connecting VNC...`);
         window.electronAPI
           ?.connectVnc(machine)
@@ -263,7 +292,7 @@ export default function App() {
         });
       }
     },
-    [activeMachine, disconnectMachine, machines, addLog, recordConn],
+    [connectedMachines, addLog, recordConn],
   );
 
   const saveMachines = useCallback(
@@ -301,13 +330,13 @@ export default function App() {
       }
       const updated = machines.filter((m) => m.id !== id);
       setMachines(updated);
-      if (activeMachineId === id) {
-        disconnectMachine();
+      if (connectedMachines[id]) {
+        disconnectMachine(id);
       }
       window.electronAPI?.saveConfig({ machines: updated });
       addLog(`Removed machine ${id}`);
     },
-    [machines, activeMachineId, disconnectMachine, addLog],
+    [machines, connectedMachines, disconnectMachine, addLog],
   );
 
   const triggerReconnect = useCallback(() => {
@@ -321,10 +350,10 @@ export default function App() {
 
   const contextValue = {
     machines,
-    activeMachineId,
-    setActiveMachineId,
-    setActiveMachine: setActiveMachineId,
-    activeMachine,
+    connectedMachines,
+    focusedMachineId,
+    setFocusedMachineId,
+    focusedMachine,
     statuses,
     setStatuses,
     ftSessionId,
@@ -359,20 +388,34 @@ export default function App() {
     <MachineContext.Provider value={contextValue}>
       <div className="flex h-screen w-screen relative overflow-hidden">
         <Sidebar />
-        <main className="flex-1 flex flex-col overflow-hidden">
+        <main className="flex-1 flex flex-col overflow-hidden relative">
+          {/* Uma instância de RemoteViewer por máquina conectada, sempre
+              montada — só a focada (e só quando não estamos em Config/Arquivos)
+              fica visível. Isso evita derrubar a sessão VNC das outras ao
+              trocar de foco (ver docs/ARQUITETURA_CONEXAO.md). */}
+          {Object.entries(connectedMachines).map(([id, entry]) => (
+            <div
+              key={id}
+              className="absolute inset-0 flex flex-col overflow-hidden"
+              style={{
+                display: !showConfig && !showFiles && id === focusedMachineId ? 'flex' : 'none',
+              }}
+            >
+              <RemoteViewer
+                machine={entry.machine}
+                reconnectFlag={reconnectFlag}
+                wasRejected={wasRejected}
+              />
+            </div>
+          ))}
+
           {showConfig ? (
             <ConfigPanel />
           ) : showFiles ? (
             <FileExplorer />
-          ) : activeMachine ? (
-            <RemoteViewer
-              machine={activeMachine}
-              reconnectFlag={reconnectFlag}
-              wasRejected={wasRejected}
-            />
-          ) : (
+          ) : !focusedMachineId ? (
             <Dashboard />
-          )}
+          ) : null}
         </main>
 
         {/* Hamburger when sidebar collapsed */}

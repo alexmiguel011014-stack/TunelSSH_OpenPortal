@@ -13,7 +13,7 @@ unique email per machine, (2) the app is "broken" because it only supports one c
 PC at a time. Research done before writing this plan corrected both:
 
 - **TightVNC does not require an email** for the free/GPL server this project already
-  uses — only TightVNC's *commercial* license (which this project doesn't use) asks for
+  uses — only TightVNC's _commercial_ license (which this project doesn't use) asks for
   an email, for paid support contact. The real, already-documented pain point (see
   `docs/ARQUITETURA_CONEXAO.md`, "Problema 3") is that TightVNC runs unintegrated: its own
   UI, its own password, no control from the app.
@@ -23,7 +23,7 @@ PC at a time. Research done before writing this plan corrected both:
   two different hosts. The actual constraint is `activeMachineId` (singular) in
   `src/renderer/src/App.jsx`, and `connectMachine` explicitly disconnecting the current
   machine before connecting a new one.
-- **Windows' native Remote Desktop (RDP) can only *host* incoming connections on
+- **Windows' native Remote Desktop (RDP) can only _host_ incoming connections on
   Pro/Enterprise/Education** — Home edition can connect out but never accept connections
   in. Confirmed with the user: all 10 target machines are Pro/Enterprise/Education, so
   this is not a blocker here.
@@ -31,7 +31,7 @@ PC at a time. Research done before writing this plan corrected both:
   only real embeddable-in-Electron JS RDP client (`node-rdpjs` / `mstsc.js`, both by
   `citronneur`) only implements the SSL security layer — **no NLA (Network Level
   Authentication) support**. Modern Windows defaults to requiring NLA, so this path
-  requires *disabling* NLA on every target machine, a real (if narrow, since Tailscale
+  requires _disabling_ NLA on every target machine, a real (if narrow, since Tailscale
   already gates network access) security downgrade. Both libraries also show little
   recent maintenance activity — re-verify before depending on them (see GOALS 2, item 1).
 
@@ -62,53 +62,53 @@ flowchart TD
     F --> G[Docs: update ARQUITETURA_CONEXAO.md]
 ```
 
-- [ ] **Design rationale**: replace the single `activeMachineId` (`src/renderer/src/App.jsx:42`)
-  with a `connectedMachines` map keyed by machine id (`{ status, ftSessionId, vncState,
-  ... }` per entry), plus a separate `focusedMachineId` for which one is currently visible.
-  Switching focus does **not** disconnect the others. Explicitly out of scope for this
-  item: simultaneous multi-monitor tiling (side-by-side live views) — only one focused
-  view at a time, others stay connected in the background, switchable via tabs. Done
-  when: this model is written down (a short note in `docs/ARQUITETURA_CONEXAO.md` is
-  enough) before any state code changes.
-- [ ] **Implementation — connection state**: rewrite `App.jsx`'s machine-connection state
-  around `connectedMachines`/`focusedMachineId` per the design above.
-  `connectMachine(machine)` adds an entry instead of disconnecting the current one first;
-  `disconnectMachine(id)` now takes an explicit id instead of always acting on "the"
-  active machine. Update every call site (`Sidebar.jsx:82`, `Dashboard.jsx:35`,
-  `RemoteViewer.jsx:93`, `FileExplorer.jsx:52`) to pass the specific machine id. Done
-  when: two machines can be connected at once without either being torn down, verified by
-  reading `connectedMachines` state in React DevTools mid-session.
-- [ ] **Implementation — RemoteViewer**: support one mounted `RemoteViewer` instance per
-  connected machine (not one shared instance re-pointed at whichever machine is active).
-  Only the focused instance renders visibly; backgrounded instances stay mounted (don't
-  unmount the iframe — that would drop the VNC session) but are hidden (e.g. `display:
-  none`), matching how browsers keep background tabs alive. Done when: switching focus
-  between two connected machines is instant (no VNC reconnect/handshake), verified
-  manually.
-- [ ] **Implementation — file transfer session per machine**: `ftSessionId` currently
-  lives as single state in `App.jsx`; it needs to become per-machine like the rest of
-  `connectedMachines`, since `FileExplorer.jsx` reads `machineCtx.ftSessionId` for "the"
-  remote pane. Decide (and note in the design item above) whether the File Explorer
-  follows the *focused* machine only, or needs its own machine picker — recommended:
-  follows focused machine, simplest and matches current single-file-explorer-panel UI.
-- [ ] **Implementation — Sidebar/Dashboard UI**: show per-machine connection status
-  (connected/connecting/disconnected) independent of which one is focused; clicking a
-  connected-but-unfocused machine switches focus instead of reconnecting. Add a way to
-  disconnect one specific machine without affecting the others.
+- [x] **Design rationale**: replace the single `activeMachineId` (`src/renderer/src/App.jsx:42`)
+      with a `connectedMachines` map keyed by machine id (`{ status, ftSessionId, vncState,
+... }` per entry), plus a separate `focusedMachineId` for which one is currently visible.
+      Switching focus does **not** disconnect the others. Explicitly out of scope for this
+      item: simultaneous multi-monitor tiling (side-by-side live views) — only one focused
+      view at a time, others stay connected in the background, switchable via tabs. Done
+      when: this model is written down (a short note in `docs/ARQUITETURA_CONEXAO.md` is
+      enough) before any state code changes.
+- [x] **Implementation — connection state**: rewrite `App.jsx`'s machine-connection state
+      around `connectedMachines`/`focusedMachineId` per the design above.
+      `connectMachine(machine)` adds an entry instead of disconnecting the current one first;
+      `disconnectMachine(id)` now takes an explicit id instead of always acting on "the"
+      active machine. Update every call site (`Sidebar.jsx:82`, `Dashboard.jsx:35`,
+      `RemoteViewer.jsx:93`, `FileExplorer.jsx:52`) to pass the specific machine id. Done
+      when: two machines can be connected at once without either being torn down, verified by
+      reading `connectedMachines` state in React DevTools mid-session.
+- [x] **Implementation — RemoteViewer**: support one mounted `RemoteViewer` instance per
+      connected machine (not one shared instance re-pointed at whichever machine is active).
+      Only the focused instance renders visibly; backgrounded instances stay mounted (don't
+      unmount the iframe — that would drop the VNC session) but are hidden (e.g. `display:
+none`), matching how browsers keep background tabs alive. Done when: switching focus
+      between two connected machines is instant (no VNC reconnect/handshake), verified
+      manually.
+- [x] **Implementation — file transfer session per machine**: `ftSessionId` currently
+      lives as single state in `App.jsx`; it needs to become per-machine like the rest of
+      `connectedMachines`, since `FileExplorer.jsx` reads `machineCtx.ftSessionId` for "the"
+      remote pane. Decide (and note in the design item above) whether the File Explorer
+      follows the _focused_ machine only, or needs its own machine picker — recommended:
+      follows focused machine, simplest and matches current single-file-explorer-panel UI.
+- [x] **Implementation — Sidebar/Dashboard UI**: show per-machine connection status
+      (connected/connecting/disconnected) independent of which one is focused; clicking a
+      connected-but-unfocused machine switches focus instead of reconnecting. Add a way to
+      disconnect one specific machine without affecting the others.
 - [ ] **Verification — proxy.js**: no server-side code change expected (each
-  `wss.on('connection', ...)` bridge is already independent), but confirm this by
-  actually running two concurrent WS→TCP bridges to two different Tailscale hosts and
-  watching `src/main/connection/proxy.js`'s logs for both — this is a `(manual)` check,
-  not something a unit test can prove for a real network path.
-- [ ] **Tests**: unit test the new connection-state transitions in isolation (connect A;
-  connect B without disconnecting A; confirm both present; disconnect A; confirm B
-  unaffected) — pure state logic, testable with Vitest the same way
-  `src/main/connection/__tests__/net-guard.test.js` already covers `isAllowedHost`. Done
-  when: a test exists that fails against the old single-`activeMachineId` shape and
-  passes against the new one.
-- [ ] **Docs**: update `docs/ARQUITETURA_CONEXAO.md` — the "Sessão: Apenas UM usuário
-  remoto por vez" line (§2 and the §7 comparison table) no longer describes this app once
-  this section ships; replace with the actual new behavior.
+      `wss.on('connection', ...)` bridge is already independent), but confirm this by
+      actually running two concurrent WS→TCP bridges to two different Tailscale hosts and
+      watching `src/main/connection/proxy.js`'s logs for both — this is a `(manual)` check,
+      not something a unit test can prove for a real network path.
+- [x] **Tests**: unit test the new connection-state transitions in isolation (connect A;
+      connect B without disconnecting A; confirm both present; disconnect A; confirm B
+      unaffected) — pure state logic, testable with Vitest the same way
+      `src/main/connection/__tests__/net-guard.test.js` already covers `isAllowedHost`. Done
+      when: a test exists that fails against the old single-`activeMachineId` shape and
+      passes against the new one.
+- [x] **Docs**: update `docs/ARQUITETURA_CONEXAO.md` — the "Sessão: Apenas UM usuário
+      remoto por vez" line (§2 and the §7 comparison table) no longer describes this app once
+      this section ships; replace with the actual new behavior.
 
 **Done when (feature-level):** a user can connect to PC A, connect to PC B without PC A
 dropping, switch focus between them instantly, and disconnect either independently — used
@@ -137,31 +137,31 @@ flowchart TD
 ```
 
 - [ ] **Research gate (do this first, it can invalidate the rest of this section)**:
-  re-check the current state of `citronneur/node-rdpjs` and `citronneur/mstsc.js` (and
-  the `node-rdpjs-2` fork mentioned in community discussion as a maintained-newer-Node
-  fork) — commit recency, unresolved critical issues, whether NLA support has landed
-  since this plan was written. These libraries showed little recent maintenance activity
-  and GPL-3.0 licensing as of this writing. If both are now abandoned or broken against
-  current Node, stop and reconsider: either the native Windows RDP ActiveX control
-  (`MSTSCLib`, via a native Node addon — Windows-only, no NLA gap, more build complexity)
-  or shipping the external-`mstsc.exe`-window fallback the user already said they'd
-  rather avoid. Done when: this is checked against the live repos, not assumed from this
-  file.
+      re-check the current state of `citronneur/node-rdpjs` and `citronneur/mstsc.js` (and
+      the `node-rdpjs-2` fork mentioned in community discussion as a maintained-newer-Node
+      fork) — commit recency, unresolved critical issues, whether NLA support has landed
+      since this plan was written. These libraries showed little recent maintenance activity
+      and GPL-3.0 licensing as of this writing. If both are now abandoned or broken against
+      current Node, stop and reconsider: either the native Windows RDP ActiveX control
+      (`MSTSCLib`, via a native Node addon — Windows-only, no NLA gap, more build complexity)
+      or shipping the external-`mstsc.exe`-window fallback the user already said they'd
+      rather avoid. Done when: this is checked against the live repos, not assumed from this
+      file.
 - [ ] **Design rationale — NLA tradeoff `(manual)`**: `node-rdpjs`/`mstsc.js` only speak
-  the SSL security layer, not NLA. Modern Windows defaults to requiring NLA for RDP.
-  Shipping this path means disabling NLA (`UserAuthentication` registry value, see
-  provisioning item below) on every migrated machine. This is a real reduction in RDP's
-  own defense-in-depth, mitigated but not eliminated by the fact that network access is
-  already gated by Tailscale (WireGuard-authenticated peers only — an attacker would need
-  to already be an authorized Tailscale node to reach port 3389 at all). **This needs the
-  user's explicit sign-off before implementation starts**, not a default silently baked
-  in. Alternative if they decline: native ActiveX embedding (secure, NLA-capable, Windows-only
-  native module — bigger implementation lift, not scoped in detail here since it's the
-  fallback path, not the primary one).
+      the SSL security layer, not NLA. Modern Windows defaults to requiring NLA for RDP.
+      Shipping this path means disabling NLA (`UserAuthentication` registry value, see
+      provisioning item below) on every migrated machine. This is a real reduction in RDP's
+      own defense-in-depth, mitigated but not eliminated by the fact that network access is
+      already gated by Tailscale (WireGuard-authenticated peers only — an attacker would need
+      to already be an authorized Tailscale node to reach port 3389 at all). **This needs the
+      user's explicit sign-off before implementation starts**, not a default silently baked
+      in. Alternative if they decline: native ActiveX embedding (secure, NLA-capable, Windows-only
+      native module — bigger implementation lift, not scoped in detail here since it's the
+      fallback path, not the primary one).
 - [ ] **Provisioning — enable RDP hosting `(manual, one-time per machine)`**: add an
-  "Enable Remote Desktop hosting" action to the target-side app (the same "OpenPortal
-  Remote" instance that already runs on each of the 10 PCs), triggered from its own
-  settings UI, running elevated (UAC prompt expected — cannot be silent):
+      "Enable Remote Desktop hosting" action to the target-side app (the same "OpenPortal
+      Remote" instance that already runs on each of the 10 PCs), triggered from its own
+      settings UI, running elevated (UAC prompt expected — cannot be silent):
   ```powershell
   Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name 'fDenyTSConnections' -Value 0
   Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
@@ -173,37 +173,37 @@ flowchart TD
   when: running this action on a fresh Pro-edition VM actually allows an incoming RDP
   connection.
 - [ ] **Provisioning — dedicated RDP credential**: create a dedicated local Windows
-  account for the app's own RDP use during provisioning (strong random password,
-  generated once, stored via Electron's `safeStorage` — not the target user's personal
-  Windows login). Recommended over reusing the logged-in user's own password so the admin
-  never needs to know or handle it. Done when: the app can authenticate an RDP session
-  using only this generated account, with no manual credential entry per connection.
+      account for the app's own RDP use during provisioning (strong random password,
+      generated once, stored via Electron's `safeStorage` — not the target user's personal
+      Windows login). Recommended over reusing the logged-in user's own password so the admin
+      never needs to know or handle it. Done when: the app can authenticate an RDP session
+      using only this generated account, with no manual credential entry per connection.
 - [ ] **Implementation — main process bridge**: extend the existing WS↔TCP bridge pattern
-  (`src/main/connection/proxy.js`) to target port 3389 for machines configured for RDP,
-  reusing `isAllowedHost` (`src/main/connection/net-guard.js`) unchanged — the
-  Tailscale-CGNAT allowlist doesn't care which protocol rides over the tunnel. The
-  existing connect-request/approval flow (`connection-request.js`) stays as the gate
-  before any bridge opens, same as VNC today.
+      (`src/main/connection/proxy.js`) to target port 3389 for machines configured for RDP,
+      reusing `isAllowedHost` (`src/main/connection/net-guard.js`) unchanged — the
+      Tailscale-CGNAT allowlist doesn't care which protocol rides over the tunnel. The
+      existing connect-request/approval flow (`connection-request.js`) stays as the gate
+      before any bridge opens, same as VNC today.
 - [ ] **Implementation — renderer RDP viewer**: new module mirroring
-  `src/renderer/src/modules/connection/RemoteViewer.jsx`'s shape and lifecycle (same
-  connection banner, same mount/unmount behavior once GOALS 1's multi-instance model
-  exists), rendering `node-rdpjs`/`mstsc.js` bitmap-update events to a `<canvas>` instead
-  of an iframe. Reuse GOALS 1's per-machine connection-state model rather than adding a
-  second, parallel state shape for RDP-mode machines.
+      `src/renderer/src/modules/connection/RemoteViewer.jsx`'s shape and lifecycle (same
+      connection banner, same mount/unmount behavior once GOALS 1's multi-instance model
+      exists), rendering `node-rdpjs`/`mstsc.js` bitmap-update events to a `<canvas>` instead
+      of an iframe. Reuse GOALS 1's per-machine connection-state model rather than adding a
+      second, parallel state shape for RDP-mode machines.
 - [ ] **Implementation — ConfigPanel transport selection**: per-machine setting (VNC vs
-  RDP) in `src/renderer/src/modules/config/ConfigPanel.jsx`, defaulting existing machines
-  to VNC (no forced migration). Done when: a machine's transport can be switched without
-  affecting any other machine's configuration.
+      RDP) in `src/renderer/src/modules/config/ConfigPanel.jsx`, defaulting existing machines
+      to VNC (no forced migration). Done when: a machine's transport can be switched without
+      affecting any other machine's configuration.
 - [ ] **Tests**: unit-test the transport-selection logic and the port-targeting decision
-  in the main-process bridge (VNC machine → 5900, RDP machine → 3389) — pure logic, no
-  real network needed. Full RDP wire-protocol behavior (auth, bitmap rendering, input
-  forwarding) is **not** realistically unit-testable — mark end-to-end verification
-  `(manual)`: connect to a real Pro-edition Tailscale-networked machine with RDP hosting
-  enabled and confirm mouse, keyboard, and screen updates all work, then confirm the same
-  machine still works if switched back to VNC.
+      in the main-process bridge (VNC machine → 5900, RDP machine → 3389) — pure logic, no
+      real network needed. Full RDP wire-protocol behavior (auth, bitmap rendering, input
+      forwarding) is **not** realistically unit-testable — mark end-to-end verification
+      `(manual)`: connect to a real Pro-edition Tailscale-networked machine with RDP hosting
+      enabled and confirm mouse, keyboard, and screen updates all work, then confirm the same
+      machine still works if switched back to VNC.
 - [ ] **Docs**: update `docs/ARQUITETURA_CONEXAO.md` with the RDP path — the NLA
-  tradeoff, the provisioning steps, and per-machine migration guidance (nothing forces a
-  machine off VNC).
+      tradeoff, the provisioning steps, and per-machine migration guidance (nothing forces a
+      machine off VNC).
 
 **Done when (feature-level):** a Pro-edition machine configured for RDP connects, shows
 its live screen embedded in the app next to the file explorer exactly like VNC does
@@ -247,54 +247,54 @@ flowchart TD
 ```
 
 - [x] **Design rationale**: each target machine's `config.json` (via
-  `src/main/config/config-manager.js`) gets a new `allowedUsers: string[]` field — the
-  list of Tailscale login emails auto-approved on that specific machine. This is separate
-  from the existing `machines` array (which is "who I want to connect to," client-side);
-  `allowedUsers` is "who's allowed to connect to *me*," and only matters on the receiving
-  side. Explicitly out of scope for this item: any UI for *managing* the allow-lists of
-  all 4 machines from one place (that's the "registro central" idea already flagged as a
-  future step in `docs/ARQUITETURA_CONEXAO.md` §5) — for now each machine's list is edited
-  locally on that machine, matching how VNC passwords already work per-machine. Done
-  when: the schema and the "unlisted identity falls back to manual dialog, never
-  auto-rejects" behavior are written down before any code changes.
+      `src/main/config/config-manager.js`) gets a new `allowedUsers: string[]` field — the
+      list of Tailscale login emails auto-approved on that specific machine. This is separate
+      from the existing `machines` array (which is "who I want to connect to," client-side);
+      `allowedUsers` is "who's allowed to connect to _me_," and only matters on the receiving
+      side. Explicitly out of scope for this item: any UI for _managing_ the allow-lists of
+      all 4 machines from one place (that's the "registro central" idea already flagged as a
+      future step in `docs/ARQUITETURA_CONEXAO.md` §5) — for now each machine's list is edited
+      locally on that machine, matching how VNC passwords already work per-machine. Done
+      when: the schema and the "unlisted identity falls back to manual dialog, never
+      auto-rejects" behavior are written down before any code changes.
 - [x] **Implementation — identity resolution**: new module (e.g.
-  `src/main/connection/identity.js`) that shells out to
-  `tailscale.exe whois --json <ip>` (locate the binary the same defensive way
-  `net-guard.js`'s Tailscale-IP checks already assume Tailscale is installed; if the
-  binary isn't found or the call fails for any reason, resolve to "unknown" rather than
-  throwing — this must never crash or block the connection-request flow) and extracts
-  `UserProfile.LoginName`. Done when: calling this against a real Tailscale peer IP on
-  this dev machine returns the correct email, and calling it against a non-Tailscale IP
-  (or with Tailscale stopped) returns "unknown" without throwing.
+      `src/main/connection/identity.js`) that shells out to
+      `tailscale.exe whois --json <ip>` (locate the binary the same defensive way
+      `net-guard.js`'s Tailscale-IP checks already assume Tailscale is installed; if the
+      binary isn't found or the call fails for any reason, resolve to "unknown" rather than
+      throwing — this must never crash or block the connection-request flow) and extracts
+      `UserProfile.LoginName`. Done when: calling this against a real Tailscale peer IP on
+      this dev machine returns the correct email, and calling it against a non-Tailscale IP
+      (or with Tailscale stopped) returns "unknown" without throwing.
 - [x] **Implementation — auto-approval gate**: in `handleConnectionRequest`
-  (`src/main/main.js:37`), resolve identity via the module above *before* building the
-  `dialog.showMessageBox` call; if the resolved login is in `allowedUsers`, call
-  `finish(true)` immediately and skip the dialog entirely; otherwise fall through to
-  today's manual dialog unchanged. Log the auto-approval decision (identity + machine +
-  timestamp) the same way other main-process events already log to
-  `src/main/logging.js` — this log is also GOALS 4's event source, see below. Done when:
-  a listed identity connects with zero dialog shown, and an unlisted identity still sees
-  today's exact dialog.
+      (`src/main/main.js:37`), resolve identity via the module above _before_ building the
+      `dialog.showMessageBox` call; if the resolved login is in `allowedUsers`, call
+      `finish(true)` immediately and skip the dialog entirely; otherwise fall through to
+      today's manual dialog unchanged. Log the auto-approval decision (identity + machine +
+      timestamp) the same way other main-process events already log to
+      `src/main/logging.js` — this log is also GOALS 4's event source, see below. Done when:
+      a listed identity connects with zero dialog shown, and an unlisted identity still sees
+      today's exact dialog.
 - [x] **Implementation — allow-list UI**: new section in
-  `src/renderer/src/modules/config/ConfigPanel.jsx` (this machine's own settings, not the
-  remote-machines list) to add/remove allowed Tailscale login emails, persisted via the
-  existing `readConfig`/`writeConfig` IPC round-trip. Done when: adding an email here and
-  restarting the request flow (no app restart needed, config is read live per request)
-  actually changes whether that identity is auto-approved.
+      `src/renderer/src/modules/config/ConfigPanel.jsx` (this machine's own settings, not the
+      remote-machines list) to add/remove allowed Tailscale login emails, persisted via the
+      existing `readConfig`/`writeConfig` IPC round-trip. Done when: adding an email here and
+      restarting the request flow (no app restart needed, config is read live per request)
+      actually changes whether that identity is auto-approved.
 - [x] **Tests**: unit-test the allow-list matching logic and the whois-failure fallback
-  path in isolation (mock the `tailscale whois` shell-out) — same Vitest pattern as
-  `src/main/connection/__tests__/net-guard.test.js`. Done when: a test proves an
-  allow-listed login auto-approves, a non-listed login does not, and a whois failure
-  degrades to "not allow-listed" (manual dialog) rather than crashing or auto-approving.
+      path in isolation (mock the `tailscale whois` shell-out) — same Vitest pattern as
+      `src/main/connection/__tests__/net-guard.test.js`. Done when: a test proves an
+      allow-listed login auto-approves, a non-listed login does not, and a whois failure
+      degrades to "not allow-listed" (manual dialog) rather than crashing or auto-approving.
 - [ ] **Verification `(manual)`**: with 3 real, separately-logged-in Tailscale identities
-  (matching the P/E1/E2 shape) and 2 machines, confirm: the professor's identity
-  auto-approves on both; a student's identity auto-approves only on their assigned
-  machine and still shows the manual dialog on the other.
+      (matching the P/E1/E2 shape) and 2 machines, confirm: the professor's identity
+      auto-approves on both; a student's identity auto-approves only on their assigned
+      machine and still shows the manual dialog on the other.
 - [x] **Docs**: update `docs/ARQUITETURA_CONEXAO.md` with the new auto-authorization flow
-  (§2's approval description no longer says "aprovação manual obrigatória" unconditionally),
-  and add a short setup note: every person needing auto-approval must be invited to the
-  tailnet with their **own** Tailscale account (shared logins break identity resolution
-  — `whois` would return the same login for everyone sharing it).
+      (§2's approval description no longer says "aprovação manual obrigatória" unconditionally),
+      and add a short setup note: every person needing auto-approval must be invited to the
+      tailnet with their **own** Tailscale account (shared logins break identity resolution
+      — `whois` would return the same login for everyone sharing it).
 
 **Done when (feature-level):** the professor connects to any of the 4 machines without
 being asked to approve; each student connects only to their assigned machine(s) without
@@ -306,7 +306,7 @@ connection-request layer both share.
 
 ## GOALS 4 — Session Activity Panel (push) & Optional Telegram Alerts
 
-Depends on GOALS 3 (needs a resolved, trustworthy identity to say *who* did something,
+Depends on GOALS 3 (needs a resolved, trustworthy identity to say _who_ did something,
 not just an IP). Scope for this section is deliberately narrower than the original ask:
 **session-level events only** — who connected, when, for how long, how many files moved.
 **Explicitly out of scope**: per-application usage monitoring (e.g. "used VS Code") and
@@ -324,7 +324,7 @@ that's a more fitting home for institutional session data than a chat app). Tele
 becomes an **optional, opt-in push alert** layered on top, not the delivery mechanism
 itself. Delivery model is **push, in real time** (chosen over pull deliberately, knowing
 it's more work): each target machine reports its own session events to the professor's
-app *as they happen*, rather than the professor's app fetching on demand.
+app _as they happen_, rather than the professor's app fetching on demand.
 
 **Push design, reusing existing infrastructure rather than adding a new server:** every
 installation of this app already runs `ConnectionRequestServer`
@@ -349,89 +349,89 @@ flowchart TD
 ```
 
 - [ ] **Design rationale**: event schema —
-  `{ identity, machineName, startedAt, endedAt, durationMs, filesTransferred }`
-  (`identity` from GOALS 3's verified `tailscale whois` resolution, never the
-  self-reported `fromName`). Each target machine gets a new config field
-  `reportTo: string[]` — Tailscale login emails to push activity events to (for the
-  classroom example: every target machine's `reportTo` includes the professor's login).
-  At push time, resolve each `reportTo` login to its *current* Tailscale IP via
-  `tailscale status --json` (a peer's IP is stable per-device but this avoids hardcoding
-  it, and naturally supports the professor checking from a different device later) and
-  send the `activity-event` message to that IP's signal port. If a `reportTo` identity
-  isn't currently reachable (device offline), drop that push silently — this is a
-  best-effort real-time notice, not a guaranteed-delivery log; the session itself still
-  happened and isn't lost, only the *live* notice is. Done when: this schema, the
-  `reportTo` config shape, and the best-effort (not guaranteed) delivery guarantee are
-  written down before implementation.
+      `{ identity, machineName, startedAt, endedAt, durationMs, filesTransferred }`
+      (`identity` from GOALS 3's verified `tailscale whois` resolution, never the
+      self-reported `fromName`). Each target machine gets a new config field
+      `reportTo: string[]` — Tailscale login emails to push activity events to (for the
+      classroom example: every target machine's `reportTo` includes the professor's login).
+      At push time, resolve each `reportTo` login to its _current_ Tailscale IP via
+      `tailscale status --json` (a peer's IP is stable per-device but this avoids hardcoding
+      it, and naturally supports the professor checking from a different device later) and
+      send the `activity-event` message to that IP's signal port. If a `reportTo` identity
+      isn't currently reachable (device offline), drop that push silently — this is a
+      best-effort real-time notice, not a guaranteed-delivery log; the session itself still
+      happened and isn't lost, only the _live_ notice is. Done when: this schema, the
+      `reportTo` config shape, and the best-effort (not guaranteed) delivery guarantee are
+      written down before implementation.
 - [ ] **Implementation — wire protocol**: extend
-  `src/main/connection/connection-request.js`'s `dataHandler` to recognize
-  `{ type: 'activity-event', ... }` alongside the existing `{ type: 'connect-request' }`
-  handling — routed to a new `onActivityEvent` callback (mirroring the existing
-  `onRequest` callback pattern) rather than overloading the connection-approval path.
-  This message is fire-and-forget (no approval dialog, no response expected) — done when:
-  sending a hand-crafted `activity-event` message to a running instance's signal port is
-  received and dispatched without disturbing any in-progress `connect-request` handling
-  on the same port.
+      `src/main/connection/connection-request.js`'s `dataHandler` to recognize
+      `{ type: 'activity-event', ... }` alongside the existing `{ type: 'connect-request' }`
+      handling — routed to a new `onActivityEvent` callback (mirroring the existing
+      `onRequest` callback pattern) rather than overloading the connection-approval path.
+      This message is fire-and-forget (no approval dialog, no response expected) — done when:
+      sending a hand-crafted `activity-event` message to a running instance's signal port is
+      received and dispatched without disturbing any in-progress `connect-request` handling
+      on the same port.
 - [ ] **Implementation — target-side push**: on `'file-session-close'` (already emitted
-  by `ConnectionRequestServer`, paired with `'file-session-open'` by `requestId` to
-  compute `durationMs`), for each configured `reportTo` identity: resolve its live
-  Tailscale IP (`tailscale status --json`, matching by `UserProfile.LoginName`) and send
-  the `activity-event` message to that IP's signal port. Reuses GOALS 3's identity module
-  for the `whois`/`status` shell-outs rather than duplicating Tailscale CLI handling.
+      by `ConnectionRequestServer`, paired with `'file-session-open'` by `requestId` to
+      compute `durationMs`), for each configured `reportTo` identity: resolve its live
+      Tailscale IP (`tailscale status --json`, matching by `UserProfile.LoginName`) and send
+      the `activity-event` message to that IP's signal port. Reuses GOALS 3's identity module
+      for the `whois`/`status` shell-outs rather than duplicating Tailscale CLI handling.
 - [ ] **Verify file-transfer counting**: check whether
-  `src/main/file-transfer/file-agent.js` (target-side handler) exposes a hookable event
-  or count for completed downloads specifically — this was assumed easy in conversation
-  but not yet confirmed against the actual code; if no such hook exists yet, add one
-  (count frames/operations of the download type) rather than re-deriving it after the
-  fact. Done when: a real file download during a session shows up in the count reported
-  at session-end.
+      `src/main/file-transfer/file-agent.js` (target-side handler) exposes a hookable event
+      or count for completed downloads specifically — this was assumed easy in conversation
+      but not yet confirmed against the actual code; if no such hook exists yet, add one
+      (count frames/operations of the download type) rather than re-deriving it after the
+      fact. Done when: a real file download during a session shows up in the count reported
+      at session-end.
 - [ ] **Implementation — professor-side receive + persist**: in `src/main/main.js`,
-  handle incoming `activity-event` messages by appending to a new local activity log
-  (new module, e.g. `src/main/config/activity-log.js`, following the exact
-  read/write/trim pattern `history-manager.js` already uses — same `userData`-relative
-  JSON file approach, no new storage technology), and firing an Electron `Notification`
-  (already used elsewhere in this codebase, see `src/main/core/ipc-handlers.js`) for the
-  real-time-push feel. Expose the log to the renderer via IPC, same request/response
-  pattern as `getHistory`/`addHistoryEntry` already use.
+      handle incoming `activity-event` messages by appending to a new local activity log
+      (new module, e.g. `src/main/config/activity-log.js`, following the exact
+      read/write/trim pattern `history-manager.js` already uses — same `userData`-relative
+      JSON file approach, no new storage technology), and firing an Electron `Notification`
+      (already used elsewhere in this codebase, see `src/main/core/ipc-handlers.js`) for the
+      real-time-push feel. Expose the log to the renderer via IPC, same request/response
+      pattern as `getHistory`/`addHistoryEntry` already use.
 - [ ] **Implementation — Activity panel (renderer)**: new module under
-  `src/renderer/src/modules/` (e.g. `activity/ActivityPanel.jsx`), reachable from
-  `Sidebar.jsx` like the existing Dashboard/Config/Files sections. Shows the activity log
-  as a live-updating feed — a monospace/terminal-styled dark feed is a reasonable default
-  given the user's own framing of "professional" for this panel, but the exact visual
-  treatment is an implementation-time call, not something this plan needs to pin down.
-  Done when: an `activity-event` arriving while the panel is open appends to the visible
-  feed without a manual refresh (same live-IPC-push pattern the app already uses for VNC
-  status via `onVncStatus`).
+      `src/renderer/src/modules/` (e.g. `activity/ActivityPanel.jsx`), reachable from
+      `Sidebar.jsx` like the existing Dashboard/Config/Files sections. Shows the activity log
+      as a live-updating feed — a monospace/terminal-styled dark feed is a reasonable default
+      given the user's own framing of "professional" for this panel, but the exact visual
+      treatment is an implementation-time call, not something this plan needs to pin down.
+      Done when: an `activity-event` arriving while the panel is open appends to the visible
+      feed without a manual refresh (same live-IPC-push pattern the app already uses for VNC
+      status via `onVncStatus`).
 - [ ] **Implementation — optional Telegram alert (opt-in)**: add `telegraf` (recommended
-  over `node-telegram-bot-api` — that one's active development has slowed — and
-  preferred over `grammy` here since Telegraf is the more established default for a
-  simple send-only bot with no need for its full middleware/session system) as a
-  dependency, but gated behind an explicit per-machine toggle (default **off**) in
-  `ConfigPanel.jsx` — this is a supplementary phone alert, not the delivery mechanism.
-  When enabled, the same `'file-session-close'` event that drives the in-app push also
-  formats and sends: `"{identity} conectou-se a {machineName} das {startedAt} às
-  {endedAt} ({duration}). Arquivos transferidos: {filesTransferred}."` Send failures (bad
-  token, network down) log and continue — never let a Telegram failure affect the actual
-  remote-control session or the in-app log, which stays the source of truth regardless.
+      over `node-telegram-bot-api` — that one's active development has slowed — and
+      preferred over `grammy` here since Telegraf is the more established default for a
+      simple send-only bot with no need for its full middleware/session system) as a
+      dependency, but gated behind an explicit per-machine toggle (default **off**) in
+      `ConfigPanel.jsx` — this is a supplementary phone alert, not the delivery mechanism.
+      When enabled, the same `'file-session-close'` event that drives the in-app push also
+      formats and sends: `"{identity} conectou-se a {machineName} das {startedAt} às
+{endedAt} ({duration}). Arquivos transferidos: {filesTransferred}."` Send failures (bad
+      token, network down) log and continue — never let a Telegram failure affect the actual
+      remote-control session or the in-app log, which stays the source of truth regardless.
 - [ ] **Implementation — config UI**: `reportTo` list and the Telegram opt-in
-  (token/chat-id, encrypted via `safeStorage` like the existing VNC password field) live
-  together in this machine's own settings, near GOALS 3's allow-list section — both are
-  "what this machine reports, and to whom/how."
+      (token/chat-id, encrypted via `safeStorage` like the existing VNC password field) live
+      together in this machine's own settings, near GOALS 3's allow-list section — both are
+      "what this machine reports, and to whom/how."
 - [ ] **Tests**: unit-test the event schema, the `reportTo`→live-IP resolution (mock the
-  `tailscale status --json` shell-out), and the Telegram summary-message formatting —
-  pure logic, same Vitest pattern as the rest of this project. Mock any Telegraf send
-  call and any real network send in tests; never hit real Tailscale/Telegram from the
-  test suite.
+      `tailscale status --json` shell-out), and the Telegram summary-message formatting —
+      pure logic, same Vitest pattern as the rest of this project. Mock any Telegraf send
+      call and any real network send in tests; never hit real Tailscale/Telegram from the
+      test suite.
 - [ ] **Verification `(manual)`**: with 2 real machines over a real Tailscale network,
-  configure one target's `reportTo` to point at the professor's identity, run a real
-  session (connect, transfer a file, disconnect), and confirm the Activity panel updates
-  live on the professor's side with correct identity/duration/file-count — then
-  separately enable the Telegram opt-in and confirm the same event also produces a
-  Telegram message.
+      configure one target's `reportTo` to point at the professor's identity, run a real
+      session (connect, transfer a file, disconnect), and confirm the Activity panel updates
+      live on the professor's side with correct identity/duration/file-count — then
+      separately enable the Telegram opt-in and confirm the same event also produces a
+      Telegram message.
 - [ ] **Docs**: update `docs/ARQUITETURA_CONEXAO.md` with the push architecture and
-  `reportTo` config, plus a short setup guide (can live there or in a new
-  `docs/TELEGRAM_SETUP.md`) for the optional Telegram bot — creating it via @BotFather,
-  getting its token, finding the destination chat id.
+      `reportTo` config, plus a short setup guide (can live there or in a new
+      `docs/TELEGRAM_SETUP.md`) for the optional Telegram bot — creating it via @BotFather,
+      getting its token, finding the destination chat id.
 
 **Done when (feature-level):** every session on every machine with a configured
 `reportTo` — regardless of whether it was auto-approved (GOALS 3) or manually approved —

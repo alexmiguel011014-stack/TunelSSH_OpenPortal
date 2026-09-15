@@ -33,12 +33,15 @@ function registerIpcHandlers(mainWindow) {
   });
 
   ipcMain.handle('vnc:connect', (_, machine) => {
-    send(mainWindow, 'vnc:status', { state: 'connecting', machineId: machine.id });
+    send(mainWindow, 'vnc:status', {
+      state: 'connecting',
+      machineId: machine.id,
+    });
     return { success: true };
   });
 
-  ipcMain.handle('vnc:disconnect', () => {
-    send(mainWindow, 'vnc:status', { state: 'disconnected' });
+  ipcMain.handle('vnc:disconnect', (_, machineId) => {
+    send(mainWindow, 'vnc:status', { state: 'disconnected', machineId });
     return { success: true };
   });
 
@@ -48,7 +51,11 @@ function registerIpcHandlers(mainWindow) {
 
   function getLocalTailscaleIp() {
     try {
-      const output = execSync('tailscale ip -4', { encoding: 'utf8', timeout: 5000, windowsHide: true });
+      const output = execSync('tailscale ip -4', {
+        encoding: 'utf8',
+        timeout: 5000,
+        windowsHide: true,
+      });
       const ip = output.trim().split('\n')[0];
       if (ip) return ip;
     } catch {}
@@ -68,7 +75,11 @@ function registerIpcHandlers(mainWindow) {
   ipcMain.handle('app:notify', (_, { title, body, silent }) => {
     try {
       if (Notification.isSupported()) {
-        const n = new Notification({ title: title || 'OpenPortal', body: body || '', silent: !!silent });
+        const n = new Notification({
+          title: title || 'OpenPortal',
+          body: body || '',
+          silent: !!silent,
+        });
         n.show();
       }
     } catch (err) {
@@ -105,7 +116,6 @@ function registerIpcHandlers(mainWindow) {
   ipcMain.handle('server:localIp', () => {
     return { ip: getLocalTailscaleIp() };
   });
-
 }
 
 module.exports = { registerIpcHandlers };

@@ -27,7 +27,7 @@ export default function FileExplorer() {
   // que o usuário conectou ao PC (ver connectMachine em App.jsx) — aqui só
   // lemos o sessionId pronto. Nenhum IP, nenhum "aguardando aprovação".
   const machineCtx = useContext(MachineContext);
-  const activeMachine = machineCtx?.activeMachine || null;
+  const activeMachine = machineCtx?.focusedMachine || null;
   const sessionId = machineCtx?.ftSessionId || null;
 
   const remoteAdapter = useMemo(
@@ -49,7 +49,9 @@ export default function FileExplorer() {
     return unsub;
   }, []);
 
-  const handleDisconnect = () => machineCtx?.disconnectMachine?.();
+  const handleDisconnect = () => {
+    if (machineCtx?.focusedMachineId) machineCtx.disconnectMachine(machineCtx.focusedMachineId);
+  };
 
   // kind: 'upload' (local→remoto) ou 'download' (remoto→local). Aceita
   // caminhos/destino explícitos (usado pelo drag&drop soltando numa

@@ -1,5 +1,15 @@
 import { useContext } from 'react';
-import { Home, Settings, FolderOpen, Download, Sun, Moon, PanelLeftClose, X } from 'lucide-react';
+import {
+  Home,
+  Settings,
+  FolderOpen,
+  Download,
+  Sun,
+  Moon,
+  PanelLeftClose,
+  PowerOff,
+  X,
+} from 'lucide-react';
 import { MachineContext } from '../App';
 import StatusBadge from './StatusBadge';
 import { isPrivateNetworkHost } from './lib/net';
@@ -24,7 +34,9 @@ function NavButton({ active, onClick, icon, children, title }) {
 export default function Sidebar() {
   const {
     machines,
-    activeMachineId,
+    connectedMachines,
+    focusedMachineId,
+    setFocusedMachineId,
     connectMachine,
     disconnectMachine,
     addMachine,
@@ -66,6 +78,11 @@ export default function Sidebar() {
     removeMachine(id);
   };
 
+  const handleDisconnect = (id, name) => {
+    if (addLog) addLog(`Sidebar: disconnecting ${name}`);
+    disconnectMachine(id);
+  };
+
   const handleCheckUpdate = async () => {
     if (addLog) addLog('Verificando atualizações...');
     try {
@@ -78,13 +95,15 @@ export default function Sidebar() {
     }
   };
 
+  // "Início" só tira o foco (Dashboard) — não desconecta nada. As conexões
+  // em segundo plano continuam vivas, igual trocar de aba.
   const goHome = () => {
-    if (activeMachineId) disconnectMachine();
+    setFocusedMachineId(null);
     setShowConfig(false);
     setShowFiles(false);
   };
 
-  const isHome = !activeMachineId && !showConfig && !showFiles;
+  const isHome = !focusedMachineId && !showConfig && !showFiles;
 
   return (
     <aside className="w-64 min-w-64 bg-surface border-r border-line flex flex-col">
@@ -115,7 +134,8 @@ export default function Sidebar() {
         )}
         {machines.map((machine) => {
           const isConfigured = machine.host && machine.host.trim() !== '';
-          const isActive = machine.id === activeMachineId;
+          const isActive = machine.id === focusedMachineId;
+          const isConnected = !!connectedMachines[machine.id];
           return (
             <div key={machine.id} className="relative mb-0.5 group">
               <button
@@ -140,6 +160,15 @@ export default function Sidebar() {
                   <StatusBadge state={statuses[machine.id] || 'disconnected'} />
                 </div>
               </button>
+              {isConnected && (
+                <button
+                  onClick={() => handleDisconnect(machine.id, machine.name)}
+                  className="hidden group-hover:block absolute top-1 right-6 bg-transparent border-none text-text-faint hover:text-warning cursor-pointer p-1 rounded transition-colors"
+                  title="Desconectar (mantém o PC na lista)"
+                >
+                  <PowerOff size={12} />
+                </button>
+              )}
               <button
                 onClick={() => handleRemove(machine.id, machine.name)}
                 className="hidden group-hover:block absolute top-1 right-1 bg-transparent border-none text-text-faint hover:text-danger cursor-pointer p-1 rounded transition-colors"

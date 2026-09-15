@@ -10,7 +10,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   addHistoryEntry: (entry) => ipcRenderer.invoke('history:add', entry),
 
   connectVnc: (machine) => ipcRenderer.invoke('vnc:connect', machine),
-  disconnectVnc: () => ipcRenderer.invoke('vnc:disconnect'),
+  disconnectVnc: (machineId) => ipcRenderer.invoke('vnc:disconnect', machineId),
   getProxyUrl: () => ipcRenderer.invoke('vnc:proxyUrl'),
 
   onVncStatus: (callback) => {
@@ -48,9 +48,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   ftStat: (sessionId, virtualPath) => ipcRenderer.invoke('ft:stat', sessionId, virtualPath),
   ftMkdir: (sessionId, virtualPath) => ipcRenderer.invoke('ft:mkdir', sessionId, virtualPath),
   ftDelete: (sessionId, virtualPath) => ipcRenderer.invoke('ft:delete', sessionId, virtualPath),
-  ftRename: (sessionId, virtualPath, newVirtualPath) => ipcRenderer.invoke('ft:rename', sessionId, virtualPath, newVirtualPath),
+  ftRename: (sessionId, virtualPath, newVirtualPath) =>
+    ipcRenderer.invoke('ft:rename', sessionId, virtualPath, newVirtualPath),
   ftUploadBatch: (sessionId, payload) => ipcRenderer.invoke('ft:uploadBatch', sessionId, payload),
-  ftDownloadBatch: (sessionId, payload) => ipcRenderer.invoke('ft:downloadBatch', sessionId, payload),
+  ftDownloadBatch: (sessionId, payload) =>
+    ipcRenderer.invoke('ft:downloadBatch', sessionId, payload),
 
   onFtStatus: (callback) => {
     const handler = (_, status) => callback(status);

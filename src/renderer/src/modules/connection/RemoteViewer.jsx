@@ -90,8 +90,8 @@ export default function RemoteViewer({ machine, reconnectFlag, wasRejected }) {
     try {
       iframeRef.current?.contentWindow?.postMessage({ type: 'vnc-disconnect' }, '*');
     } catch {}
-    if (disconnectMachine) disconnectMachine();
-  }, [disconnectMachine]);
+    if (disconnectMachine) disconnectMachine(machine.id);
+  }, [disconnectMachine, machine.id]);
 
   const toggleFullscreen = useCallback(() => {
     const el = containerRef.current;

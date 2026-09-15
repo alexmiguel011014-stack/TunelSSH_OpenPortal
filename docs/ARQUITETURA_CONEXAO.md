@@ -28,25 +28,30 @@ CLIENTE (Quer controlar)          SERVIDOR (PC a controlar)
 ### Características Principais
 
 ✅ **Identificação**
+
 - ID único global (ex: "482917356" no AnyDesk)
 - Qualquer pessoa pode descobrir seu ID e tentar conectar
 - Servidor DEVE estar rodando para receber conexões
 
 ✅ **Autenticação**
+
 - Aprovação manual obrigatória (Aceitar/Rejeitar)
 - Opcional: Senha adicional de segurança
 - A senha pode variar por conexão (não é fixa)
 
 ✅ **Autenticação Extra**
+
 - Se você configurar "Senha de acesso" → obrigatória pra TODAS as conexões
 - Se você configurar "Senha de segurança" → sorteada, mostrada na tela, muda cada vez
 
 ✅ **Transporte**
+
 - Servidor conhece seu próprio IP/porta
 - Criptografia de ponta-a-ponta
 - Se não puder conectar direto → usa relay (servidor deles)
 
 ✅ **Sessão**
+
 - Apenas UM usuário remoto por vez (em geral)
 - Pode bloquear mouse/teclado do usuário local
 
@@ -86,11 +91,13 @@ CLIENTE (App local)               SERVIDOR (App remoto)
 ### Características Atuais
 
 ✅ **Identificação**
+
 - Precisa saber o IP Tailscale do PC remoto
 - Tailscale já gerencia a autenticação entre os dois
 - Servidor DEVE estar rodando
 
 ✅ **Autenticação**
+
 - Aprovação manual por padrão — **mas** identidades Tailscale (e-mail de login,
   resolvido via `tailscale whois` sobre o IP real do socket) cadastradas na
   lista `allowedUsers` desta máquina pulam o diálogo e entram direto. Quem não
@@ -101,13 +108,31 @@ CLIENTE (App local)               SERVIDOR (App remoto)
 - Fallback: senha VNC opcional (o que implementamos)
 
 ✅ **Transporte**
+
 - Usa Tailscale (já criptografado)
 - Proxy WebSocket intermediário (18900)
 - VNC por RFB nativo
 
 ✅ **Sessão**
-- Apenas UM usuário remoto por vez
+
+- Múltiplas conexões simultâneas: cada PC conectado mantém sua sessão (VNC +
+  arquivos) viva em segundo plano. A UI mostra uma tela em foco por vez;
+  trocar de PC não desconecta os outros.
 - Aprova conexão a cada tentativa (não fica salvo)
+
+> **Modelo de estado (multi-sessão):** o renderer guarda um mapa
+> `connectedMachines` (chave = id da máquina → `{ machine, ftSessionId }`) e um
+> `focusedMachineId` separado para qual está visível — ver
+> `src/renderer/src/App.jsx`. Trocar o foco só troca `focusedMachineId`;
+> desconectar remove apenas aquela entrada do mapa. Cada máquina conectada tem
+> sua própria instância de `RemoteViewer` (iframe) montada; instâncias fora de
+> foco ficam ocultas (`display: none`), nunca desmontadas — desmontar
+> derrubaria a sessão VNC (o socket mora dentro do iframe). O Explorador de
+> Arquivos sempre segue a máquina em foco, sem seletor próprio. Nenhuma
+> mudança foi necessária no proxy WebSocket (`proxy.js`) nem na sessão de
+> arquivos (`file-transfer-session.js`): ambos já eram indexados por
+> conexão/host, nunca por "a" conexão ativa — só o estado do renderer tinha
+> essa limitação.
 
 > **Setup da auto-aprovação:** cada pessoa que deve auto-aprovar precisa do
 > **próprio** login Tailscale — um login compartilhado entre várias pessoas
@@ -119,16 +144,16 @@ CLIENTE (App local)               SERVIDOR (App remoto)
 
 ## 3. Comparação Lado-a-Lado
 
-| Aspecto | AnyDesk/TeamViewer | OpenPortal Remote |
-|---------|-------------------|------------------|
-| **Identificação** | ID global único | IP Tailscale (deve saber antes) |
-| **Discovery** | Fácil (qualquer um descobre seu ID) | Difícil (precisa estar na rede Tailscale) |
-| **Aprovação** | Obrigatória + Opcional senha | Manual, com auto-aprovação opcional por identidade Tailscale allow-listada |
-| **Identidade do Servidor** | ID público | IP privado (Tailscale) |
-| **Conhecimento prévio** | Não (só o ID) | Sim (precisa do IP) |
-| **Transportes** | TCP + UDP, próprio protocolo | Tailscale + WebSocket + RFB |
-| **Criptografia** | Nativa | Tailscale cuida |
-| **Unidade remota** | Sua | TightVNC (separado) |
+| Aspecto                    | AnyDesk/TeamViewer                  | OpenPortal Remote                                                          |
+| -------------------------- | ----------------------------------- | -------------------------------------------------------------------------- |
+| **Identificação**          | ID global único                     | IP Tailscale (deve saber antes)                                            |
+| **Discovery**              | Fácil (qualquer um descobre seu ID) | Difícil (precisa estar na rede Tailscale)                                  |
+| **Aprovação**              | Obrigatória + Opcional senha        | Manual, com auto-aprovação opcional por identidade Tailscale allow-listada |
+| **Identidade do Servidor** | ID público                          | IP privado (Tailscale)                                                     |
+| **Conhecimento prévio**    | Não (só o ID)                       | Sim (precisa do IP)                                                        |
+| **Transportes**            | TCP + UDP, próprio protocolo        | Tailscale + WebSocket + RFB                                                |
+| **Criptografia**           | Nativa                              | Tailscale cuida                                                            |
+| **Unidade remota**         | Sua                                 | TightVNC (separado)                                                        |
 
 ---
 
@@ -137,16 +162,19 @@ CLIENTE (App local)               SERVIDOR (App remoto)
 ### ⚠️ Problema 1: Falta de Identificação Global
 
 **Situação:**
+
 - Você precisa saber o IP Tailscale do PC remoto ANTES
 - Se você tem 10 PCs remotos, precisa gerenciar 10 IPs
 - Não há registro central (como AnyDesk)
 
 **Impacto:**
+
 - Difícil adicionar novos PCs
 - Propenso a erros de digitação de IP
 - Sem forma de "descobrir" PCs remotos automaticamente
 
 **Solução possível:**
+
 - Criar registro central (banco de dados, arquivo na nuvem)
 - Ou usar ID único + lookup de IP via Tailscale
 
@@ -155,15 +183,18 @@ CLIENTE (App local)               SERVIDOR (App remoto)
 ### ⚠️ Problema 2: Sem Senha Pré-Configurada (Atualmente)
 
 **Situação:**
+
 - Você removeu a senha para simplificar
 - Mas isso deixa o system dependente APENAS da aprovação
 - Se o PC remoto estiver desatendido, qualquer um pode aprovar!
 
 **Impacto:**
+
 - Segurança reduzida em ambientes compartilhados
 - Sem fallback se a aprovação falhar por motivo legítimo
 
 **O que implementamos:**
+
 - Você agora pode configurar senha VNC como fallback ✅
 - Se rejeitar → pede senha
 - Se aceitar → entra direto
@@ -173,16 +204,19 @@ CLIENTE (App local)               SERVIDOR (App remoto)
 ### ⚠️ Problema 3: VNC é Separado (TightVNC é software externo)
 
 **Situação:**
+
 - Seu app não CONTROLA o TightVNC
 - TightVNC tem sua própria UI, senhas, configurações
 - Você não pode "desativar" ou "ativar" o VNC via app
 
 **Impacto:**
+
 - Confusão: é a senha do VNC ou da aprovação?
 - Duas camadas de autenticação descoordenadas
 - Dificuldade em configurar em massa
 
 **Solução:**
+
 - Integrar um servidor VNC nativo no Electron (não é simples)
 - Ou aceitar que é sempre preciso configurar TightVNC manualmente
 
@@ -191,16 +225,19 @@ CLIENTE (App local)               SERVIDOR (App remoto)
 ### ⚠️ Problema 4: Lógica Confusa (Aprovação vs Autenticação)
 
 **Situação:**
+
 - Quando rejeita → socket fecha
 - Mas VNC ainda tenta conectar
 - Usuário não sabe se foi rejeição ou autenticação normal
 
 **Impacto:**
+
 - Mensagens de erro confusas
 - Fluxo de UX ruim
 - Código difícil de manter
 
 **Solução:**
+
 - Passar `rejected: true` explicitamente para vnc.html
 - Se rejeitado → erro claro "Conexão recusada"
 - Se aprovado → conecta direto
@@ -270,17 +307,20 @@ CLIENTE (App local)               SERVIDOR (App remoto)
 ## 6. Sua Arquitetura NÃO Está Longe
 
 **Longe NÃO está:**
+
 - Você tem a base certa (Tailscale + Aprovação)
 - Você tem a UI (React + Sidebar)
 - Você tem o transporte (WebSocket proxy)
 - Você tem arquivos (túnel multiplexado)
 
 **Diferenças:**
+
 1. Falta identificação central (você precisa saber IPs)
 2. VNC é separado (TightVNC, não integrado)
 3. Lógica de aprovação é confusa (sem feedback claro)
 
 **Próximos passos sensatos:**
+
 1. ✅ Corrigir aprovação/rejeição (semana 1)
 2. ✅ Melhorar mensagens de erro (semana 1)
 3. Adicionar senhas por PC (já feito ✅)
@@ -291,22 +331,22 @@ CLIENTE (App local)               SERVIDOR (App remoto)
 
 ## 7. Checklist de Funcionalidade vs AnyDesk
 
-| Feature | AnyDesk | OpenPortal | Status |
-|---------|---------|-----------|--------|
-| Controle remoto (Mouse/Teclado) | ✅ | ✅ | Funciona |
-| Transferência de arquivos | ✅ | ✅ | Funciona |
-| Múltiplos PCs | ✅ | ✅ | Funciona |
-| Aprovação obrigatória | ✅ | ✅ | Funciona |
-| Senhas de acesso | ✅ | ✅ (novo) | Funciona |
-| ID único descobrível | ✅ | ❌ | Não tem |
-| Descoberta automática de PCs | ✅ | ❌ | Não tem |
-| Histórico de conexões | ✅ | ✅ | Funciona |
-| Notificações | ✅ | ✅ | Funciona |
-| Suporte a VPN | ✅ | ✅ (Tailscale) | Funciona |
-| Chat/Suporte remoto | ✅ | ❌ | Não tem |
+| Feature                         | AnyDesk | OpenPortal     | Status   |
+| ------------------------------- | ------- | -------------- | -------- |
+| Controle remoto (Mouse/Teclado) | ✅      | ✅             | Funciona |
+| Transferência de arquivos       | ✅      | ✅             | Funciona |
+| Múltiplos PCs                   | ✅      | ✅             | Funciona |
+| Aprovação obrigatória           | ✅      | ✅             | Funciona |
+| Senhas de acesso                | ✅      | ✅ (novo)      | Funciona |
+| ID único descobrível            | ✅      | ❌             | Não tem  |
+| Descoberta automática de PCs    | ✅      | ❌             | Não tem  |
+| Histórico de conexões           | ✅      | ✅             | Funciona |
+| Notificações                    | ✅      | ✅             | Funciona |
+| Suporte a VPN                   | ✅      | ✅ (Tailscale) | Funciona |
+| Chat/Suporte remoto             | ✅      | ❌             | Não tem  |
 
 ---
 
-*Conclusão: Seu projeto está 80% completo. Faltam 20% de "polimento" e identificação central.*
+_Conclusão: Seu projeto está 80% completo. Faltam 20% de "polimento" e identificação central._
 
-*Última atualização: 2026-08-07*
+_Última atualização: 2026-08-07_
