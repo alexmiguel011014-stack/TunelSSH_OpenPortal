@@ -220,15 +220,23 @@ flowchart TD
       Windows login). Recommended over reusing the logged-in user's own password so the admin
       never needs to know or handle it. Done when: the app can authenticate an RDP session
       using only this generated account, with no manual credential entry per connection.
-- [ ] **Implementation — main process sidecar management + IPC**: launch/stop the sidecar
-      process per RDP-mode connection (mirroring how `connectMachine`/`disconnectMachine`
-      already manage per-machine lifecycle after GOALS 1), passing host/credential over a
-      local IPC channel (named pipe or loopback socket — not argv, to avoid the password
-      appearing in `Get-Process`/Task Manager command lines), and forwarding
-      position/size updates so the sidecar's native window tracks the renderer's RDP
-      viewer placeholder. Reuses `connection-request.js`'s existing approval gate before
-      ever launching the sidecar — same as VNC and file transfer today. No `proxy.js`
-      change needed (see revision note above).
+- [ ] **Implementation — main process sidecar management + IPC**: `rdp-sidecar.js`
+      (spawn/pipe-client management, Map-by-machine-id like `file-transfer-session.js`) +
+      `rdp-protocol.js` (pure command builders/encoder) + a matching named-pipe server
+      added to `sidecar/Program.cs`. Credentials travel only over the pipe, never argv —
+      only the pipe name (a random, non-secret identifier) and the initial rect are passed
+      as process arguments. Verified end-to-end (2026-09-16) against the real running dev
+      Electron window: spawned the sidecar, connected the pipe, sent a `resize` command
+      (window moved live) and a `connect` command (stub — no MsRdpEx yet, just proved the
+      round trip), then a clean `disconnect`. Found and fixed a real bug along the way:
+      `NamedPipeServerStream` (C#) takes the bare pipe name, but `net.createConnection`
+      (Node) needs the full `\\.\pipe\<name>` path — mixing the two up made every
+      connection attempt fail with ENOENT despite both sides being otherwise correct.
+      Not yet wired into `connectMachine`/`disconnectMachine`, `connection-request.js`'s
+      approval gate, or the renderer — this item is the IPC/process-management layer
+      proven standalone; wiring it into the real connect flow happens with the renderer
+      viewer + ConfigPanel items below. No `proxy.js` change needed (confirmed — see
+      revision note above).
 - [ ] **Implementation — renderer RDP viewer**: new module mirroring
       `src/renderer/src/modules/connection/RemoteViewer.jsx`'s shape and lifecycle (same
       connection banner, same mount/unmount behavior per GOALS 1's multi-instance model),
