@@ -99,7 +99,16 @@ none`), matching how browsers keep background tabs alive. Done when: switching f
       `wss.on('connection', ...)` bridge is already independent), but confirm this by
       actually running two concurrent WS→TCP bridges to two different Tailscale hosts and
       watching `src/main/connection/proxy.js`'s logs for both — this is a `(manual)` check,
-      not something a unit test can prove for a real network path.
+      not something a unit test can prove for a real network path. **Partially automated
+      (2026-09-16)**: added `proxy.test.js`, an integration test that starts the real
+      `startWebSocketProxy` against two local fake TCP targets and two concurrent WS
+      clients, proving the two bridges don't cross-talk and that closing one leaves the
+      other unaffected (exactly the code-level property this item cares about — each
+      bridge's `tcpSocket`/heartbeat state lives entirely in its own connection closure).
+      What's still open and genuinely `(manual)`: this only proves the code is
+      connection-independent, not that it works across a real Tailscale link to two
+      distinct physical machines — that's a network-reachability question, not a
+      code-correctness one, and still needs the real 2-machine test.
 - [x] **Tests**: unit test the new connection-state transitions in isolation (connect A;
       connect B without disconnecting A; confirm both present; disconnect A; confirm B
       unaffected) — pure state logic, testable with Vitest the same way
@@ -503,7 +512,12 @@ flowchart TD
       This message is fire-and-forget (no approval dialog, no response expected) — done when:
       sending a hand-crafted `activity-event` message to a running instance's signal port is
       received and dispatched without disturbing any in-progress `connect-request` handling
-      on the same port.
+      on the same port. Originally verified this way by hand, once, in a previous session —
+      **turned into a real regression test (2026-09-16)**: `connection-request.test.js`
+      starts a real `ConnectionRequestServer` on a loopback ephemeral port and exercises it
+      through its actual public functions (`sendConnectRequest`/`sendActivityEvent`, no
+      mocking of `net`), proving an `activity-event` never reaches `onRequest` and doesn't
+      disturb a `connect-request` still waiting on its (simulated) human decision.
 - [x] **Implementation — target-side push**: on `'file-session-close'` (already emitted
       by `ConnectionRequestServer`, paired with `'file-session-open'` by `requestId` to
       compute `durationMs`), for each configured `reportTo` identity: resolve its live
