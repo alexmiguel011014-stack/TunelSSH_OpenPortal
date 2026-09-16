@@ -3,6 +3,7 @@ import {
   connectMachineEntry,
   disconnectMachineEntry,
   pickFocusAfterDisconnect,
+  resolveTransport,
 } from '../connectionState.js';
 
 describe('connectMachineEntry / disconnectMachineEntry', () => {
@@ -50,5 +51,19 @@ describe('pickFocusAfterDisconnect', () => {
   it('focus becomes null when the last connected machine disconnects', () => {
     const state = connectMachineEntry({}, { id: 'pc-a', name: 'A' });
     expect(pickFocusAfterDisconnect(state, 'pc-a', 'pc-a')).toBe(null);
+  });
+});
+
+describe('resolveTransport', () => {
+  it('defaults to vnc when transport is unset (pre-GOALS-2 machines)', () => {
+    expect(resolveTransport({ id: 'pc-a' })).toBe('vnc');
+  });
+
+  it('returns rdp only when explicitly set to rdp', () => {
+    expect(resolveTransport({ id: 'pc-a', transport: 'rdp' })).toBe('rdp');
+  });
+
+  it('treats any other value as vnc', () => {
+    expect(resolveTransport({ id: 'pc-a', transport: 'bogus' })).toBe('vnc');
   });
 });

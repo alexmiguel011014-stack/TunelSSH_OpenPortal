@@ -25,3 +25,12 @@ export function pickFocusAfterDisconnect(connectedMachines, focusedId, removedId
   const remaining = Object.keys(connectedMachines).filter((id) => id !== removedId);
   return remaining.length > 0 ? remaining[0] : null;
 }
+
+// GOALS 2: qual transporte usar para uma máquina — 'vnc' é o padrão para
+// não forçar migração em máquinas já cadastradas antes deste campo existir
+// (config.json antigo nunca teve `transport`). Única fonte de verdade usada
+// tanto pelo App.jsx (qual viewer montar, qual API de (des)conexão chamar)
+// quanto pelo ConfigPanel (qual seção de credenciais mostrar).
+export function resolveTransport(machine) {
+  return machine?.transport === 'rdp' ? 'rdp' : 'vnc';
+}

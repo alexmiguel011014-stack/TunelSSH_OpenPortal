@@ -19,6 +19,27 @@ contextBridge.exposeInMainWorld('electronAPI', {
     return () => ipcRenderer.removeListener('vnc:status', handler);
   },
 
+  // RDP nativo (GOALS 2) — sidecar C#/MSTSCLib reparented sobre um <div>
+  // posicionado pelo renderer (ver RdpViewer.jsx). rect é sempre em pixels
+  // físicos (já multiplicado por devicePixelRatio), pois SetWindowPos do lado
+  // Win32 não conhece pixels lógicos do DOM.
+  startRdp: (machine, rect) => ipcRenderer.invoke('rdp:start', { machine, rect }),
+  resizeRdp: (machineId, rect) => ipcRenderer.invoke('rdp:resize', { machineId, rect }),
+  setRdpVisible: (machineId, visible) =>
+    ipcRenderer.invoke('rdp:setVisible', { machineId, visible }),
+  stopRdp: (machineId) => ipcRenderer.invoke('rdp:stop', machineId),
+  onRdpStatus: (callback) => {
+    const handler = (_, status) => callback(status);
+    ipcRenderer.on('rdp:status', handler);
+    return () => ipcRenderer.removeListener('rdp:status', handler);
+  },
+
+  // Provisionamento de hospedagem RDP nesta máquina (manual, uma vez por PC)
+  enableRdpHosting: () => ipcRenderer.invoke('rdp:enableHosting'),
+  createRdpCredential: (username, password) =>
+    ipcRenderer.invoke('rdp:createCredential', { username, password }),
+  generateRdpPassword: () => ipcRenderer.invoke('rdp:generatePassword'),
+
   getVersion: () => ipcRenderer.invoke('app:version'),
 
   // Server/Agent status

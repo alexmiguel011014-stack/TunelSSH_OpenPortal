@@ -172,6 +172,81 @@ Configurações desta máquina, também vira uma mensagem de texto enviada via
 `telegraf` — ver `docs/TELEGRAM_SETUP.md`. É uma camada extra, não o
 mecanismo de entrega: o painel in-app funciona inteiro sem isso.
 
+### RDP nativo (transporte alternativo ao VNC)
+
+Selecionável **por máquina** em Configurações (campo "Transporte") — VNC
+continua sendo o padrão, nenhuma máquina já cadastrada muda de
+comportamento sozinha (`resolveTransport()` em
+`src/renderer/src/shared/lib/connectionState.js` trata qualquer valor
+diferente de `"rdp"`, incluindo ausente, como `"vnc"`).
+
+**Por que existe, além do VNC:** usa o próprio Remote Desktop do Windows
+(via controle ActiveX `MSTSCLib`, o mesmo que o `mstsc.exe` embute) em vez
+de reimplementar o protocolo RDP em JS — isso evita o trade-off de
+segurança que as bibliotecas JS disponíveis (`node-rdpjs`, `mstsc.js`,
+ambas abandonadas — ver GOALS.md) exigiriam: desabilitar NLA (Network
+Level Authentication) em cada máquina de destino. Com MSTSCLib, NLA
+continua ligado — nada muda na autenticação do Windows.
+
+**Por que precisa de um processo sidecar:** o Chromium/Electron não hospeda
+controles ActiveX/COM dentro do próprio renderer. A solução é um processo
+nativo separado (C#/.NET Framework 4.8 WinForms, `sidecar/`) que hospeda o
+controle em sua própria janela nativa, reparented (Win32 `SetParent`) para
+dentro do HWND do `BrowserWindow` do Electron — visualmente parece estar
+"dentro" do app, como o `<iframe>` do noVNC, mas é uma janela do SO real
+sobreposta à área de um `<div>` posicionado pelo React
+(`RdpViewer.jsx`), não conteúdo do DOM.
+
+**Canal de comando (named pipe):** o processo principal (`rdp-sidecar.js`)
+sobe uma sidecar por máquina RDP conectada (`spawn`) e fala com ela por um
+named pipe local — nunca por argv, para a senha nunca aparecer em
+Task Manager/`Get-Process`. Uma linha JSON por comando
+(`rdp-protocol.js`/`sidecar/Program.cs`):
+
+```
+{"cmd":"connect","host":"100.x.x.x","port":3389,"username":"u","password":"p"}
+{"cmd":"resize","x":10,"y":10,"w":800,"h":600}
+{"cmd":"visibility","visible":true}
+{"cmd":"disconnect"}
+```
+
+`resize` acompanha o `<div>` do `RdpViewer` (via `ResizeObserver`, em
+pixels físicos — multiplicados por `devicePixelRatio`, já que
+`SetWindowPos` do Win32 não conhece pixels lógicos do DOM).
+`visibility` existe porque a janela nativa **não é filha do DOM**: um
+`display:none` no `<div>` do React não a esconde — ao trocar de foco entre
+várias máquinas conectadas (GOALS 1), o processo principal precisa
+esconder/mostrar a sidecar explicitamente.
+
+**Sem mudança em `proxy.js`:** ao contrário do VNC/noVNC (código de
+navegador, só alcança a rede via o bridge WS→TCP de `proxy.js`), a sidecar
+é um processo nativo que abre sua própria conexão TCP direta à porta 3389
+do destino. O fluxo de aprovação existente
+(`connection-request.js`/`handleConnectionRequest`) continua sendo o
+único portão de entrada, igual ao VNC — RDP não pula essa etapa.
+
+**Provisionamento (uma vez por máquina, feito na aba Configurações da
+própria máquina de destino, não em quem conecta):**
+
+1. _Habilitar Remote Desktop_ — liga `fDenyTSConnections=0` no registro e a
+   regra de firewall "Remote Desktop", via PowerShell elevado
+   (`src/main/system/rdp-provisioning.js`). Abre um prompt de UAC; nenhuma
+   mudança em NLA.
+2. _Criar conta dedicada_ — cria uma conta local do Windows só para o app
+   usar (senha aleatória gerada uma vez, nunca a senha pessoal de quem está
+   logado ali), adicionada ao grupo "Remote Desktop Users". A senha só
+   aparece uma vez na tela — precisa ser copiada para o campo "Senha RDP"
+   de quem for configurar esta máquina como RDP no próprio app.
+
+**Estado atual (2026-09-16):** o encaixe visual (embedding) e o canal de
+comando estão provados e ligados ao fluxo real de conexão/desconexão
+(GOALS 1's `connectedMachines`, sem um segundo modelo de estado paralelo).
+O controle MSTSCLib em si (`Devolutions/MsRdpEx`) ainda **não** está
+integrado em `sidecar/Program.cs` — o comando `connect` hoje só atualiza um
+texto de status na janela nativa, não estabelece sessão RDP de verdade.
+Migrar uma máquina para RDP hoje prova a infraestrutura, não uma sessão
+funcional ainda.
+
 ---
 
 ## 3. Comparação Lado-a-Lado

@@ -16,6 +16,13 @@ function buildDisconnectCommand() {
   return { cmd: 'disconnect' };
 }
 
+// A janela nativa da sidecar não é filha do DOM — display:none no <div> do
+// React não a esconde. Precisa de um comando explícito para sumir/reaparecer
+// ao trocar o foco entre várias máquinas conectadas (GOALS 1 + GOALS 2).
+function buildVisibilityCommand({ visible }) {
+  return { cmd: 'visibility', visible: !!visible };
+}
+
 // Uma linha JSON por comando — o lado C# lê com StreamReader.ReadLine().
 function encodeCommand(command) {
   return JSON.stringify(command) + '\n';
@@ -25,5 +32,6 @@ module.exports = {
   buildConnectCommand,
   buildResizeCommand,
   buildDisconnectCommand,
+  buildVisibilityCommand,
   encodeCommand,
 };

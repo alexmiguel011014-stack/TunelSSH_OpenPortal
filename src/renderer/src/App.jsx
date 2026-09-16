@@ -2,6 +2,7 @@ import { useState, useEffect, createContext, useCallback, useRef } from 'react';
 import { PanelLeftOpen } from 'lucide-react';
 import Sidebar from './shared/Sidebar';
 import RemoteViewer from './modules/connection/RemoteViewer';
+import RdpViewer from './modules/connection/RdpViewer';
 import ConfigPanel from './modules/config/ConfigPanel';
 import FileExplorer from './modules/file-transfer/FileExplorer';
 import ActivityPanel from './modules/activity/ActivityPanel';
@@ -10,6 +11,7 @@ import {
   connectMachineEntry,
   disconnectMachineEntry,
   pickFocusAfterDisconnect,
+  resolveTransport,
 } from './shared/lib/connectionState';
 
 export const MachineContext = createContext(null);
@@ -128,8 +130,8 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    const unsub = window.electronAPI?.onVncStatus((status) => {
-      addLog(`VNC status: ${status.state} (machine: ${status.machineId || 'none'})`);
+    const handleTransportStatus = (status) => {
+      addLog(`Status: ${status.state} (machine: ${status.machineId || 'none'})`);
       setStatuses((prev) => ({
         ...prev,
         [status.machineId || 'global']: status.state,
@@ -164,8 +166,13 @@ export default function App() {
           body: `Não foi possível conectar a ${m.name} (${m.host}).`,
         });
       }
-    });
-    return unsub;
+    };
+    const unsubVnc = window.electronAPI?.onVncStatus(handleTransportStatus);
+    const unsubRdp = window.electronAPI?.onRdpStatus(handleTransportStatus);
+    return () => {
+      unsubVnc?.();
+      unsubRdp?.();
+    };
   }, [machines, connectedMachines, recordConn, addLog]);
 
   const focusedMachine = focusedMachineId
@@ -182,7 +189,11 @@ export default function App() {
       const entry = connectedMachines[id];
       if (!entry) return;
       addLog(`Disconnected: ${entry.machine.name}`);
-      window.electronAPI?.disconnectVnc(id);
+      if (resolveTransport(entry.machine) === 'rdp') {
+        window.electronAPI?.stopRdp(id);
+      } else {
+        window.electronAPI?.disconnectVnc(id);
+      }
       if (entry.ftSessionId) {
         window.electronAPI?.ftDisconnect(entry.ftSessionId).catch(() => {});
       }
@@ -277,10 +288,16 @@ export default function App() {
           connectMachineEntry(prev, machine, { ftSessionId: res.sessionId }),
         );
         setFocusedMachineId(machine.id);
-        console.log(`[app] Connection approved, file session: ${res.sessionId}, connecting VNC...`);
-        window.electronAPI
-          ?.connectVnc(machine)
-          .catch((e) => console.warn('[app] VNC connect error:', e));
+        console.log(
+          `[app] Connection approved, file session: ${res.sessionId}, transport=${resolveTransport(machine)}...`,
+        );
+        // RDP não usa vnc:connect — RdpViewer inicia a sidecar sozinho, uma
+        // vez montado, porque só ele conhece o retângulo real do seu <div>.
+        if (resolveTransport(machine) !== 'rdp') {
+          window.electronAPI
+            ?.connectVnc(machine)
+            .catch((e) => console.warn('[app] VNC connect error:', e));
+        }
         addLog(`Conexão aprovada por ${machine.name}.`);
       } catch (err) {
         console.error(`[app] Connection error:`, err);
@@ -398,24 +415,29 @@ export default function App() {
               Config/Arquivos/Atividade) fica visível. Isso evita derrubar a
               sessão VNC das outras ao trocar de foco (ver
               docs/ARQUITETURA_CONEXAO.md). */}
-          {Object.entries(connectedMachines).map(([id, entry]) => (
-            <div
-              key={id}
-              className="absolute inset-0 flex flex-col overflow-hidden"
-              style={{
-                display:
-                  !showConfig && !showFiles && !showActivity && id === focusedMachineId
-                    ? 'flex'
-                    : 'none',
-              }}
-            >
-              <RemoteViewer
-                machine={entry.machine}
-                reconnectFlag={reconnectFlag}
-                wasRejected={wasRejected}
-              />
-            </div>
-          ))}
+          {Object.entries(connectedMachines).map(([id, entry]) => {
+            const isFocusedAndVisible =
+              !showConfig && !showFiles && !showActivity && id === focusedMachineId;
+            return (
+              <div
+                key={id}
+                className="absolute inset-0 flex flex-col overflow-hidden"
+                style={{
+                  display: isFocusedAndVisible ? 'flex' : 'none',
+                }}
+              >
+                {resolveTransport(entry.machine) === 'rdp' ? (
+                  <RdpViewer machine={entry.machine} isVisible={isFocusedAndVisible} />
+                ) : (
+                  <RemoteViewer
+                    machine={entry.machine}
+                    reconnectFlag={reconnectFlag}
+                    wasRejected={wasRejected}
+                  />
+                )}
+              </div>
+            );
+          })}
 
           {showConfig ? (
             <ConfigPanel />

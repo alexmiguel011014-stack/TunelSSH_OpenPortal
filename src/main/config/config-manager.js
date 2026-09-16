@@ -57,9 +57,16 @@ function readConfig() {
       const config = JSON.parse(raw);
       if (Array.isArray(config.machines)) {
         config.machines = config.machines.map((m) => {
-          if (!m.passwordEnc) return m;
-          const { passwordEnc, ...rest } = m;
-          return { ...rest, password: decryptSecret(passwordEnc) };
+          let out = m;
+          if (out.passwordEnc) {
+            const { passwordEnc, ...rest } = out;
+            out = { ...rest, password: decryptSecret(passwordEnc) };
+          }
+          if (out.rdpPasswordEnc) {
+            const { rdpPasswordEnc, ...rest } = out;
+            out = { ...rest, rdpPassword: decryptSecret(rdpPasswordEnc) };
+          }
+          return out;
         });
       }
       if (config.telegram?.tokenEnc) {
@@ -87,9 +94,16 @@ function writeConfig(config) {
     const toWrite = { ...readConfig(), ...config };
     if (Array.isArray(toWrite.machines)) {
       toWrite.machines = toWrite.machines.map((m) => {
-        if (!m.password) return m;
-        const { password, ...rest } = m;
-        return { ...rest, passwordEnc: encryptSecret(password) };
+        let out = m;
+        if (out.password) {
+          const { password, ...rest } = out;
+          out = { ...rest, passwordEnc: encryptSecret(password) };
+        }
+        if (out.rdpPassword) {
+          const { rdpPassword, ...rest } = out;
+          out = { ...rest, rdpPasswordEnc: encryptSecret(rdpPassword) };
+        }
+        return out;
       });
     }
     if (toWrite.telegram && toWrite.telegram.token) {

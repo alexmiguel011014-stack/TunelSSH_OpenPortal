@@ -19,6 +19,7 @@ namespace OpenPortalRdpSidecar
     // Contrato do pipe: uma linha JSON por comando, UTF-8, terminada em \n:
     //   {"cmd":"resize","x":10,"y":10,"w":800,"h":600}
     //   {"cmd":"connect","host":"100.x.x.x","port":3389,"username":"u","password":"p"}
+    //   {"cmd":"visibility","visible":true}
     //   {"cmd":"disconnect"}
     static class Program
     {
@@ -44,6 +45,7 @@ namespace OpenPortalRdpSidecar
         const int WS_MINIMIZE = 0x20000000;
         const uint SWP_NOZORDER = 0x0004;
         const uint SWP_NOACTIVATE = 0x0010;
+        const int SW_HIDE = 0;
         const int SW_SHOWNORMAL = 1;
 
         static IntPtr s_parentHwnd = IntPtr.Zero;
@@ -174,6 +176,14 @@ namespace OpenPortalRdpSidecar
                         string host = cmd.ContainsKey("host") ? Convert.ToString(cmd["host"]) : "?";
                         string username = cmd.ContainsKey("username") ? Convert.ToString(cmd["username"]) : "?";
                         form.ShowConnectingStub(host, username);
+                        break;
+
+                    case "visibility":
+                        // A janela não é filha do DOM — o React só consegue
+                        // escondê-la/mostrá-la explicitamente por aqui (ver
+                        // rdp-protocol.js, buildVisibilityCommand).
+                        bool visible = cmd.ContainsKey("visible") && Convert.ToBoolean(cmd["visible"]);
+                        ShowWindow(form.Handle, visible ? SW_SHOWNORMAL : SW_HIDE);
                         break;
 
                     case "disconnect":

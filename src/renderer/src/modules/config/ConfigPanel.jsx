@@ -44,6 +44,14 @@ export default function ConfigPanel() {
   const [telegram, setTelegram] = useState(DEFAULT_TELEGRAM);
   const [telegramSaved, setTelegramSaved] = useState(false);
 
+  // GOALS 2: hospedagem RDP nesta máquina (provisionamento manual, uma vez
+  // por PC) — cada ação abaixo abre um prompt de UAC do Windows.
+  const [rdpHostingStatus, setRdpHostingStatus] = useState(null); // null | 'working' | 'ok' | 'error'
+  const [rdpCredUsername, setRdpCredUsername] = useState('openportal-rdp');
+  const [rdpCredPassword, setRdpCredPassword] = useState('');
+  const [rdpCredStatus, setRdpCredStatus] = useState(null); // null | 'working' | 'ok' | 'error'
+  const [rdpCredError, setRdpCredError] = useState('');
+
   useEffect(() => {
     window.electronAPI
       ?.getLocalIp?.()
@@ -135,6 +143,62 @@ export default function ConfigPanel() {
 
   const handleToggleTelegram = () => {
     saveTelegram({ ...telegram, enabled: !telegram.enabled });
+  };
+
+  // GOALS 2 — provisionamento de hospedagem RDP nesta máquina. Ambos abrem
+  // um prompt de UAC do Windows; o próprio usuário aprova (ou recusa) ali.
+  const handleEnableRdpHosting = async () => {
+    setRdpHostingStatus('working');
+    try {
+      const res = await window.electronAPI?.enableRdpHosting?.();
+      setRdpHostingStatus(res?.success ? 'ok' : 'error');
+      if (addLog) {
+        addLog(
+          res?.success
+            ? 'Remote Desktop habilitado nesta máquina (NLA continua ativo)'
+            : `Falha ao habilitar Remote Desktop: ${res?.error || 'verifique se o UAC foi aprovado'}`,
+          res?.success ? 'info' : 'error',
+        );
+      }
+    } catch (err) {
+      setRdpHostingStatus('error');
+      if (addLog) addLog(`Falha ao habilitar Remote Desktop: ${err.message}`, 'error');
+    }
+  };
+
+  const handleGenerateRdpPassword = async () => {
+    const pw = await window.electronAPI?.generateRdpPassword?.();
+    if (pw) setRdpCredPassword(pw);
+  };
+
+  const handleCreateRdpCredential = async () => {
+    const username = rdpCredUsername.trim();
+    if (!username) {
+      setRdpCredError('Informe um nome de usuário');
+      return;
+    }
+    if (!rdpCredPassword) {
+      setRdpCredError('Gere uma senha primeiro ("Gerar senha")');
+      return;
+    }
+    setRdpCredError('');
+    setRdpCredStatus('working');
+    try {
+      const res = await window.electronAPI?.createRdpCredential?.(username, rdpCredPassword);
+      setRdpCredStatus(res?.success ? 'ok' : 'error');
+      if (!res?.success) setRdpCredError(res?.error || 'Falha ao criar a conta');
+      if (addLog) {
+        addLog(
+          res?.success
+            ? `Conta RDP dedicada criada: ${username}`
+            : `Falha ao criar conta RDP: ${res?.error || '?'}`,
+          res?.success ? 'info' : 'error',
+        );
+      }
+    } catch (err) {
+      setRdpCredStatus('error');
+      setRdpCredError(err.message);
+    }
   };
 
   const handleTest = async (index, machine) => {
@@ -362,20 +426,93 @@ export default function ConfigPanel() {
                   )}
                 </div>
               </div>
+
               <div className="mt-4">
-                <label className="block text-xs text-text-faint mb-1">Senha VNC (opcional)</label>
-                <input
-                  type="password"
-                  value={machine.password || ''}
-                  onChange={(e) => updateField(index, 'password', e.target.value)}
-                  className="w-full bg-inset border border-line rounded-lg px-3 py-2 text-sm text-text-primary font-mono focus:outline-none focus:border-accent transition-colors"
-                  placeholder="Deixe em branco se não tiver senha"
-                />
-                <p className="text-xs text-text-faint mt-1">
-                  Se o VNC tiver senha, configure aqui. Será usada como fallback se a conexão for
-                  recusada.
-                </p>
+                <label className="block text-xs text-text-faint mb-1">Transporte</label>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => updateField(index, 'transport', 'vnc')}
+                    className={`px-3 py-1.5 text-xs rounded-lg border transition-colors ${
+                      (machine.transport || 'vnc') === 'vnc'
+                        ? 'border-accent text-accent bg-accent/10'
+                        : 'border-line text-text-muted hover:border-text-faint'
+                    }`}
+                  >
+                    VNC
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => updateField(index, 'transport', 'rdp')}
+                    className={`px-3 py-1.5 text-xs rounded-lg border transition-colors ${
+                      machine.transport === 'rdp'
+                        ? 'border-accent text-accent bg-accent/10'
+                        : 'border-line text-text-muted hover:border-text-faint'
+                    }`}
+                  >
+                    RDP (nativo)
+                  </button>
+                </div>
               </div>
+
+              {machine.transport === 'rdp' ? (
+                <div className="mt-4 grid grid-cols-1 sm:grid-cols-3 gap-4">
+                  <div>
+                    <label className="block text-xs text-text-faint mb-1">Usuário RDP</label>
+                    <input
+                      type="text"
+                      value={machine.rdpUsername || ''}
+                      onChange={(e) => updateField(index, 'rdpUsername', e.target.value)}
+                      className="w-full bg-inset border border-line rounded-lg px-3 py-2 text-sm text-text-primary font-mono focus:outline-none focus:border-accent transition-colors"
+                      placeholder="openportal-rdp"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-text-faint mb-1">Senha RDP</label>
+                    <input
+                      type="password"
+                      value={machine.rdpPassword || ''}
+                      onChange={(e) => updateField(index, 'rdpPassword', e.target.value)}
+                      className="w-full bg-inset border border-line rounded-lg px-3 py-2 text-sm text-text-primary font-mono focus:outline-none focus:border-accent transition-colors"
+                      placeholder="Senha da conta dedicada"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-text-faint mb-1">Porta RDP</label>
+                    <input
+                      type="number"
+                      min="1"
+                      max={MAX_PORT}
+                      value={machine.rdpPort || 3389}
+                      onChange={(e) =>
+                        updateField(index, 'rdpPort', parseInt(e.target.value) || 3389)
+                      }
+                      className="w-full bg-inset border border-line rounded-lg px-3 py-2 text-sm text-text-primary font-mono focus:outline-none focus:border-accent transition-colors"
+                      placeholder="3389"
+                    />
+                  </div>
+                  <p className="sm:col-span-3 text-xs text-text-faint">
+                    Use a conta dedicada criada na seção &quot;Hospedagem RDP&quot; abaixo (no PC
+                    remoto, não aqui) — nunca a senha pessoal de quem está logado lá. Essa máquina
+                    também precisa ter o Remote Desktop habilitado (Pro/Enterprise/Education).
+                  </p>
+                </div>
+              ) : (
+                <div className="mt-4">
+                  <label className="block text-xs text-text-faint mb-1">Senha VNC (opcional)</label>
+                  <input
+                    type="password"
+                    value={machine.password || ''}
+                    onChange={(e) => updateField(index, 'password', e.target.value)}
+                    className="w-full bg-inset border border-line rounded-lg px-3 py-2 text-sm text-text-primary font-mono focus:outline-none focus:border-accent transition-colors"
+                    placeholder="Deixe em branco se não tiver senha"
+                  />
+                  <p className="text-xs text-text-faint mt-1">
+                    Se o VNC tiver senha, configure aqui. Será usada como fallback se a conexão for
+                    recusada.
+                  </p>
+                </div>
+              )}
               {errors[index] && (
                 <ul className="mt-3 space-y-1">
                   {errors[index].map((err) => (
@@ -411,6 +548,91 @@ export default function ConfigPanel() {
               Corrija os campos destacados antes de salvar
             </span>
           )}
+        </div>
+
+        <div className="mt-10 pt-8 border-t border-line">
+          <h3 className="text-sm font-medium text-text-secondary mb-1">
+            Hospedagem RDP nesta máquina (opcional)
+          </h3>
+          <p className="text-xs text-text-faint mb-4">
+            Provisionamento de <strong>uma vez por PC</strong>, para este PC aceitar conexões RDP
+            (transporte alternativo ao VNC, ver campo &quot;Transporte&quot; acima). Cada ação abre
+            um prompt do Controle de Conta de Usuário (UAC) — você aprova ali. Não muda nada na
+            autenticação NLA do Windows.
+          </p>
+
+          <div className="bg-surface rounded-lg px-3 py-3 border border-line mb-4">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-sm text-text-primary">Habilitar Remote Desktop nesta máquina</p>
+                <p className="text-xs text-text-faint mt-0.5">
+                  Liga o serviço de RDP do Windows e a regra de firewall correspondente.
+                </p>
+              </div>
+              <button
+                onClick={handleEnableRdpHosting}
+                disabled={rdpHostingStatus === 'working'}
+                className="shrink-0 px-3 py-1.5 text-xs rounded-lg border border-line text-text-secondary hover:border-accent hover:text-accent transition-colors disabled:opacity-50"
+              >
+                {rdpHostingStatus === 'working' ? 'Aguardando UAC...' : 'Habilitar'}
+              </button>
+            </div>
+            {rdpHostingStatus === 'ok' && (
+              <p className="text-xs text-success mt-2">
+                Remote Desktop habilitado e confirmado no registro.
+              </p>
+            )}
+            {rdpHostingStatus === 'error' && (
+              <p className="text-xs text-danger mt-2">
+                Não foi possível habilitar — o UAC foi recusado ou algo falhou.
+              </p>
+            )}
+          </div>
+
+          <div className="bg-surface rounded-lg px-3 py-3 border border-line">
+            <p className="text-sm text-text-primary mb-1">Criar conta dedicada para RDP</p>
+            <p className="text-xs text-text-faint mb-3">
+              Conta local só para o app usar — nunca a senha pessoal de quem está logado aqui. Anote
+              a senha gerada agora: ela só aparece uma vez, e é o que você cola no campo &quot;Senha
+              RDP&quot; de quem for conectar neste PC.
+            </p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <input
+                type="text"
+                value={rdpCredUsername}
+                onChange={(e) => setRdpCredUsername(e.target.value)}
+                className="w-full bg-inset border border-line rounded-lg px-3 py-2 text-sm text-text-primary font-mono focus:outline-none focus:border-accent transition-colors"
+                placeholder="openportal-rdp"
+              />
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  readOnly
+                  value={rdpCredPassword}
+                  className="flex-1 bg-inset border border-line rounded-lg px-3 py-2 text-sm text-text-primary font-mono"
+                  placeholder="Clique em Gerar senha"
+                />
+                <button
+                  type="button"
+                  onClick={handleGenerateRdpPassword}
+                  className="shrink-0 px-3 py-1.5 text-xs rounded-lg border border-line text-text-secondary hover:border-accent hover:text-accent transition-colors"
+                >
+                  Gerar senha
+                </button>
+              </div>
+            </div>
+            <div className="mt-3 flex items-center gap-3">
+              <button
+                onClick={handleCreateRdpCredential}
+                disabled={rdpCredStatus === 'working'}
+                className="px-4 py-2 text-sm rounded-lg border border-line text-text-secondary hover:border-accent hover:text-accent transition-colors disabled:opacity-50"
+              >
+                {rdpCredStatus === 'working' ? 'Aguardando UAC...' : 'Criar conta'}
+              </button>
+              {rdpCredStatus === 'ok' && <span className="text-xs text-success">Conta criada</span>}
+            </div>
+            {rdpCredError && <p className="text-xs text-danger mt-2">{rdpCredError}</p>}
+          </div>
         </div>
 
         <div className="mt-10 pt-8 border-t border-line">

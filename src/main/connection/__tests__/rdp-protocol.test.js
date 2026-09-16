@@ -3,6 +3,7 @@ import {
   buildConnectCommand,
   buildResizeCommand,
   buildDisconnectCommand,
+  buildVisibilityCommand,
   encodeCommand,
 } from '../rdp-protocol.js';
 
@@ -50,6 +51,19 @@ describe('buildResizeCommand', () => {
 describe('buildDisconnectCommand', () => {
   it('is just the cmd tag', () => {
     expect(buildDisconnectCommand()).toEqual({ cmd: 'disconnect' });
+  });
+});
+
+describe('buildVisibilityCommand', () => {
+  it('coerces truthy/falsy visible values to a boolean', () => {
+    expect(buildVisibilityCommand({ visible: true })).toEqual({
+      cmd: 'visibility',
+      visible: true,
+    });
+    expect(buildVisibilityCommand({ visible: 0 })).toEqual({
+      cmd: 'visibility',
+      visible: false,
+    });
   });
 });
 

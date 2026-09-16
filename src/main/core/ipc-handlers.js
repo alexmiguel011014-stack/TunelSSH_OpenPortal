@@ -7,6 +7,18 @@ const { readActivityLog } = require('../config/activity-log');
 const { execSync } = require('child_process');
 const os = require('os');
 const net = require('net');
+const { startRdpSidecar, sendRdpCommand, stopRdpSidecar } = require('../connection/rdp-sidecar');
+const {
+  buildConnectCommand,
+  buildResizeCommand,
+  buildDisconnectCommand,
+  buildVisibilityCommand,
+} = require('../connection/rdp-protocol');
+const {
+  enableRdpHosting,
+  createRdpCredential,
+  generatePassword,
+} = require('../system/rdp-provisioning');
 
 const PROXY_PORT = 18900;
 
@@ -53,6 +65,88 @@ function registerIpcHandlers(mainWindow) {
   ipcMain.handle('vnc:proxyUrl', () => {
     return `ws://127.0.0.1:${PROXY_PORT}`;
   });
+
+  // HWND do BrowserWindow como string decimal — é isso que a sidecar C#
+  // espera no argv (long.TryParse, ver sidecar/Program.cs). O buffer nativo
+  // é little-endian; 8 bytes no Windows x64 (ponteiro de 64 bits), mas lemos
+  // defensivamente também o caso de 4 bytes.
+  function getParentHwnd() {
+    const buf = mainWindow.getNativeWindowHandle();
+    if (buf.length >= 8) return buf.readBigUInt64LE(0).toString();
+    if (buf.length >= 4) return String(buf.readUInt32LE(0));
+    return '0';
+  }
+
+  ipcMain.handle('rdp:start', async (_, { machine, rect }) => {
+    const ok = await startRdpSidecar(machine.id, {
+      parentHwnd: getParentHwnd(),
+      x: rect.x,
+      y: rect.y,
+      w: rect.w,
+      h: rect.h,
+    });
+    if (!ok) {
+      send(mainWindow, 'rdp:status', { state: 'error', machineId: machine.id });
+      return { success: false };
+    }
+    sendRdpCommand(
+      machine.id,
+      buildConnectCommand({
+        host: machine.host,
+        port: machine.rdpPort || 3389,
+        username: machine.rdpUsername || '',
+        password: machine.rdpPassword || '',
+      }),
+    );
+    // "connecting", não "connected": a sidecar hoje só confirma que o
+    // processo/pipe subiram, não que o MSTSCLib autenticou (ainda não
+    // integrado — ver GOALS.md). Status real de sessão chega numa versão
+    // futura, quando a sidecar reportar de volta pelo pipe.
+    send(mainWindow, 'rdp:status', {
+      state: 'connecting',
+      machineId: machine.id,
+    });
+    return { success: true };
+  });
+
+  ipcMain.handle('rdp:resize', (_, { machineId, rect }) => {
+    return { success: sendRdpCommand(machineId, buildResizeCommand(rect)) };
+  });
+
+  ipcMain.handle('rdp:setVisible', (_, { machineId, visible }) => {
+    return {
+      success: sendRdpCommand(machineId, buildVisibilityCommand({ visible })),
+    };
+  });
+
+  ipcMain.handle('rdp:stop', (_, machineId) => {
+    sendRdpCommand(machineId, buildDisconnectCommand());
+    stopRdpSidecar(machineId);
+    send(mainWindow, 'rdp:status', { state: 'disconnected', machineId });
+    return { success: true };
+  });
+
+  // Provisionamento (GOALS 2, "manual, one-time per machine") — cada
+  // chamada abre um prompt de UAC; o usuário aprova (ou não) na hora.
+  ipcMain.handle('rdp:enableHosting', async () => {
+    try {
+      const ok = await enableRdpHosting();
+      return { success: ok };
+    } catch (err) {
+      return { success: false, error: err.message };
+    }
+  });
+
+  ipcMain.handle('rdp:createCredential', async (_, { username, password }) => {
+    try {
+      await createRdpCredential(username, password);
+      return { success: true };
+    } catch (err) {
+      return { success: false, error: err.message };
+    }
+  });
+
+  ipcMain.handle('rdp:generatePassword', () => generatePassword());
 
   function getLocalTailscaleIp() {
     try {

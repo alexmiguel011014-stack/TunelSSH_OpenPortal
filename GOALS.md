@@ -212,15 +212,29 @@ flowchart TD
   ```
   No `UserAuthentication`/NLA registry change — NLA stays on (that's the whole point of
   this path). Verify success by reading the registry value back, not just trusting a zero
-  exit code. Done when: running this action on a fresh Pro-edition VM actually allows an
-  incoming RDP connection with NLA still enabled.
+  exit code. **Implemented (2026-09-16)**: `src/main/system/rdp-provisioning.js`
+  (`enableRdpHosting`, elevated via `Start-Process -Verb RunAs` with a base64
+  `-EncodedCommand` to sidestep quoting hell, verified by reading `fDenyTSConnections`
+  back rather than trusting the exit code) + a button in ConfigPanel's new "Hospedagem
+  RDP nesta máquina" section. Unit-tested with an injectable `spawn` (never shells out in
+  tests). Still open: the actual "Done when" — a live UAC-approved run on a real
+  Pro-edition machine — needs a real machine and a human clicking "Aceitar" on the UAC
+  prompt, neither available in this session.
 - [ ] **Provisioning — dedicated RDP credential**: create a dedicated local Windows
       account for the app's own RDP use during provisioning (strong random password,
       generated once, stored via Electron's `safeStorage` — not the target user's personal
       Windows login). Recommended over reusing the logged-in user's own password so the admin
       never needs to know or handle it. Done when: the app can authenticate an RDP session
       using only this generated account, with no manual credential entry per connection.
-- [ ] **Implementation — main process sidecar management + IPC**: `rdp-sidecar.js`
+      **Implemented (2026-09-16)**: `generatePassword`/`createRdpCredential` in
+      `rdp-provisioning.js` (`New-LocalUser` + `Add-LocalGroupMember` on "Remote Desktop
+      Users", elevated the same way as hosting above), plus a "Criar conta dedicada" UI in
+      ConfigPanel that shows the generated password once (never persisted by this app —
+      it's meant to be copied into the connecting side's own `rdpPassword` field, encrypted
+      there via `safeStorage` same as the VNC password). Still open: can't verify real RDP
+      auth against this account yet — that needs both a live machine and the MsRdpEx
+      integration below.
+- [x] **Implementation — main process sidecar management + IPC**: `rdp-sidecar.js`
       (spawn/pipe-client management, Map-by-machine-id like `file-transfer-session.js`) +
       `rdp-protocol.js` (pure command builders/encoder) + a matching named-pipe server
       added to `sidecar/Program.cs`. Credentials travel only over the pipe, never argv —
@@ -232,31 +246,61 @@ flowchart TD
       `NamedPipeServerStream` (C#) takes the bare pipe name, but `net.createConnection`
       (Node) needs the full `\\.\pipe\<name>` path — mixing the two up made every
       connection attempt fail with ENOENT despite both sides being otherwise correct.
-      Not yet wired into `connectMachine`/`disconnectMachine`, `connection-request.js`'s
-      approval gate, or the renderer — this item is the IPC/process-management layer
-      proven standalone; wiring it into the real connect flow happens with the renderer
-      viewer + ConfigPanel items below. No `proxy.js` change needed (confirmed — see
-      revision note above).
-- [ ] **Implementation — renderer RDP viewer**: new module mirroring
+      Now wired end to end (2026-09-16): `App.jsx`'s `connectMachine`/`disconnectMachine`
+      branch on `resolveTransport(machine)` (new pure helper in `connectionState.js`,
+      tested) — RDP machines skip `vnc:connect`/`vnc:disconnect` and instead let
+      `RdpViewer` drive `rdp:start`/`rdp:resize`/`rdp:setVisible`/`rdp:stop` (new IPC
+      handlers in `ipc-handlers.js`, using `mainWindow.getNativeWindowHandle()` to get the
+      real parent HWND instead of the manual-test hardcoded value used during the
+      standalone proof). Added a `visibility` pipe command (`buildVisibilityCommand` +
+      `sidecar/Program.cs` `ShowWindow(SW_HIDE/SW_SHOWNORMAL)`) that didn't exist in the
+      standalone proof — needed because the native window isn't a DOM child, so
+      `display:none` on its host `<div>` (GOALS 1's focus-switching) doesn't hide it; the
+      main process now hides/reshows it explicitly on focus change. No `proxy.js` change
+      needed (confirmed — see revision note above).
+- [x] **Implementation — renderer RDP viewer**: new module mirroring
       `src/renderer/src/modules/connection/RemoteViewer.jsx`'s shape and lifecycle (same
       connection banner, same mount/unmount behavior per GOALS 1's multi-instance model),
       but rendering a positioned placeholder `<div>` (the sidecar's native window overlays
       it) instead of a `<canvas>` or iframe. Reuse GOALS 1's per-machine connection-state
       model rather than adding a second, parallel state shape for RDP-mode machines.
-- [ ] **Implementation — ConfigPanel transport selection**: per-machine setting (VNC vs
+      **Done (2026-09-16)**: `RdpViewer.jsx` — starts the sidecar on mount from its
+      container's real `getBoundingClientRect()` (scaled by `devicePixelRatio` to convert
+      DOM logical pixels to the physical pixels `SetWindowPos` expects), forwards resize
+      via the same `ResizeObserver` pattern `RemoteViewer` already uses, stops the sidecar
+      on unmount/disconnect. Rendered from the same `connectedMachines` map as
+      `RemoteViewer` (`App.jsx`), chosen via `resolveTransport` — no second state shape.
+- [x] **Implementation — ConfigPanel transport selection**: per-machine setting (VNC vs
       RDP) in `src/renderer/src/modules/config/ConfigPanel.jsx`, defaulting existing machines
       to VNC (no forced migration). Done when: a machine's transport can be switched without
-      affecting any other machine's configuration.
-- [ ] **Tests**: unit-test the transport-selection logic and the main-process IPC message
+      affecting any other machine's configuration. **Done (2026-09-16)**: a VNC/RDP toggle
+      per machine in the existing per-machine draft array (each machine's `transport` field
+      is independent, same save/validate path as the rest of the machine form); RDP mode
+      swaps the VNC password field for username/password/port fields
+      (`rdpUsername`/`rdpPassword`/`rdpPort`, `rdpPassword` encrypted at rest the same way
+      as the VNC password — see `config-manager.js`).
+- [x] **Tests**: unit-test the transport-selection logic and the main-process IPC message
       shapes (connect/disconnect/resize) — pure logic, no real sidecar process needed. Full
       RDP behavior (auth, rendering, input forwarding, HWND parenting itself) is **not**
       realistically unit-testable — mark end-to-end verification `(manual)`: connect to a
       real Pro-edition Tailscale-networked machine with RDP hosting enabled and NLA still
       on, confirm mouse, keyboard, and screen updates all work, then confirm the same
-      machine still works if switched back to VNC.
-- [ ] **Docs**: update `docs/ARQUITETURA_CONEXAO.md` with the RDP path — the sidecar
+      machine still works if switched back to VNC. **Done (2026-09-16)**:
+      `resolveTransport` (transport-selection logic, extracted to be testable rather than
+      left as an inline literal check) in `connectionState.test.js`; IPC message shapes
+      (connect/resize/disconnect/visibility) in `rdp-protocol.test.js`; provisioning script
+      builders + elevated-run/verify flow (with an injectable `spawn`, no real shell-out)
+      in `rdp-provisioning.test.js`. 59/59 tests passing. The manual E2E item below remains
+      the real behavioral proof — these tests only cover the logic around it.
+- [x] **Docs**: update `docs/ARQUITETURA_CONEXAO.md` with the RDP path — the sidecar
       architecture, why NLA needed no tradeoff this time, the provisioning steps, and
-      per-machine migration guidance (nothing forces a machine off VNC).
+      per-machine migration guidance (nothing forces a machine off VNC). **Done
+      (2026-09-16)**: new "RDP nativo (transporte alternativo ao VNC)" subsection under
+      §2, covering the sidecar/HWND-reparenting rationale, the named-pipe command set
+      (including `visibility`, added this round), why `proxy.js` doesn't need to change,
+      the two provisioning steps, and an explicit "current state" note that MsRdpEx/
+      MSTSCLib is still a stub, so migrating a machine today proves the plumbing, not a
+      working RDP session yet.
 
 **Done when (feature-level):** a Pro-edition machine configured for RDP connects, shows
 its live screen embedded in the app next to the file explorer exactly like VNC does
