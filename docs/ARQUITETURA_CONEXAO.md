@@ -238,14 +238,31 @@ própria máquina de destino, não em quem conecta):**
    aparece uma vez na tela — precisa ser copiada para o campo "Senha RDP"
    de quem for configurar esta máquina como RDP no próprio app.
 
-**Estado atual (2026-09-16):** o encaixe visual (embedding) e o canal de
-comando estão provados e ligados ao fluxo real de conexão/desconexão
-(GOALS 1's `connectedMachines`, sem um segundo modelo de estado paralelo).
-O controle MSTSCLib em si (`Devolutions/MsRdpEx`) ainda **não** está
-integrado em `sidecar/Program.cs` — o comando `connect` hoje só atualiza um
-texto de status na janela nativa, não estabelece sessão RDP de verdade.
-Migrar uma máquina para RDP hoje prova a infraestrutura, não uma sessão
-funcional ainda.
+**Controle ActiveX (MSTSCLib via Devolutions/MsRdpEx):** `sidecar/Program.cs`
+hospeda um `AxMsRdpClient11NotSafeForScripting` (a versão mais nova de
+cliente que o pacote expõe) dentro do `SidecarForm`. Os assemblies de
+interop (`Interop.MSTSCLib.dll`/`AxInterop.MSTSCLib.dll` — exatamente o que
+`aximp`/`tlbimp` gerariam à mão a partir de `mstscax.dll`) vêm prontos do
+pacote NuGet `Devolutions.MsRdpEx`, modo "Legacy" (padrão do pacote para
+net48) — nada foi gerado manualmente. `PackageReference` funciona no
+`.csproj` clássico (não SDK-style) porque o MSBuild do VS Build Tools já
+traz seus próprios targets de restore do NuGet; não precisou instalar mais
+nada. `EnableCredSspSupport = true` (em `AdvancedSettings7`) é o que mantém
+NLA ligado no servidor — o motivo desta arquitetura existir em vez de uma
+lib RDP em JS. `SmartSizing` (em `AdvancedSettings2`) deixa o controle
+escalar o desenho para o tamanho do container sem renegociar a resolução
+remota a cada `resize`.
+
+**Estado atual (2026-09-16):** o encaixe visual (embedding), o canal de
+comando e o controle MSTSCLib em si estão implementados e ligados ao fluxo
+real de conexão/desconexão (GOALS 1's `connectedMachines`, sem um segundo
+modelo de estado paralelo). Testado (smoke test) contra `127.0.0.1:3389`
+com credenciais fictícias — só para provar que `Connect()` não derruba a
+sidecar, sem máquina real nem credencial real envolvida. **Ainda não
+verificado**: uma sessão RDP de verdade, autenticada, contra uma máquina
+Pro/Enterprise/Education real com hospedagem RDP habilitada — isso
+continua exigindo uma máquina física fora do alcance deste ambiente de
+desenvolvimento (ver GOALS.md, item de verificação manual).
 
 ---
 

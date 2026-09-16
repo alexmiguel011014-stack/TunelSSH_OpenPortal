@@ -184,8 +184,9 @@ flowchart TD
       already-installed MSBuild (classic non-SDK-style `.csproj`, since this machine's VS
       Build Tools has no `Microsoft.NET.Sdk` resolver — required installing the .NET
       Framework 4.8 Developer Pack, which needed a pending Windows Update to actually
-      finish installing first before the reboot it wanted would take). `MsRdpEx` not yet
-      wired in — this milestone only proves the embedding mechanism, not the RDP control.
+      finish installing first before the reboot it wanted would take). `MsRdpEx` wired in
+      as a separate item below — this milestone only proved the embedding mechanism, not
+      the RDP control itself.
       Verified (2026-09-16), programmatically rather than by eye — screen access to the
       dev Electron window wasn't available this session, so used `EnumChildWindows` +
       `GetWindowThreadProcessId` from PowerShell to confirm directly with the OS: the
@@ -202,6 +203,36 @@ flowchart TD
       parent for free (no code needed) — live resize propagation (parent resizes → overlay
       resizes) is intentionally deferred to the "main process sidecar management + IPC"
       item below, not part of this narrower proof.
+- [x] **MsRdpEx/MSTSCLib integration**: real RDP client wired into
+      `sidecar/Program.cs`, replacing the earlier text-label stub. Done when: the `connect`
+      pipe command actually attempts a real RDP session (not just updates a label), NLA
+      stays on, and resize keeps working via the same rect the sidecar already receives.
+      **Done (2026-09-16)**: added `<PackageReference Include="Devolutions.MsRdpEx" />`
+      to the classic (non-SDK-style) `.csproj` and confirmed `msbuild /t:restore` works
+      for `PackageReference` even without the SDK-style project format — VS Build Tools
+      ships its own NuGet restore targets, so no new tooling install was needed. Uses the
+      package's default "Legacy" COM-interop mode, which is exactly the pre-built
+      `Interop.MSTSCLib.dll`/`AxInterop.MSTSCLib.dll` that `aximp`/`tlbimp` would generate
+      by hand from `mstscax.dll` — this is the whole reason MsRdpEx was chosen over
+      hand-rolling that step (see design rationale above). `SidecarForm` now hosts an
+      `AxMsRdpClient11NotSafeForScripting` control (confirmed via reflection against the
+      restored assembly rather than guessed from memory — `AxMsRdpClient11...` is the
+      newest client version the package ships) with `Server`/`UserName`/`ColorDepth` set
+      directly, `AdvancedSettings2.RDPPort`/`ClearTextPassword`/`SmartSizing` and
+      `AdvancedSettings7.EnableCredSspSupport = true` (NLA) set via explicit interface
+      casts (the Ax wrapper's `AdvancedSettings2`/`AdvancedSettings7` properties are
+      declared as the base/6 interfaces respectively — a known quirk of the generated
+      wrapper, confirmed by inspecting the actual interop assembly, not assumed).
+      `SmartSizing` means `resize` only needs `SetWindowPos` on the container (already
+      implemented) — no per-resize resolution renegotiation. `OnConnecting`/`OnDisconnected`
+      /`OnFatalError`/`OnLogonError` drive the status label (hidden once actually
+      connected). Smoke-tested (2026-09-16) via a real pipe round-trip against
+      `127.0.0.1:3389` with bogus credentials (loopback only, no real target or real
+      credentials involved) — `Connect()` executes without crashing the sidecar,
+      `resize`/`disconnect` still work mid-attempt, process exits cleanly. This proves the
+      wiring end-to-end; it does **not** prove a real authenticated session, which needs
+      an actual Pro-edition machine with RDP hosting enabled (see manual verification
+      item below).
 - [ ] **Provisioning — enable RDP hosting `(manual, one-time per machine)`**: add an
       "Enable Remote Desktop hosting" action to the target-side app (the same "OpenPortal
       Remote" instance that already runs on each of the 10 PCs), triggered from its own
@@ -232,8 +263,8 @@ flowchart TD
       ConfigPanel that shows the generated password once (never persisted by this app —
       it's meant to be copied into the connecting side's own `rdpPassword` field, encrypted
       there via `safeStorage` same as the VNC password). Still open: can't verify real RDP
-      auth against this account yet — that needs both a live machine and the MsRdpEx
-      integration below.
+      auth against this account yet — MsRdpEx is now wired in (see item above), so the
+      only remaining gap is a live Pro-edition machine to actually test against.
 - [x] **Implementation — main process sidecar management + IPC**: `rdp-sidecar.js`
       (spawn/pipe-client management, Map-by-machine-id like `file-transfer-session.js`) +
       `rdp-protocol.js` (pure command builders/encoder) + a matching named-pipe server
@@ -290,17 +321,21 @@ flowchart TD
       left as an inline literal check) in `connectionState.test.js`; IPC message shapes
       (connect/resize/disconnect/visibility) in `rdp-protocol.test.js`; provisioning script
       builders + elevated-run/verify flow (with an injectable `spawn`, no real shell-out)
-      in `rdp-provisioning.test.js`. 59/59 tests passing. The manual E2E item below remains
-      the real behavioral proof — these tests only cover the logic around it.
+      in `rdp-provisioning.test.js`. 59/59 tests passing. The manual end-to-end
+      verification described in this same item's own text above remains the real
+      behavioral proof — these tests only cover the logic around it, and a loopback smoke
+      test (127.0.0.1, bogus credentials, see the MsRdpEx integration item above) only
+      proves the wiring doesn't crash on a real `Connect()` call, not a real session.
 - [x] **Docs**: update `docs/ARQUITETURA_CONEXAO.md` with the RDP path — the sidecar
       architecture, why NLA needed no tradeoff this time, the provisioning steps, and
       per-machine migration guidance (nothing forces a machine off VNC). **Done
       (2026-09-16)**: new "RDP nativo (transporte alternativo ao VNC)" subsection under
       §2, covering the sidecar/HWND-reparenting rationale, the named-pipe command set
       (including `visibility`, added this round), why `proxy.js` doesn't need to change,
-      the two provisioning steps, and an explicit "current state" note that MsRdpEx/
-      MSTSCLib is still a stub, so migrating a machine today proves the plumbing, not a
-      working RDP session yet.
+      the two provisioning steps, and an explicit "current state" note. **Updated again
+      same day** once MsRdpEx was actually wired in: the note now says the real MSTSCLib
+      control is integrated and smoke-tested (loopback), with only a live authenticated
+      session against a real Pro-edition machine left unverified.
 
 **Done when (feature-level):** a Pro-edition machine configured for RDP connects, shows
 its live screen embedded in the app next to the file explorer exactly like VNC does

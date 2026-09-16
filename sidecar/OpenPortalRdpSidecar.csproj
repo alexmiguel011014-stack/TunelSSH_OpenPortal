@@ -46,5 +46,11 @@
   <ItemGroup>
     <Compile Include="Program.cs" />
   </ItemGroup>
+  <ItemGroup>
+    <!-- Interop.MSTSCLib.dll/AxInterop.MSTSCLib.dll pré-compilados (modo
+         "Legacy", padrão do pacote para net48) em vez de gerar isso à mão
+         com aximp/tlbimp contra mstscax.dll — ver GOALS.md, GOALS 2. -->
+    <PackageReference Include="Devolutions.MsRdpEx" Version="2026.8.20.1" />
+  </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
 </Project>

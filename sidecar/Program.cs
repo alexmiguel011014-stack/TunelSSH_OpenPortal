@@ -1,4 +1,5 @@
 using System;
+using System.ComponentModel;
 using System.Drawing;
 using System.IO;
 using System.IO.Pipes;
@@ -6,14 +7,18 @@ using System.Runtime.InteropServices;
 using System.Threading;
 using System.Web.Script.Serialization;
 using System.Windows.Forms;
+using AxMSTSCLib;
+using MSTSCLib;
 
 namespace OpenPortalRdpSidecar
 {
-    // GOALS 2 (RDP nativo): sidecar que hospeda a janela nativa (mais tarde,
-    // o controle ActiveX MSTSCLib via MsRdpEx) reparented dentro do HWND do
-    // BrowserWindow do Electron. Recebe comandos do processo principal via
-    // named pipe (nunca por argv, pra senha nunca aparecer em
-    // Get-Process/Task Manager) — ver GOALS.md, seção "GOALS 2".
+    // GOALS 2 (RDP nativo): sidecar que hospeda o controle ActiveX MSTSCLib
+    // (via os assemblies de interop pré-compilados do pacote NuGet
+    // Devolutions.MsRdpEx, modo "Legacy" — mesmas Interop.MSTSCLib.dll/
+    // AxInterop.MSTSCLib.dll que `aximp`/`tlbimp` gerariam à mão) reparented
+    // dentro do HWND do BrowserWindow do Electron. Recebe comandos do
+    // processo principal via named pipe (nunca por argv, pra senha nunca
+    // aparecer em Get-Process/Task Manager) — ver GOALS.md, seção "GOALS 2".
     //
     // Contrato de argv (nada sensível aqui): <pipeName> <parentHwnd> <x> <y> <w> <h>
     // Contrato do pipe: uma linha JSON por comando, UTF-8, terminada em \n:
@@ -171,11 +176,13 @@ namespace OpenPortalRdpSidecar
                         break;
 
                     case "connect":
-                        // Stub por enquanto — MsRdpEx/MSTSCLib ainda não
-                        // plugado (ver GOALS.md). Nunca loga a senha.
-                        string host = cmd.ContainsKey("host") ? Convert.ToString(cmd["host"]) : "?";
-                        string username = cmd.ContainsKey("username") ? Convert.ToString(cmd["username"]) : "?";
-                        form.ShowConnectingStub(host, username);
+                        // Nunca loga a senha — só chega por aqui vinda do
+                        // pipe, nunca por argv (ver contrato no topo do arquivo).
+                        string host = cmd.ContainsKey("host") ? Convert.ToString(cmd["host"]) : "";
+                        string username = cmd.ContainsKey("username") ? Convert.ToString(cmd["username"]) : "";
+                        string password = cmd.ContainsKey("password") ? Convert.ToString(cmd["password"]) : "";
+                        int port = cmd.ContainsKey("port") ? Convert.ToInt32(cmd["port"]) : 3389;
+                        form.ConnectRdp(host, port, username, password);
                         break;
 
                     case "visibility":
@@ -187,6 +194,11 @@ namespace OpenPortalRdpSidecar
                         break;
 
                     case "disconnect":
+                        // Encerra a sessão RDP antes de matar o processo —
+                        // evita depender só do socket cair por trás quando o
+                        // processo morre, o que pode deixar a sessão do lado
+                        // do servidor "pendurada" até o timeout dele.
+                        form.DisconnectRdp();
                         Application.Exit();
                         break;
                 }
@@ -197,6 +209,7 @@ namespace OpenPortalRdpSidecar
     class SidecarForm : Form
     {
         readonly Label _label;
+        AxMsRdpClient11NotSafeForScripting _rdp;
 
         public SidecarForm()
         {
@@ -211,11 +224,98 @@ namespace OpenPortalRdpSidecar
                 TextAlign = ContentAlignment.MiddleCenter,
             };
             Controls.Add(_label);
+
+            // Criado uma vez, escondido até o primeiro "connect" — assim uma
+            // falha de registro do controle COM (mstscax.dll não registrado)
+            // vira uma mensagem no label em vez de derrubar a sidecar inteira.
+            try
+            {
+                _rdp = new AxMsRdpClient11NotSafeForScripting();
+                ((ISupportInitialize)_rdp).BeginInit();
+                // Adicionado depois do label: no WinForms, controles
+                // adicionados por último ficam por cima no z-order, então o
+                // controle RDP cobre o label assim que fica visível.
+                Controls.Add(_rdp);
+                ((ISupportInitialize)_rdp).EndInit();
+                _rdp.Dock = DockStyle.Fill;
+                _rdp.Visible = false;
+                _rdp.OnConnecting += (s, e) => SetStatus("Conectando...");
+                _rdp.OnConnected += (s, e) => SetStatus(null);
+                _rdp.OnDisconnected += (s, e) => SetStatus(string.Format("Desconectado (motivo {0})", e.discReason));
+                _rdp.OnFatalError += (s, e) => SetStatus(string.Format("Erro fatal (código {0})", e.errorCode));
+                _rdp.OnLogonError += (s, e) => SetStatus(string.Format("Erro de login (código {0})", e.lError));
+            }
+            catch (Exception ex)
+            {
+                _rdp = null;
+                _label.Text = "Controle RDP (MSTSCLib) indisponível nesta máquina: " + ex.Message;
+            }
         }
 
-        public void ShowConnectingStub(string host, string username)
+        // null esconde o label (sessão renderizando normalmente); qualquer
+        // texto reexibe o label por cima do controle (falha, desconectado).
+        void SetStatus(string text)
         {
-            _label.Text = string.Format("(stub) Conectaria a {0} como {1}\nMsRdpEx/MSTSCLib ainda não integrado", host, username);
+            if (text == null)
+            {
+                _label.Visible = false;
+                return;
+            }
+            _label.Text = text;
+            _label.Visible = true;
+        }
+
+        public void ConnectRdp(string host, int port, string username, string password)
+        {
+            if (_rdp == null)
+            {
+                SetStatus("Controle RDP indisponível — não é possível conectar.");
+                return;
+            }
+            SetStatus("Conectando a " + host + "...");
+            _rdp.Visible = true;
+
+            _rdp.Server = host;
+            _rdp.UserName = username;
+            _rdp.ColorDepth = 32;
+            // SmartSizing (abaixo) escala o desenho pro tamanho do controle
+            // sem renegociar a resolução remota a cada resize — então este
+            // valor inicial só precisa ser "razoável", não perfeito.
+            _rdp.DesktopWidth = Math.Max(200, ClientSize.Width);
+            _rdp.DesktopHeight = Math.Max(200, ClientSize.Height);
+
+            // AdvancedSettings2/7 batem com o NÚMERO da interface COM, não
+            // com o número no nome da propriedade do wrapper Ax (a
+            // propriedade "AdvancedSettings2" devolve o tipo-base
+            // IMsRdpClientAdvancedSettings; "AdvancedSettings7" devolve
+            // IMsRdpClientAdvancedSettings6) — cast explícito é necessário e
+            // seguro, o objeto COM por trás suporta todas as versões.
+            var adv2 = (IMsRdpClientAdvancedSettings2)_rdp.AdvancedSettings2;
+            adv2.RDPPort = port;
+            adv2.ClearTextPassword = password;
+            adv2.SmartSizing = true;
+
+            // EnableCredSspSupport = NLA continua ligado no servidor — é o
+            // motivo pelo qual esta arquitetura (MSTSCLib nativo) foi
+            // escolhida em vez das libs JS abandonadas (ver GOALS.md).
+            var adv7 = (IMsRdpClientAdvancedSettings7)_rdp.AdvancedSettings7;
+            adv7.EnableCredSspSupport = true;
+
+            _rdp.Connect();
+        }
+
+        public void DisconnectRdp()
+        {
+            try
+            {
+                if (_rdp != null && _rdp.Connected != 0) _rdp.Disconnect();
+            }
+            catch
+            {
+                // Processo está prestes a sair de qualquer forma (chamado só
+                // a partir do case "disconnect") — não vale a pena propagar
+                // uma falha de desconexão nesse ponto.
+            }
         }
     }
 }
