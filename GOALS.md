@@ -179,16 +179,29 @@ flowchart TD
       ActiveX/MSTSCLib**, sidestepping the NLA tradeoff rather than accepting it, at the
       cost of a new native-sidecar build target (see revision note above for the concrete
       architecture). Done when: written down before implementation — done, this section.
-- [ ] **Sidecar scaffold**: new `sidecar/` (or similar) folder — minimal C#/.NET
-      Framework 4.8 WinForms project referencing `MsRdpEx` (NuGet), built via the
-      already-installed MSBuild (`MSBuild/Current/Bin/amd64/MSBuild.exe` under this
-      machine's VS Build Tools install — no new SDK install). First milestone is
-      deliberately narrow: prove a native window from this sidecar can be parented under
-      an Electron `BrowserWindow`'s HWND and tracks its position/size — before spending any
-      effort on the RDP control itself. Done when: launching the sidecar from the Electron
-      app shows a native window overlaying a placeholder area in the renderer, and moving/
-      resizing the Electron window moves/resizes the overlay in lockstep — verified
-      visually, not just "process started."
+- [x] **Sidecar scaffold**: new `sidecar/` folder — minimal C#/.NET Framework 4.8
+      WinForms project (`OpenPortalRdpSidecar.csproj` + `Program.cs`), built via the
+      already-installed MSBuild (classic non-SDK-style `.csproj`, since this machine's VS
+      Build Tools has no `Microsoft.NET.Sdk` resolver — required installing the .NET
+      Framework 4.8 Developer Pack, which needed a pending Windows Update to actually
+      finish installing first before the reboot it wanted would take). `MsRdpEx` not yet
+      wired in — this milestone only proves the embedding mechanism, not the RDP control.
+      Verified (2026-09-16), programmatically rather than by eye — screen access to the
+      dev Electron window wasn't available this session, so used `EnumChildWindows` +
+      `GetWindowThreadProcessId` from PowerShell to confirm directly with the OS: the
+      sidecar's WinForms window is a real Win32 child of the running
+      `BrowserWindow`'s HWND, visible, and positioned correctly inside its client area
+      (requested rect (250,150,500,350) landed at screen (258,181)-(758,531), i.e.
+      parent-relative as expected — border/titlebar chrome accounts for the small offset).
+      Fixed a real bug found along the way: positioning right after `SetParent` landed the
+      window at Windows' (-32000,-32000) "minimized" park position, because the `WS_MINIMIZE`
+      style bit and the stale WinForms-level `Location` (screen coords, wrong once the
+      window is truly `WS_CHILD`) fought each other — fix was `ShowWindow(SW_SHOWNORMAL)`
+      before `SetWindowPos`, using `SetWindowPos` (parent-relative) instead of
+      `form.Location` after reparenting. A `WS_CHILD` window automatically moves with its
+      parent for free (no code needed) — live resize propagation (parent resizes → overlay
+      resizes) is intentionally deferred to the "main process sidecar management + IPC"
+      item below, not part of this narrower proof.
 - [ ] **Provisioning — enable RDP hosting `(manual, one-time per machine)`**: add an
       "Enable Remote Desktop hosting" action to the target-side app (the same "OpenPortal
       Remote" instance that already runs on each of the 10 PCs), triggered from its own
