@@ -85,6 +85,7 @@ function registerIpcHandlers(mainWindow) {
       w: rect.w,
       h: rect.h,
     });
+    if (ok === null) return { success: false, superseded: true };
     if (!ok) {
       send(mainWindow, 'rdp:status', { state: 'error', machineId: machine.id });
       return { success: false };

@@ -70,10 +70,19 @@ async function startRdpSidecar(machineId, { parentHwnd, x, y, w, h }) {
   proc.on('error', (err) => console.error(`[rdp-sidecar] ${machineId} spawn error:`, err.message));
   proc.on('exit', (code) => {
     console.log(`[rdp-sidecar] ${machineId} exited with code ${code}`);
-    sidecars.delete(machineId);
+    if (sidecars.get(machineId) === entry) sidecars.delete(machineId);
   });
 
   const pipeClient = await connectPipeWithRetry(pipePath);
+  // Outra inicialização pode ter substituído esta enquanto aguardávamos o
+  // pipe (por exemplo, o segundo ciclo do React StrictMode no modo dev).
+  // Não deixe a tentativa antiga publicar erro sobre a nova conexão.
+  if (sidecars.get(machineId) !== entry) {
+    try {
+      pipeClient?.end();
+    } catch {}
+    return null;
+  }
   if (!pipeClient) {
     console.error(`[rdp-sidecar] ${machineId} failed to connect to sidecar pipe`);
     return false;
