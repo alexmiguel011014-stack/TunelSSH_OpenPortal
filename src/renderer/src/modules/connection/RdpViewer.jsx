@@ -7,8 +7,7 @@ import { MachineContext } from '../../App';
 // <iframe> renderiza um <div> posicionado: quem desenha a tela de verdade é
 // a janela nativa da sidecar (C#/MSTSCLib), reparented por cima dessa área
 // pelo processo principal (ver docs/ARQUITETURA_CONEXAO.md e GOALS.md,
-// seção "GOALS 2"). MsRdpEx/MSTSCLib ainda não integrado nesta etapa — a
-// sidecar hoje só prova o encaixe visual e o canal de comando.
+// seção "GOALS 2"). A sidecar também reporta os eventos de sessão pelo pipe.
 export default function RdpViewer({ machine, isVisible }) {
   const containerRef = useRef(null);
   const startedRef = useRef(false);

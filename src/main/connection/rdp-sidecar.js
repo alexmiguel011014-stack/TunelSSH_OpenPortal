@@ -8,7 +8,7 @@ const { spawn } = require('child_process');
 const net = require('net');
 const path = require('path');
 const crypto = require('crypto');
-const { encodeCommand } = require('./rdp-protocol');
+const { encodeCommand, parseStatusMessage } = require('./rdp-protocol');
 
 const SIDECAR_EXE = path.join(
   __dirname,
@@ -48,7 +48,7 @@ async function connectPipeWithRetry(pipePath, attempts = 30, delayMs = 150) {
 // dados (coordenadas relativas à área do BrowserWindow — ver
 // docs/ARQUITETURA_CONEXAO.md). Substitui qualquer sidecar já rodando para
 // essa mesma máquina.
-async function startRdpSidecar(machineId, { parentHwnd, x, y, w, h }) {
+async function startRdpSidecar(machineId, { parentHwnd, x, y, w, h }, onStatus) {
   stopRdpSidecar(machineId);
 
   // Nome "nu" do pipe: NamedPipeServerStream (lado C#, ver sidecar/Program.cs)
@@ -88,6 +88,16 @@ async function startRdpSidecar(machineId, { parentHwnd, x, y, w, h }) {
     return false;
   }
   entry.pipeClient = pipeClient;
+  let pending = '';
+  pipeClient.on('data', (chunk) => {
+    pending += chunk.toString('utf8');
+    const lines = pending.split('\n');
+    pending = lines.pop();
+    for (const line of lines) {
+      const state = parseStatusMessage(line.trim());
+      if (state && sidecars.get(machineId) === entry) onStatus?.(state);
+    }
+  });
   return true;
 }
 

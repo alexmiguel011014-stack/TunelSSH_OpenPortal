@@ -28,10 +28,21 @@ function encodeCommand(command) {
   return JSON.stringify(command) + '\n';
 }
 
+function parseStatusMessage(line) {
+  try {
+    const message = JSON.parse(line);
+    if (message?.type !== 'status' || typeof message.state !== 'string') return null;
+    return message.state;
+  } catch {
+    return null;
+  }
+}
+
 module.exports = {
   buildConnectCommand,
   buildResizeCommand,
   buildDisconnectCommand,
   buildVisibilityCommand,
   encodeCommand,
+  parseStatusMessage,
 };

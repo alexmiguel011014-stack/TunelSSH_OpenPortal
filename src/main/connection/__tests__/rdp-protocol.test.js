@@ -5,6 +5,7 @@ import {
   buildDisconnectCommand,
   buildVisibilityCommand,
   encodeCommand,
+  parseStatusMessage,
 } from '../rdp-protocol.js';
 
 describe('buildConnectCommand', () => {
@@ -84,5 +85,16 @@ describe('encodeCommand', () => {
     });
     const line = encodeCommand(command).trimEnd();
     expect(JSON.parse(line)).toEqual(command);
+  });
+});
+
+describe('parseStatusMessage', () => {
+  it('extracts status events sent by the sidecar', () => {
+    expect(parseStatusMessage('{"type":"status","state":"connected"}')).toBe('connected');
+  });
+
+  it('ignores commands and malformed messages', () => {
+    expect(parseStatusMessage('{"cmd":"connect"}')).toBeNull();
+    expect(parseStatusMessage('not-json')).toBeNull();
   });
 });

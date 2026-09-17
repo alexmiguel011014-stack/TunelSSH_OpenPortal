@@ -4,6 +4,7 @@ using System.Drawing;
 using System.IO;
 using System.IO.Pipes;
 using System.Runtime.InteropServices;
+using System.Text;
 using System.Threading;
 using System.Web.Script.Serialization;
 using System.Windows.Forms;
@@ -120,9 +121,18 @@ namespace OpenPortalRdpSidecar
             {
                 try
                 {
-                    using (var server = new NamedPipeServerStream(pipeName, PipeDirection.In, 1))
+                    using (var server = new NamedPipeServerStream(pipeName, PipeDirection.InOut, 1))
                     {
                         server.WaitForConnection();
+                        var writer = new StreamWriter(server, new UTF8Encoding(false))
+                        {
+                            AutoFlush = true,
+                        };
+                        form.SetStatusReporter(state => writer.WriteLine(serializer.Serialize(new
+                        {
+                            type = "status",
+                            state,
+                        })));
                         using (var reader = new StreamReader(server))
                         {
                             string line;
@@ -142,6 +152,8 @@ namespace OpenPortalRdpSidecar
                                 DispatchCommand(form, cmd);
                             }
                         }
+                        form.SetStatusReporter(null);
+                        writer.Dispose();
                     }
                 }
                 catch (ObjectDisposedException)
@@ -210,6 +222,7 @@ namespace OpenPortalRdpSidecar
     {
         readonly Label _label;
         AxMsRdpClient11NotSafeForScripting _rdp;
+        Action<string> _reportStatus;
 
         public SidecarForm()
         {
@@ -239,11 +252,31 @@ namespace OpenPortalRdpSidecar
                 ((ISupportInitialize)_rdp).EndInit();
                 _rdp.Dock = DockStyle.Fill;
                 _rdp.Visible = false;
-                _rdp.OnConnecting += (s, e) => SetStatus("Conectando...");
-                _rdp.OnConnected += (s, e) => SetStatus(null);
-                _rdp.OnDisconnected += (s, e) => SetStatus(string.Format("Desconectado (motivo {0})", e.discReason));
-                _rdp.OnFatalError += (s, e) => SetStatus(string.Format("Erro fatal (código {0})", e.errorCode));
-                _rdp.OnLogonError += (s, e) => SetStatus(string.Format("Erro de login (código {0})", e.lError));
+                _rdp.OnConnecting += (s, e) =>
+                {
+                    SetStatus("Conectando...");
+                    ReportStatus("connecting");
+                };
+                _rdp.OnConnected += (s, e) =>
+                {
+                    SetStatus(null);
+                    ReportStatus("connected");
+                };
+                _rdp.OnDisconnected += (s, e) =>
+                {
+                    SetStatus(string.Format("Desconectado (motivo {0})", e.discReason));
+                    ReportStatus("disconnected");
+                };
+                _rdp.OnFatalError += (s, e) =>
+                {
+                    SetStatus(string.Format("Erro fatal (código {0})", e.errorCode));
+                    ReportStatus("error");
+                };
+                _rdp.OnLogonError += (s, e) =>
+                {
+                    SetStatus(string.Format("Erro de login (código {0})", e.lError));
+                    ReportStatus("error");
+                };
             }
             catch (Exception ex)
             {
@@ -265,14 +298,34 @@ namespace OpenPortalRdpSidecar
             _label.Visible = true;
         }
 
+        public void SetStatusReporter(Action<string> reporter)
+        {
+            _reportStatus = reporter;
+        }
+
+        void ReportStatus(string state)
+        {
+            try
+            {
+                _reportStatus?.Invoke(state);
+            }
+            catch
+            {
+                // O cliente pode ter fechado o pipe durante a transição de
+                // estado; isso não deve derrubar a janela nativa.
+            }
+        }
+
         public void ConnectRdp(string host, int port, string username, string password)
         {
             if (_rdp == null)
             {
                 SetStatus("Controle RDP indisponível — não é possível conectar.");
+                ReportStatus("error");
                 return;
             }
             SetStatus("Conectando a " + host + "...");
+            ReportStatus("connecting");
             _rdp.Visible = true;
 
             _rdp.Server = host;
@@ -301,7 +354,15 @@ namespace OpenPortalRdpSidecar
             var adv7 = (IMsRdpClientAdvancedSettings7)_rdp.AdvancedSettings7;
             adv7.EnableCredSspSupport = true;
 
-            _rdp.Connect();
+            try
+            {
+                _rdp.Connect();
+            }
+            catch (Exception ex)
+            {
+                SetStatus("Falha ao iniciar RDP: " + ex.Message);
+                ReportStatus("error");
+            }
         }
 
         public void DisconnectRdp()

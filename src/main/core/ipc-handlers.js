@@ -84,7 +84,7 @@ function registerIpcHandlers(mainWindow) {
       y: rect.y,
       w: rect.w,
       h: rect.h,
-    });
+    }, (state) => send(mainWindow, 'rdp:status', { state, machineId: machine.id }));
     if (ok === null) return { success: false, superseded: true };
     if (!ok) {
       send(mainWindow, 'rdp:status', { state: 'error', machineId: machine.id });
@@ -99,10 +99,8 @@ function registerIpcHandlers(mainWindow) {
         password: machine.rdpPassword || '',
       }),
     );
-    // "connecting", não "connected": a sidecar hoje só confirma que o
-    // processo/pipe subiram, não que o MSTSCLib autenticou (ainda não
-    // integrado — ver GOALS.md). Status real de sessão chega numa versão
-    // futura, quando a sidecar reportar de volta pelo pipe.
+    // A sidecar reporta connected/error/disconnected de volta pelo pipe
+    // quando o MSTSCLib mudar de estado.
     send(mainWindow, 'rdp:status', {
       state: 'connecting',
       machineId: machine.id,
