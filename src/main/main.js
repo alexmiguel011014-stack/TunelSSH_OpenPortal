@@ -193,12 +193,26 @@ app.whenReady().then(() => {
     portStatus.signal.listening = true;
     portStatus.signal.error = null;
   });
+  let warnedSignalInUse = false;
   requestServer.server.on('error', (err) => {
     portStatus.signal.listening = false;
     portStatus.signal.error =
       err.code === 'EADDRINUSE'
         ? `Porta ${portStatus.signal.port} já está em uso (outra instância do app rodando?)`
         : err.message;
+    // O servidor tenta de novo sozinho; o aviso explica por que pedidos de
+    // acesso não chegam a ESTA janela enquanto a outra cópia estiver aberta.
+    if (err.code === 'EADDRINUSE' && !warnedSignalInUse) {
+      warnedSignalInUse = true;
+      try {
+        if (Notification.isSupported()) {
+          new Notification({
+            title: 'OpenPortal: porta 18902 ocupada',
+            body: 'Outra cópia do OpenPortal (ex.: a versão instalada) está aberta. Pedidos de acesso só chegam a esta janela depois que ela for fechada.',
+          }).show();
+        }
+      } catch {}
+    }
   });
   requestServer.on('file-session-open', (req) => {
     onFileSessionOpen(req?.fromName);

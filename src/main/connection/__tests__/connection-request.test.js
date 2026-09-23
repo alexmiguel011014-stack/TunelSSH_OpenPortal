@@ -1,3 +1,4 @@
+import net from 'net';
 import { describe, it, expect, vi } from 'vitest';
 import {
   ConnectionRequestServer,
@@ -84,6 +85,26 @@ describe('ConnectionRequestServer', () => {
       expect(res.approved).toBe(true);
     } finally {
       server.stop();
+    }
+  });
+});
+
+describe('ConnectionRequestServer — porta ocupada', () => {
+  it('takes over the signal port once another copy of the app releases it', async () => {
+    const blocker = net.createServer();
+    await new Promise((resolve) => blocker.listen(0, '0.0.0.0', resolve));
+    const port = blocker.address().port;
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const server = new ConnectionRequestServer(() => {});
+    server.start(port, { retryInUseMs: 50 });
+    try {
+      await vi.waitFor(() => expect(errors).toHaveBeenCalled());
+      expect(server.server.listening).toBe(false);
+      await new Promise((resolve) => blocker.close(resolve));
+      await vi.waitFor(() => expect(server.server.listening).toBe(true));
+    } finally {
+      server.stop();
+      errors.mockRestore();
     }
   });
 });

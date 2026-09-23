@@ -30,7 +30,7 @@ class ConnectionRequestServer extends EventEmitter {
     this.server = null;
   }
 
-  start(port = SIGNAL_PORT) {
+  start(port = SIGNAL_PORT, { retryInUseMs = 5000 } = {}) {
     if (this.server) return this.server;
 
     this.server = net.createServer((socket) => {
@@ -148,6 +148,12 @@ class ConnectionRequestServer extends EventEmitter {
 
     this.server.on('error', (err) => {
       console.error('[connection-request] Server error:', err.message);
+      // Outra cópia do app (ex.: a versão instalada) segura a porta: sem isto
+      // este app ficava aberto mas surdo para pedidos de acesso até reiniciar.
+      if (err.code === 'EADDRINUSE' && retryInUseMs > 0) {
+        clearTimeout(this.retryTimer);
+        this.retryTimer = setTimeout(() => this.server?.listen(port, '0.0.0.0'), retryInUseMs);
+      }
     });
 
     this.server.listen(port, '0.0.0.0', () => {
@@ -158,6 +164,7 @@ class ConnectionRequestServer extends EventEmitter {
   }
 
   stop() {
+    clearTimeout(this.retryTimer);
     if (this.server) {
       this.server.close();
       this.server = null;
