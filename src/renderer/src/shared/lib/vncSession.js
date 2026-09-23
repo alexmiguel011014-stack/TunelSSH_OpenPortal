@@ -12,6 +12,32 @@ export function normalizeQuickVncHost(value) {
   return { host, error: '' };
 }
 
+// Campo de IP: só dígitos e pontos (vírgula e espaço viram ponto), porta
+// descartada, no máximo 4 octetos de até 255, e o ponto entra sozinho quando
+// o octeto não comporta mais dígitos ("100", "81") — só enquanto se digita,
+// para apagar funcionar.
+export function formatIpInput(value, previous = '') {
+  const raw = String(value || '')
+    .split(':')[0]
+    .replace(/[,\s]/g, '.');
+  const octets = [''];
+  const isFull = (octet) => octet.length === 3 || Number(octet) * 10 > 255;
+  for (const ch of raw) {
+    const last = octets.length - 1;
+    if (ch === '.') {
+      if (octets[last] && octets.length < 4) octets.push('');
+    } else if (/\d/.test(ch)) {
+      const grown = octets[last] + ch;
+      if (grown.length <= 3 && Number(grown) <= 255) octets[last] = grown;
+      else if (octets.length < 4) octets.push(ch);
+    }
+  }
+  const out = octets.join('.');
+  const typing = out.length > String(previous || '').length;
+  const lastOctet = octets[octets.length - 1];
+  return typing && octets.length < 4 && lastOctet && isFull(lastOctet) ? `${out}.` : out;
+}
+
 // Campo "senha de acesso": maiúsculas, só letras e números, com o traço
 // automático depois dos 4 primeiros (formato XXXX-XXXX mostrado no outro PC).
 export function formatAccessPassword(value) {

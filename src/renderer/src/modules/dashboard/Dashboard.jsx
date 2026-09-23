@@ -2,7 +2,11 @@ import { useState, useContext } from 'react';
 import { Monitor } from 'lucide-react';
 import { MachineContext } from '../../App';
 import { isPrivateNetworkHost } from '../../shared/lib/net';
-import { formatAccessPassword, normalizeQuickVncHost } from '../../shared/lib/vncSession';
+import {
+  formatAccessPassword,
+  formatIpInput,
+  normalizeQuickVncHost,
+} from '../../shared/lib/vncSession';
 import LocalAccessCard from './LocalAccessCard';
 
 const sectionTitle = 'text-xs font-semibold mb-3 uppercase tracking-wide text-text-muted';
@@ -185,14 +189,17 @@ export default function Dashboard() {
                   type="text"
                   value={quickIp}
                   onChange={(e) => {
-                    setQuickIp(e.target.value);
-                    rememberQuickIp(e.target.value);
+                    const next = formatIpInput(e.target.value, quickIp);
+                    setQuickIp(next);
+                    rememberQuickIp(next);
                     setQuickFeedback(null);
                   }}
                   onKeyDown={(e) => {
                     if (e.key === 'Enter') handleQuickConnect();
                   }}
                   placeholder="100.x.x.x (sem porta)"
+                  inputMode="decimal"
+                  autoComplete="off"
                   className="w-full px-2.5 py-2 rounded-lg border border-line bg-inset text-text-primary text-sm font-mono outline-none focus:border-accent transition-colors"
                 />
               </div>

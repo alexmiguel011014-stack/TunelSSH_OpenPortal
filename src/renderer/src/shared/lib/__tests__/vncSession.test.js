@@ -2,10 +2,32 @@ import { describe, expect, it } from 'vitest';
 import {
   buildVncViewerUrl,
   formatAccessPassword,
+  formatIpInput,
   isRetryableVncState,
   normalizeQuickVncHost,
   shouldUseSavedVncCredential,
 } from '../vncSession.js';
+
+describe('formatIpInput', () => {
+  it('adds the dot after a full octet while typing, but not while deleting', () => {
+    expect(formatIpInput('100', '10')).toBe('100.');
+    expect(formatIpInput('100', '100.')).toBe('100');
+    expect(formatIpInput('1008', '100')).toBe('100.8');
+    expect(formatIpInput('100.81.199.56', '100.81.199.5')).toBe('100.81.199.56');
+  });
+
+  it('splits digits typed without dots so that no octet passes 255', () => {
+    expect(formatIpInput('1008119956')).toBe('100.81.199.56');
+    expect(formatIpInput('10066218', '1006621')).toBe('100.66.218.');
+  });
+
+  it('keeps only digits and dots and drops the port and extra characters', () => {
+    expect(formatIpInput(' 100,81 199.56:5900 ')).toBe('100.81.199.56');
+    expect(formatIpInput('100..8')).toBe('100.8');
+    expect(formatIpInput('ABCD-EFGH')).toBe('');
+    expect(formatIpInput('100.81.199.5678')).toBe('100.81.199.56');
+  });
+});
 
 describe('formatAccessPassword', () => {
   it('inserts the dash after 4 characters and uppercases what is typed', () => {
