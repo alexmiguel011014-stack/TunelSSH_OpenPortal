@@ -2,10 +2,47 @@ import { useState, useContext } from 'react';
 import { Monitor } from 'lucide-react';
 import { MachineContext } from '../../App';
 import { isPrivateNetworkHost } from '../../shared/lib/net';
-import { normalizeQuickVncHost } from '../../shared/lib/vncSession';
+import { formatAccessPassword, normalizeQuickVncHost } from '../../shared/lib/vncSession';
 import LocalAccessCard from './LocalAccessCard';
 
 const sectionTitle = 'text-xs font-semibold mb-3 uppercase tracking-wide text-text-muted';
+
+// A tela inicial é desmontada durante a sessão remota e voltava com o campo
+// de IP vazio ao desconectar; o último IP fica guardado só nesta janela.
+const QUICK_IP_KEY = 'openportal.quickIp';
+
+function readQuickIp() {
+  try {
+    return sessionStorage.getItem(QUICK_IP_KEY) || '';
+  } catch {
+    return '';
+  }
+}
+
+function rememberQuickIp(value) {
+  try {
+    sessionStorage.setItem(QUICK_IP_KEY, value);
+  } catch {}
+}
+
+// Resultado do último pedido, visível no próprio cartão: antes erros de
+// validação e recusas iam só para o log e a tela parecia travada.
+function Feedback({ feedback }) {
+  if (!feedback) return null;
+  const isError = feedback.kind === 'error';
+  return (
+    <div
+      role={isError ? 'alert' : 'status'}
+      className={`mt-2 rounded-lg border px-3 py-2 text-xs ${
+        isError
+          ? 'border-danger/40 bg-danger/10 text-danger'
+          : 'border-line bg-inset text-text-secondary'
+      }`}
+    >
+      {feedback.text}
+    </div>
+  );
+}
 
 // Mescla entradas consecutivas do mesmo PC (name+host) em uma só linha com
 // contador — evita poluir a lista quando uma conexão aprova/desconecta em
@@ -30,20 +67,35 @@ function groupHistory(history) {
 export default function Dashboard() {
   const { machines, connectedMachines, focusedMachineId, connectMachine, addLog, connHistory } =
     useContext(MachineContext);
-  const [quickIp, setQuickIp] = useState('');
+  const [quickIp, setQuickIp] = useState(readQuickIp);
   const [quickPassword, setQuickPassword] = useState('');
   const [connecting, setConnecting] = useState(false);
+  const [quickFeedback, setQuickFeedback] = useState(null);
+  const [machineFeedback, setMachineFeedback] = useState(null);
 
   // connectMachine já resolve sozinho: se a máquina estiver conectada, só
   // troca o foco; senão, inicia uma conexão nova. Nenhum guard extra aqui.
   const handleConnectMachine = async (machine) => {
-    await connectMachine(machine);
+    if (!connectedMachines[machine.id]) {
+      setMachineFeedback({
+        kind: 'info',
+        text: `Aguardando alguém clicar em Aceitar em ${machine.name} (até 60 s)...`,
+      });
+    }
+    const result = await connectMachine(machine);
+    setMachineFeedback(
+      result?.ok === false ? { kind: 'error', text: `${machine.name}: ${result.message}` } : null,
+    );
   };
 
   const handleQuickConnect = async () => {
     const { host: ip, error } = normalizeQuickVncHost(quickIp);
     if (error) {
       addLog(error, 'warn');
+      setQuickFeedback({
+        kind: 'error',
+        text: `${error}. Ex.: 100.81.199.56 (a senha de acesso vai no campo de baixo).`,
+      });
       return;
     }
     if (!isPrivateNetworkHost(ip)) {
@@ -51,14 +103,22 @@ export default function Dashboard() {
     }
     if (connecting) return;
     setConnecting(true);
+    const password = quickPassword.trim();
+    setQuickFeedback({
+      kind: 'info',
+      text: password
+        ? 'Conferindo a senha de acesso no PC remoto...'
+        : 'Aguardando alguém clicar em Aceitar no PC remoto (até 60 s)...',
+    });
     try {
-      await connectMachine({
+      const result = await connectMachine({
         id: 'quick-' + Date.now(),
         name: 'Conexão Direta',
         host: ip,
         port: 5900,
-        sessionPassword: quickPassword.trim(),
+        sessionPassword: password,
       });
+      setQuickFeedback(result?.ok === false ? { kind: 'error', text: result.message } : null);
     } finally {
       setConnecting(false);
       // A senha de acesso vale para um único pedido (o outro PC a troca após o uso).
@@ -111,6 +171,7 @@ export default function Dashboard() {
                 })}
               </div>
             )}
+            <Feedback feedback={machineFeedback} />
           </div>
 
           <div className="bg-surface rounded-xl border border-line-subtle p-5">
@@ -123,7 +184,11 @@ export default function Dashboard() {
                 <input
                   type="text"
                   value={quickIp}
-                  onChange={(e) => setQuickIp(e.target.value)}
+                  onChange={(e) => {
+                    setQuickIp(e.target.value);
+                    rememberQuickIp(e.target.value);
+                    setQuickFeedback(null);
+                  }}
                   onKeyDown={(e) => {
                     if (e.key === 'Enter') handleQuickConnect();
                   }}
@@ -146,7 +211,11 @@ export default function Dashboard() {
               <input
                 type="text"
                 value={quickPassword}
-                onChange={(e) => setQuickPassword(e.target.value)}
+                onChange={(e) => {
+                  setQuickPassword(formatAccessPassword(e.target.value));
+                  setQuickFeedback(null);
+                }}
+                maxLength={9}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') handleQuickConnect();
                 }}
@@ -160,6 +229,7 @@ export default function Dashboard() {
               Use apenas o IP, sem porta. Com a senha de acesso mostrada no outro PC a conexão entra
               direto; sem ela, alguém lá precisa clicar em Aceitar.
             </div>
+            <Feedback feedback={quickFeedback} />
           </div>
         </div>
 

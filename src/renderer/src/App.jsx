@@ -231,12 +231,12 @@ export default function App() {
     async ({ sessionPassword, ...machine } = {}) => {
       // A senha de acesso vale só para este pedido: nunca entra no estado, no
       // histórico nem no log.
-      if (!machine.host) return;
+      if (!machine.host) return { ok: false, message: 'PC sem endereço IP' };
       if (connectedMachines[machine.id]) {
         setShowConfig(false);
         setShowFiles(false);
         setFocusedMachineId(machine.id);
-        return;
+        return { ok: true };
       }
       setShowConfig(false);
       setShowFiles(false);
@@ -291,7 +291,7 @@ export default function App() {
             title: 'Conexão falhou',
             body: `${machine.name}: ${message}`,
           });
-          return;
+          return { ok: false, rejected, message };
         }
         setStatuses((prev) => ({ ...prev, [machine.id]: 'opening-vnc' }));
         setConnectedMachines((prev) =>
@@ -313,6 +313,7 @@ export default function App() {
             .catch((e) => console.warn('[app] VNC connect error:', e));
         }
         addLog(`Acesso aprovado por ${machine.name}. Abrindo a sessão remota...`);
+        return { ok: true };
       } catch (err) {
         console.error(`[app] Connection error:`, err);
         addLog(`Erro ao conectar: ${err.message}`, 'error');
@@ -323,6 +324,7 @@ export default function App() {
           state: 'access-unreachable',
           message: err.message,
         });
+        return { ok: false, message: err.message };
       }
     },
     [connectedMachines, addLog, recordConn],

@@ -1,10 +1,24 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildVncViewerUrl,
+  formatAccessPassword,
   isRetryableVncState,
   normalizeQuickVncHost,
   shouldUseSavedVncCredential,
 } from '../vncSession.js';
+
+describe('formatAccessPassword', () => {
+  it('inserts the dash after 4 characters and uppercases what is typed', () => {
+    expect(formatAccessPassword('abcd')).toBe('ABCD');
+    expect(formatAccessPassword('abcde')).toBe('ABCD-E');
+    expect(formatAccessPassword('abcdefgh')).toBe('ABCD-EFGH');
+  });
+
+  it('ignores spaces and extra dashes and caps at 8 characters', () => {
+    expect(formatAccessPassword(' ab-cd ef gh ij ')).toBe('ABCD-EFGH');
+    expect(formatAccessPassword('ABCD-')).toBe('ABCD');
+  });
+});
 
 describe('normalizeQuickVncHost', () => {
   it('accepts a bare IPv4 address for the automatic VNC port', () => {

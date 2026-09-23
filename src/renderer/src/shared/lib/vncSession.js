@@ -12,6 +12,16 @@ export function normalizeQuickVncHost(value) {
   return { host, error: '' };
 }
 
+// Campo "senha de acesso": maiúsculas, só letras e números, com o traço
+// automático depois dos 4 primeiros (formato XXXX-XXXX mostrado no outro PC).
+export function formatAccessPassword(value) {
+  const chars = String(value || '')
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, '')
+    .slice(0, 8);
+  return chars.length > 4 ? `${chars.slice(0, 4)}-${chars.slice(4)}` : chars;
+}
+
 export function buildVncViewerUrl({ host, port = 5900, proxyUrl, attemptId }) {
   const params = new URLSearchParams({
     host: String(host),

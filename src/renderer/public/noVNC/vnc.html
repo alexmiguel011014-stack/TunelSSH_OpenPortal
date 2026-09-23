@@ -113,9 +113,23 @@
       if (cw <= 0 || ch <= 0) return;
 
       const scale = Math.min(cw / fbW, ch / fbH, 1);
-      if (rfb._display) {
+      // Reaplicar a mesma escala redimensiona o canvas e realimenta o
+      // ResizeObserver dele: virava um loop a cada quadro, inundando o log.
+      if (rfb._display && Math.abs(rfb._display.scale - scale) > 0.001) {
         rfb._display.scale = scale;
       }
+    }
+
+    // Os ResizeObserver ajustam no próximo quadro, fora do ciclo de layout
+    // (evita o erro "ResizeObserver loop completed with undelivered notifications").
+    let fitPending = false;
+    function scheduleFit() {
+      if (fitPending) return;
+      fitPending = true;
+      requestAnimationFrame(() => {
+        fitPending = false;
+        fitScreen();
+      });
     }
 
     function connect() {
@@ -150,7 +164,7 @@
           fitScreen();
           postToParent({ type: 'vnc-resolution', width: fbWidth, height: fbHeight });
           reportStatus('connected', 'Sessão VNC conectada');
-          const roCanvas = new ResizeObserver(() => fitScreen());
+          const roCanvas = new ResizeObserver(scheduleFit);
           const canvas = container.querySelector('canvas');
           if (canvas) roCanvas.observe(canvas);
         });
@@ -206,7 +220,7 @@
     }
 
     if (window.ResizeObserver) {
-      const ro = new ResizeObserver(() => fitScreen());
+      const ro = new ResizeObserver(scheduleFit);
       ro.observe(container);
     }
 
