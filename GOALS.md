@@ -588,7 +588,631 @@ this is additive, not a forced-on data-collection default.
 
 ---
 
-## Ordering across all four sections
+## GOALS 5 — RDP Sidecar Lifecycle and Terminal-State Recovery (fix)
+
+```mermaid
+flowchart TD
+    A[Reproduce with one approved RDP request] --> B[Correlate renderer, IPC, child-process, pipe, and MSTSCLib events]
+    B --> C{Classify the terminal cause}
+    C -->|StrictMode/stale lifecycle| D[Generation-owned start/stop protocol]
+    C -->|Pipe or child failure| E[Surface one actionable terminal error]
+    C -->|RDP authentication/session failure| F[Report sanitized RDP reason]
+    D --> G[Regression tests for stale starts and exits]
+    E --> G
+    F --> H[Manual NLA-on validation against PC main]
+    G --> I[Docs and final verification]
+    H --> I
+```
+
+Suggested: gpt-5.6-sol · high — this crosses React development lifecycle, Electron IPC, Node child processes/named pipes, and a native WinForms RDP control where a stale cleanup can terminate a live remote session.
+
+**Current behavior:** on the secondary PC, the app receives approval for
+`100.66.218.65:3389` and the TCP port is reachable (`TcpTestSucceeded: True`), but the log
+then records `Status: disconnected`, `rdp-sidecar ... exited with code null`, and returns to
+`Status: connecting` without a terminal RDP result. The Electron and one sidecar process
+remain responsive. The `code null` exit is consistent with the existing `process.kill()`
+path during a React StrictMode probe, but the current evidence does not prove that it is the
+only cause of the stalled connection. The plan must prove the event order before changing
+behavior.
+
+**Expected behavior:** each accepted RDP request owns exactly one live sidecar generation;
+an intentional or superseded development cleanup cannot affect a newer generation; and every
+attempt reaches `connected`, a user-requested `disconnected`, or a bounded, sanitized error
+with a useful category instead of remaining indefinitely in `connecting`.
+
+### Repro
+
+- [x] **G5-R1 — Capture one correlated lifecycle trace:** add temporary, non-secret
+      correlation identifiers per RDP attempt and record the renderer mount/cleanup,
+      `rdp:start`/`rdp:stop` IPC calls, sidecar spawn PID, pipe connect/close/error, command
+      send result, child `exit` code **and signal**, and MSTSCLib event names. Never log
+      passwords or raw credential objects. Run it once in the current React StrictMode dev
+      build against PC main with the already-reachable `100.66.218.65:3389`. Done when: the
+      ordered trace proves which generation issued the observed `process.kill()` and whether
+      the surviving generation receives `OnConnecting`, `OnConnected`, `OnLoginComplete`,
+      `OnLogonError`, `OnFatalError`, or `OnDisconnected`.
+- [ ] **G5-R2 — Establish the failure boundary:** repeat the trace with (a) valid dedicated
+      RDP credentials, (b) deliberately invalid credentials, and (c) a cancelled attempt.
+      Compare the expected status event sequence and the process/pipe lifetime for each. Done
+      when: valid login, authentication failure, network/session failure, and intentional
+      cancellation are distinguishable without inspecting a debugger or a Windows Event Log.
+
+### Root cause
+
+- [x] **G5-C1 — Confirm or reject the StrictMode ownership race:** verify the sequence between
+      `RdpViewer.jsx` effect cleanup and a replacement `rdp:start`. The current
+      `rdp-sidecar.js` guard prevents an old start from deleting a newer map entry, but it does
+      not give `rdp:stop` an ownership token; an old cleanup can still call
+      `stopRdpSidecar(machineId)` against whichever generation is current. Done when: the
+      trace either reproduces that stale-stop race or rules it out with timestamps and
+      generation IDs.
+- [x] **G5-C2 — Define authoritative RDP state semantics:** use the observed event trace and
+      Microsoft’s ActiveX event contracts to map transport establishment separately from usable
+      authenticated session state. `OnDisconnected` carries a reason code, while
+      `OnConnected` and `OnLoginComplete` have different semantics; preserve the reason code
+      internally and expose only a safe category/message to the renderer. Do not mark a
+      session usable merely because the pipe opened or the child process spawned. Done when:
+      a short state table documents every emitted UI state, its source event, and the handling
+      of an out-of-order or duplicate event. Sources: Microsoft Learn,
+      [IMsTscAxEvents](https://learn.microsoft.com/en-us/windows/win32/termserv/imstscaxevents-interface),
+      [OnDisconnected](https://learn.microsoft.com/en-us/windows/win32/termserv/imstscaxevents-ondisconnected),
+      and [OnLoginComplete](https://learn.microsoft.com/en-us/windows/win32/termserv/imstscaxevents-onlogincomplete).
+- [x] **G5-C3 — Diagnose silent local-channel loss:** explicitly handle named-pipe `end`,
+      `close`, `error`, and failed command writes in `rdp-sidecar.js`, and distinguish them
+      from a planned stop. Done when: a forced pipe close in a test yields exactly one terminal
+      local-sidecar error for the active generation, not a permanent `connecting` state.
+
+### Fix
+
+- [x] **G5-F1 — Make sidecar operations generation-owned:** pass an opaque non-secret
+      lifecycle ID from `RdpViewer.jsx` through preload/IPC into `rdp-sidecar.js`; store it in
+      the sidecar map entry and require it for `resize`, `visibility`, and especially `stop`.
+      Ignore a command whose lifecycle ID no longer owns the entry. Mark intentional stop,
+      supersession, and unexpected exit distinctly before cleanup. Done when: React
+      StrictMode’s mount → cleanup → remount sequence leaves exactly one current sidecar and
+      cannot terminate it through a late cleanup from the prior mount.
+- [x] **G5-F2 — Make terminal status delivery lossless and actionable:** extend the pipe status
+      schema in `rdp-protocol.js`/`Program.cs` to carry a normalized state plus optional
+      non-sensitive reason metadata; have the main process forward it only when it belongs to
+      the active generation. Update `App.jsx` so superseded/intentional events cannot overwrite
+      current status or create false disconnected history entries. Done when: renderer history
+      records one final result per real attempt and never records the StrictMode probe as a
+      user-visible RDP disconnect.
+- [ ] **G5-F3 — Bound a missing-terminal-event attempt:** after the root-cause trace establishes
+      a safe threshold, add a cancellable handshake watchdog owned by the active generation.
+      It must clear on every terminal event, request a graceful RDP disconnect before process
+      teardown, and report a specific timeout category if the control emits nothing. Done
+      when: an unavailable or nonresponsive RDP session cannot stay in `connecting`
+      indefinitely, while a healthy NLA-on login completes without the watchdog firing.
+- [x] **G5-F4 — Preserve native cleanup and diagnostics:** update `Program.cs` so the sidecar
+      reports `OnConnecting`, the chosen authenticated-success event, `OnLogonError`,
+      `OnFatalError`, and `OnDisconnected` reason data consistently, without exposing
+      credentials. Keep graceful `disconnect` separate from process termination and retain
+      the current HWND/resize behavior. Done when: every native event maps to the documented
+      renderer state table and a planned close is not reported as a crash.
+
+### Regression tests and verification
+
+- [x] **G5-T1 — Add sidecar-manager regression coverage:** make the child-process, named-pipe,
+      and timer boundaries injectable in `rdp-sidecar.js` so Vitest can cover: stale start
+      completion, stale cleanup, late old-process exit, pipe close/error, failed write, and
+      intentional stop. Done when: each old-generation event is proven unable to remove or
+      alter the new generation, and an unexpected active-generation failure emits one error.
+- [x] **G5-T2 — Add lifecycle/status contract tests:** extend `rdp-protocol.test.js` and the
+      connection-state tests for status metadata, lifecycle matching, duplicate terminal event
+      de-duplication, and watchdog cancellation. Done when: the old behavior either fails a
+      test or lacks the required lifecycle API, and the fixed behavior passes without a live
+      RDP host.
+- [x] **G5-T3 — Run the project gates:** build the sidecar with the existing Visual Studio
+      Developer Command Prompt/MSBuild path, then run `npm test` and `npm run lint`. Done when:
+      all commands exit successfully and the tests include the new stale-generation cases.
+- [ ] **G5-T4 — Manual end-to-end proof `(manual)`:** with NLA still enabled on PC main, test a
+      valid credential connection, invalid credential connection, timeout/unreachable path,
+      explicit disconnect, and a React StrictMode development remount. For each, capture the
+      visible state, one sanitized log/result, and the remaining sidecar PID count. Done when:
+      valid credentials reach the documented success state with screen/input usable; all
+      failures resolve to an explicit error; explicit disconnect leaves no orphan sidecar; and
+      the same configured machine still works through VNC after switching transport back.
+- [x] **G5-T5 — Document the lifecycle contract:** update
+      `docs/ARQUITETURA_CONEXAO.md` with sidecar generation ownership, the state table,
+      terminal-reason privacy rule, watchdog behavior, and the manual validation matrix. Done
+      when: a maintainer can diagnose a future RDP failure from the app logs without needing to
+      infer whether `code null` was an intentional renderer cleanup or a real sidecar failure.
+
+**Done when (fix-level):** an approved RDP connection to a reachable NLA-enabled machine no
+longer gets stuck in `connecting`; it reaches a verified usable session or a concrete,
+sanitary terminal result, and React StrictMode or another stale lifecycle event cannot kill
+or misreport the active sidecar.
+
+---
+
+## GOALS 6 — RDP ActiveX Readiness, Embedding Compatibility, and Reliable Fallback (fix)
+
+**Goal type:** Fix — an older trace appeared not to progress after the ActiveX control's
+`Connect()` call. GOALS 5 corrected lifecycle ownership and made that symptom visible, but
+GOALS 7 later proved that the newest attempt had not reached `Connect()` at all because the
+synchronous duplex IPC blocked first. The ActiveX/embedding investigation in this section is
+therefore downstream of GOALS 7's transport proof.
+
+```mermaid
+flowchart TD
+    A[Capture a redacted baseline trace] --> B[Run the same control without cross-process embedding]
+    B --> C{Does the top-level native host connect?}
+    C -->|No| D[Diagnose credentials, NLA, target service, and security UI]
+    C -->|Yes| E[Compare ActiveX readiness and embedded host behavior]
+    E --> F{Can embedded mode satisfy the event deadlines?}
+    F -->|Yes| G[Harden embedded startup and input lifecycle]
+    F -->|No| H[Ship native-window compatibility mode]
+    D --> I[Regression and real-device matrix]
+    G --> I
+    H --> I
+    I --> J[Document supportable modes and recovery]
+```
+
+Suggested: gpt-6-astra · xhigh — the fix spans a security-sensitive Windows RDP client,
+COM/ActiveX message delivery, Electron/Win32 cross-process window parenting, and a
+real-device compatibility decision where a false success would leave remote access unusable.
+
+**Older observed facts (2026-09-17):** PC main approved the request for `100.66.218.65:3389`,
+the TCP endpoint was reachable, and the surviving StrictMode generation owned one sidecar
+and one named-pipe client. At `02:35:11`, `ConnectCommand` and `ConnectReturned` arrived;
+no `OnConnecting`, `OnConnected`, `OnLoginComplete`, `OnLogonError`, `OnFatalError`, or
+`OnDisconnected` arrived during the next 45 seconds. The watchdog then reported the
+sanitized timeout, and `OnConnecting` was observed only as the sidecar was being stopped.
+This rules out the earlier stale-cleanup explanation for this attempt, but it does **not**
+prove whether the ActiveX control is blocked by its host, a hidden security dialog, or the
+destination/credential path.
+
+**Corrected boundary (2026-09-18):** lifecycle
+`e9931f38-1ee0-4061-afce-cc751e7bf58d` created `ConnectCommand` inside the sidecar at
+`00:57:57.3230795Z`, but Electron received it only after the 15-second timeout and teardown.
+Because that status preceded `_rdp.Connect()` in source order, the attempt was blocked in the
+synchronous status write. GOALS 7 now requires `CommandReceived`, `ConnectInvoking`, and
+`ConnectReturned` from the same lifecycle before any remaining item below attributes a delay
+to ActiveX, embedding, NLA, the destination, or credentials.
+
+**Authoritative constraints used by this plan:** Microsoft defines `OnConnecting` as the
+event raised when the control begins connecting in response to `Connect`; `OnLoginComplete`
+is the authenticated-success event. `UIParentWindowHandle` exists specifically to parent
+modal authentication dialogs. `SetParent` requires the style change already performed here,
+but Microsoft warns that cross-process parenting can force the child process's DPI context
+to reset and produce unexpected behavior. `AxHost` initialization is complete only after
+the `BeginInit`/`EndInit` lifecycle and a created visible control. Sources: [RDP ActiveX
+events](https://learn.microsoft.com/en-us/windows/win32/termserv/imstscaxevents-interface),
+[authentication warning parenting](https://learn.microsoft.com/en-us/windows/win32/termserv/imstscaxevents-onauthenticationwarningdisplayed),
+[SetParent](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setparent),
+and [AxHost](https://learn.microsoft.com/en-us/dotnet/api/system.windows.forms.axhost).
+
+**Expected behavior:** an RDP connection has a deterministic outcome without weakening NLA:
+it becomes an input-usable authenticated session, displays a specific safe error, or opens a
+clearly labeled native compatibility window after the user-approved fallback policy applies.
+The app must never silently wait forever, expose a password in a process argument or log,
+auto-accept certificate/security dialogs, or confuse an embedded-host failure with bad
+credentials.
+
+### Reproduction and evidence
+
+- [ ] **G6-R1 — Preserve a redacted, reproducible baseline:** capture one fresh trace from
+      request approval through process exit with generation ID, timestamps, sidecar PID,
+      pipe lifetime, `Connect()` entry/return, all ActiveX events, `Connected` value, form
+      and control HWNDs, thread IDs, parent HWND, window styles, and DPI-awareness context.
+      Record host/port but never username, password, raw configuration, or credential object.
+      Done when: the artifact proves the exact ordering observed above and can be compared
+      byte-for-byte by fields (not secrets) with every experiment below.
+- [ ] **G6-R2 — Establish a no-embedding control experiment `(manual)`:** add a diagnostic
+      launch mode that uses the same sidecar binary, pipe protocol, RDP settings, target, and
+      credential source but leaves the WinForms sidecar as its own top-level window (`SetParent`
+      omitted). Run it against PC main with a valid dedicated account. Done when: it records
+      the complete event sequence and visibly distinguishes a usable login, a credential
+      failure, a certificate/security dialog, and the same silent stall; this is the primary
+      A/B discriminator, not a fallback assumed to work.
+- [ ] **G6-R3 — Establish an embedded-host matrix `(manual)`:** repeat the same valid attempt
+      for four controlled configurations: current synchronous dispatch, queued UI dispatch,
+      explicit control-handle readiness, and all three together; run each with and without
+      cross-process `SetParent` where the harness permits. Change one factor per run and
+      capture the R1 fields. Done when: the evidence identifies the first factor that restores
+      prompt `OnConnecting` or proves that embedding itself is the incompatibility boundary.
+- [ ] **G6-R4 — Establish target and authentication boundaries `(manual)`:** with a real
+      target owner present, run valid dedicated credentials, intentionally invalid credentials,
+      explicit cancellation, an unavailable host/closed RDP listener, and a certificate or
+      authentication warning when available. Verify on PC main that RDP hosting is enabled,
+      the Remote Desktop Services service is running, NLA remains enabled, and the account is
+      allowed to log on through Remote Desktop Services. Done when: every case maps to a
+      distinct safe category without consulting a debugger; any Windows security/event-log
+      review remains local to the operator and is not copied into app telemetry.
+
+### Root cause decision gates
+
+- [ ] **G6-C1 — Prove or reject an ActiveX readiness/message-pump defect:** instrument the
+      sidecar to prove `AxHost.BeginInit`/`EndInit`, `CreateControl`, child HWND creation,
+      `Shown`, `HandleCreated`, and the first UI-loop turn all complete before `Connect` is
+      invoked. Replace the pipe thread's synchronous `form.Invoke` command execution with a
+      queued UI-thread handoff only in the experiment, so the message pump can return before
+      the control starts networking. Done when: the R2/R3 results either show this sequence
+      fixes prompt event delivery or show it does not affect the symptom.
+- [ ] **G6-C2 — Prove or reject hidden modal/security UI:** subscribe to
+      `OnAuthenticationWarningDisplayed`, `OnAuthenticationWarningDismissed`, `OnStatusInfo`,
+      `OnNetworkStatusChanged`, and connection-bar/dialog events supported by the installed
+      control. Set `UIParentWindowHandle` to the sidecar form HWND before connecting, enumerate
+      only title/class/ownership of modal child windows for the trace, and present any warning
+      visibly to the user. Done when: a certificate, credential, or policy dialog is either
+      surfaced and manually resolved or conclusively absent; the implementation must never
+      suppress or auto-accept it.
+- [ ] **G6-C3 — Prove or reject cross-process parent/DPI incompatibility:** compare the
+      top-level and reparented modes using `GetParent`, window styles, `SetParent` return/error,
+      process/window DPI-awareness context, and actual first-event timing. Account for the
+      documented cross-process DPI reset and do not treat the current successful visual
+      placement as proof that the control's networking state is healthy. Done when: the plan
+      can name embedding as a confirmed cause, a ruled-out cause, or an environment-specific
+      compatibility limitation with reproducible evidence.
+- [ ] **G6-C4 — Prove or reject destination/account configuration as the cause:** when the
+      no-embedding experiment also fails, compare it with the built-in Windows RDP client run
+      by the authorized operator using the same target and dedicated account. Check local-vs-
+      domain username form, account membership, denied-logon policy, NLA/CredSSP compatibility,
+      firewall/service state, and certificate warning. Done when: the defect is assigned to
+      target/account configuration only if the independent client reproduces it; otherwise it
+      remains an application-hosting defect.
+
+### Implementation plan after the decision gates
+
+- [x] **G6-F1 — Make sidecar startup explicitly ready before it can connect:** introduce a
+      native state machine `starting → control-ready → connecting → transport-connected →
+      authenticated → terminal`, with one queued command dispatcher on the sidecar UI thread.
+      Construct/initialize the ActiveX host once, require its child HWND and `Shown`/first-idle
+      turn before accepting `connect`, and emit a redacted `control-ready` acknowledgement.
+      Preserve the existing generation token on every acknowledgement and command. Done when:
+      no `Connect` call occurs before the control is ready, and stale/duplicate commands cannot
+      move a newer generation's state.
+      Evidence (2026-09-17): the pipe opens only after `Shown`, first UI turn, and
+      `CreateControl`; commands carry and validate the generation ID, and the manager waits for
+      the redacted ready acknowledgement. Lifecycle/readiness tests and the native build pass.
+- [x] **G6-F2 — Split timeouts by the stage that can actually fail:** replace the single
+      command-to-login watchdog with independently cancellable deadlines for sidecar startup,
+      control readiness, first `OnConnecting`, transport/authentication, and graceful teardown.
+      Each timeout must name its stage, request a graceful disconnect where the control is
+      ready, then kill only its own still-running process after a bounded grace period. Done
+      when: a delayed `OnConnecting` cannot be mislabeled as an authentication failure, and
+      healthy sessions never inherit an expired timer from an earlier stage.
+      Evidence (2026-09-17): independent readiness, first-event, authentication, and stop timers
+      are cancelled on ownership/stage changes; deterministic tests cover transition, warning
+      pause, authenticated cancellation, and stale-generation cleanup.
+- [ ] **G6-F3 — Surface security UI and safe diagnostic detail:** parent RDP dialogs to the
+      sidecar form, forward only sanitized categories (`certificate-warning`, `authentication`,
+      `policy`, `network`, `host-control`, `timeout`) to Electron, and keep numeric codes and
+      event names in local diagnostic logs. Never serialize password values, raw pipe commands,
+      Windows event records, or protected credential data. Done when: the user can act on a
+      warning or error without opening developer tools, while app logs remain safe to share.
+- [ ] **G6-F4 — Harden embedded mode only if the A/B evidence supports it:** if C1/C3 proves a
+      stable embedded configuration, apply its minimum changes: correct UI-thread scheduling,
+      `UIParentWindowHandle`, complete control readiness, style/error checks around `SetParent`,
+      DPI-aware resize handling, focus/visibility recovery, and teardown on Electron reload or
+      parent HWND destruction. Do not add retries that hide a security or credential failure.
+      Done when: repeated embedded valid sessions reach `OnLoginComplete` with screen, mouse,
+      keyboard, resize, focus switching, and explicit disconnect all usable.
+- [ ] **G6-F5 — Provide a native-window compatibility mode:** if C3 shows cross-process
+      embedding is unreliable on this environment, keep the same NLA-capable sidecar and
+      private named-pipe credential path but run it as an owned top-level WinForms window.
+      Add an explicit per-machine mode (`embedded`, `native-window`, and an optional
+      user-approved `auto-fallback`) with clear UI wording; no fallback to abandoned JS RDP
+      clients, disabling NLA, plaintext command-line credentials, or automatic certificate
+      acceptance. Done when: a failed embedded readiness check can produce one controlled
+      native window or a clear error, never a hanging in-app panel or orphan process.
+- [x] **G6-F6 — Define a conservative recovery policy:** classify preflight TCP failure,
+      pipe loss, child crash, readiness timeout, security warning, bad credentials, remote
+      disconnect, user cancellation, StrictMode cleanup, app reload, and concurrent-machine
+      operation. Retry at most one local sidecar startup/pipe race per owned generation; never
+      automatically retry authentication, certificate warnings, explicit cancellation, or a
+      target rejection. Done when: every classification has an owner, user-visible outcome,
+      cleanup rule, history rule, and retry/no-retry decision.
+      Evidence (2026-09-17): preflight, pipe/process loss, readiness/first-event timeout,
+      security warning, authentication rejection, remote/user disconnect, StrictMode/reload,
+      and concurrent machines now have explicit ownership and retry rules; only the
+      user-selected `auto-fallback` path starts one replacement sidecar.
+
+### Regression coverage, operational verification, and documentation
+
+- [ ] **G6-T1 — Add deterministic native-host contract tests:** isolate the command queue,
+      generation ownership, stage deadlines, state transitions, delayed callbacks, pipe write
+      failure, process exit, and graceful-stop race behind injectable boundaries. Add tests that
+      fail with direct pre-ready `Connect`, an old generation's timer, and duplicate terminal
+      callbacks. Done when: all state transitions and cleanup paths pass without a live RDP
+      destination or a real password.
+- [ ] **G6-T2 — Add protocol and renderer contract tests:** test redaction, stage-specific
+      timeout mapping, security-warning status, modal-required status, compatibility-mode
+      selection, history de-duplication, foreground/background visibility, and explicit user
+      disconnect. Done when: neither a raw reason/password nor a stale embedded event can
+      reach the renderer, and a compatibility fallback cannot overwrite another machine's
+      session state.
+- [ ] **G6-T3 — Run a real-device compatibility matrix `(manual)`:** after the selected fix,
+      validate valid login, invalid password, cancelled dialog, target unreachable, certificate
+      warning, target-initiated disconnect, Electron reload during connection, explicit
+      disconnect, two simultaneous RDP machines, RDP→VNC transport switch, and 100%/125%/150%
+      display scale. For every case capture visible state, sanitized terminal event, sidecar PID
+      count, and whether the file-transfer approval socket behaved normally. Done when: valid
+      sessions are input-usable; every negative case finishes predictably; and no orphaned
+      sidecar, hidden modal, stale status, or broken VNC session remains.
+- [x] **G6-T4 — Add operator preflight and support diagnostics:** before spawning a connection,
+      report safe local checks (configured host/port, TCP reachability, sidecar executable,
+      selected mode, installed control/version) and give a copyable redacted trace ID. Document
+      the exact evidence required before escalating a target-side issue. Done when: an operator
+      can distinguish app-hosting, network, target service, credentials, and security-dialog
+      failures without exposing secrets or reading source code.
+      Evidence (2026-09-17): the preflight checks executable/TCP before spawn; the app log shows
+      a copyable trace prefix, mode, and stage; the redacted local trace includes ActiveX version
+      and host diagnostics; the maintenance guide lists safe escalation evidence and target-side
+      checks without configuration, password, pipe command, or Windows security records.
+- [x] **G6-T5 — Run project gates and preserve the no-regression baseline:** build the sidecar,
+      run `npm test`, `npm run lint`, `git diff --check`, and a fresh dev start without port
+      collision. Done when: all commands succeed; existing VNC/file-transfer behavior stays
+      intact; and any unrelated pre-existing lint warnings are reported separately from this
+      work.
+      Evidence (2026-09-17): sidecar MSBuild and renderer build pass; Vitest passes 75/75;
+      ESLint exits 0 with nine pre-existing warnings outside the changed RDP paths;
+      `git diff --check`, GOALS validation, and a fresh dev start on 5173/18900/18902 pass.
+- [x] **G6-T6 — Update the maintenance contract:** document the evidence-based selected host
+      mode, state/timeout table, security-dialog behavior, supported recovery paths, privacy
+      rules, real-device validation matrix, and rollback from embedded to native-window mode.
+      Done when: a maintainer can reproduce a new RDP issue without guessing whether it is a
+      React lifecycle, pipe, ActiveX, DPI/embedding, target-service, or credential problem.
+      Evidence (2026-09-17): `docs/ARQUITETURA_CONEXAO.md` now defines the three host modes,
+      readiness ordering, stage deadlines, security-warning behavior, redacted trace fields,
+      fallback boundary, cleanup ownership, and the remaining real-device matrix.
+
+**Done when (fix-level):** the actual cause has been demonstrated by the no-embedding and
+embedded A/B experiments; the selected path reaches a verified, NLA-enabled, input-usable
+RDP login against PC main; and every supported edge condition resolves to one safe,
+actionable terminal state or the explicitly chosen native-window compatibility mode.
+
+---
+
+## GOALS 7 — RDP Duplex IPC Deadlock, UI-Thread Isolation, and Honest Stage Timing (fix)
+
+**Goal type:** Fix — the latest real-device attempt timed out before the native RDP control
+was actually invoked. The same visible `FirstEventTimeout` has hidden more than one mechanism;
+this goal isolates the command/status transport before any further ActiveX, embedding, target,
+or credential conclusions are accepted.
+
+```mermaid
+flowchart TD
+    A[Freeze the latest timestamped trace] --> B[Reproduce command/status blocking without ActiveX]
+    B --> C{Does status arrive while command read is pending?}
+    C -->|No| D[Capture blocked threads and compare pipe transports]
+    C -->|Yes| E[Reject IPC hypothesis and inspect the next pre-Connect boundary]
+    D --> F[Select async duplex or split one-way pipes by measured behavior]
+    F --> G[Keep all pipe I/O off the WinForms UI thread]
+    G --> H[Add command acknowledgements and stage-owned deadlines]
+    E --> H
+    H --> I[Stress protocol, teardown, and stale-generation races]
+    I --> J[Resume native-window and embedded real-device tests]
+```
+
+Suggested: gpt-6-astra · xhigh — the highest-risk failure is a synchronous, security-sensitive
+IPC path blocking the WinForms/COM thread before `Connect()`, while the current timer falsely
+labels it as an ActiveX first-event failure and can send investigation toward the wrong layer.
+
+**New evidence (2026-09-17/18):** the approved embedded attempt for
+`100.66.218.65:3389` passed TCP preflight and emitted `ControlReady`/`EmbeddingResult` with
+the requested parent HWND, `setParentError=0`, and `positioned=true`. Electron sent the
+`connect` command at `00:57:57.282Z`. The sidecar built the `ConnectCommand` status at
+`00:57:57.3230795Z`, but Electron did not receive that line until teardown after its
+15-second `FirstEventTimeout` at `00:58:12.285Z`. In the current `ConnectRdp` order,
+`ReportStatus(..., "ConnectCommand")` runs before the RDP properties and `_rdp.Connect()`.
+Therefore the latest trace strongly indicates that the WinForms UI thread blocked in the
+status write and never reached `_rdp.Connect()`; it does **not** support the earlier premise
+that `Connect()` itself stalled. The fact that the status appeared when Node wrote
+`disconnect`/closed the pipe is also consistent with the pending synchronous read being the
+operation that prevented prompt server-side writing.
+
+**Relevant implementation boundary:** `Program.cs` creates one synchronous
+`NamedPipeServerStream(PipeDirection.InOut)`; its worker blocks in `StreamReader.ReadLine()`
+while UI/ActiveX callbacks call `StreamWriter.WriteLine()` on the same handle. The write lock
+only serializes writers; it does not isolate the UI thread from a blocked pipe operation.
+Node starts its first-event timer when `socket.write()` accepts the command locally, not when
+the sidecar acknowledges command receipt or returns from `_rdp.Connect()`. Shutdown then writes
+`disconnect` and immediately calls `end()`, so a delayed status can be mistaken for progress
+that happened before the timeout.
+
+**Authoritative constraints used by this plan:** Windows documents that a pipe handle without
+`FILE_FLAG_OVERLAPPED` performs synchronous I/O that can block the calling thread, while
+overlapped operations allow a pipe to read and write simultaneously. .NET exposes that mode
+through the `NamedPipeServerStream` constructor's `PipeOptions`; `StreamWriter` is not
+thread-safe by default. WinForms `BeginInvoke` only posts work to the control's UI thread — the
+delegate can still freeze that thread if it performs blocking I/O. Sources: [named-pipe open
+modes](https://learn.microsoft.com/en-us/windows/win32/ipc/named-pipe-open-modes),
+[synchronous and overlapped pipe I/O](https://learn.microsoft.com/en-us/windows/win32/ipc/synchronous-and-overlapped-input-and-output),
+[NamedPipeServerStream constructor](https://learn.microsoft.com/en-us/dotnet/api/system.io.pipes.namedpipeserverstream.-ctor?view=netframework-4.8.1),
+[StreamWriter](https://learn.microsoft.com/en-us/dotnet/api/system.io.streamwriter?view=netframework-4.8.1),
+and [Control.BeginInvoke](https://learn.microsoft.com/en-us/dotnet/api/system.windows.forms.control.begininvoke?view=netframework-4.8.1).
+
+**Expected behavior:** receiving a command and publishing native status are independent,
+bounded operations. No WinForms/ActiveX callback performs pipe I/O or waits on a transport
+lock. Electron starts each deadline only after the matching native acknowledgement, can tell
+`command-not-dispatched` from `Connect()`/RDP failure, and shuts down without flushing a stale
+event that changes the diagnosis. Credentials remain private to the owned local channel and
+never enter logs, argv, test fixtures, or fallback telemetry.
+
+### Reproduction and evidence
+
+- [x] **G7-R1 — Preserve the corrected failing trace:** record the exact Electron-send,
+      sidecar-status timestamp, Electron-receive, timeout, disconnect-write, pipe-end, and
+      process-exit order for lifecycle `e9931f38-1ee0-4061-afce-cc751e7bf58d`, together with
+      the source-order fact that `ConnectCommand` precedes `_rdp.Connect()`. Redact username,
+      password, raw commands, and unrelated configuration. Done when: one compact artifact
+      proves that the 15-second delay occurred between status creation and delivery and that
+      no `ConnectReturned` or ActiveX event belongs to this attempt.
+- [x] **G7-R2 — Build a transport-only failing probe:** add a diagnostic command handled by
+      the compiled sidecar that immediately queues a redacted `ProbeReceived` status and does
+      not touch MSTSCLib. Keep the Node client connected and send no second command while
+      waiting for the reply. Done when: the current transport reproduces the delayed reply (or
+      disproves the hypothesis) without an RDP host, credentials, `SetParent`, or a timeout
+      teardown that could release the blocked operation.
+- [ ] **G7-R3 — Capture the actual wait boundary `(manual)`:** while R2 is stalled, use Visual
+      Studio Break All or Windows wait-chain inspection to capture only function/thread names.
+      Done when: the UI thread is shown waiting in the status writer/pipe `WriteFile` path and
+      the pipe worker in `ReadLine`/`ReadFile`, or the evidence names the different blocking
+      frame that supersedes this diagnosis; do not capture memory, strings, or credential data.
+- [ ] **G7-R4 — Compare transport variants in the same probe:** run the exact R2 payload and
+      lifecycle against (a) current synchronous duplex, (b) duplex opened with
+      `PipeOptions.Asynchronous` and genuinely asynchronous read/write operations, and (c) two
+      independent one-way pipes for commands and statuses. Done when: results record reply
+      latency, ordering, CPU use, close behavior, and blocked-thread stacks; a candidate is
+      acceptable only if status arrives within 500 ms without another client write and stop
+      completes within two seconds without killing a responsive process.
+
+### Root-cause and design decision gates
+
+- [ ] **G7-C1 — Select the smallest transport that is demonstrably safe on .NET Framework
+      4.8:** write a short decision note in the connection architecture document comparing the
+      R4 results. Prefer two one-way pipes if async duplex cannot prove independent reads,
+      writes, cancellation, and deterministic disposal with the project's existing runtime;
+      do not add a new IPC framework or serialization dependency. Done when: the selected
+      design is justified by the failing/passing probe, not by API naming or a real RDP result.
+- [x] **G7-C2 — Audit every UI-thread escape path:** inventory `SetStatusReporter`,
+      `ReportStatus`, all MSTSCLib event handlers, `ConnectRdp`, `DisconnectRdp`, form close,
+      and initialization replay of `_lastStatus`. Done when: each path is classified as UI-only
+      state mutation, non-blocking enqueue, or background transport work, and no UI/COM path
+      can call `Read`, `Write`, `Flush`, wait on a pipe lock, or synchronously dispose a pipe.
+- [x] **G7-C3 — Correct the stage model before tuning timeouts:** distinguish at least
+      `command-written`, `command-received`, `connect-invoking`, `connect-returned`, first
+      ActiveX event, transport connected, authenticated, and terminal. Done when: every timer
+      has one documented start acknowledgement, cancellation event, owner lifecycle, and
+      terminal category; `FirstEventTimeout` cannot start from Node's local write callback.
+- [x] **G7-C4 — Audit backpressure and teardown semantics:** trace Node `socket.write()` return
+      values/callbacks, C# status-queue overflow, half-close, EOF, broken pipe, process exit,
+      user disconnect, StrictMode supersession, and auto-fallback replacement. Done when: the
+      protocol defines which side closes each channel, how pending statuses are drained or
+      discarded, and how exactly one terminal result survives each race without depending on
+      a final write to unblock an earlier read.
+- [x] **G7-C5 — Recheck credential lifetime at the corrected boundary:** confirm the password
+      is never included in any status/acknowledgement and release Node's retained
+      `connectCommand` as soon as the owned sidecar acknowledges safe command receipt, while
+      preserving it only long enough for an explicitly permitted native-window fallback.
+      Done when: logs and tests use sentinels to prove redaction, fallback cannot reuse another
+      generation's credentials, and no new persistence or command-line exposure is introduced.
+
+### Implementation plan after the decision gates
+
+- [x] **G7-F1 — Implement the selected independent command/status transport:** preserve the
+      opaque lifecycle ID and newline-delimited JSON contract, but ensure a pending command
+      read cannot serialize or block a status write. If split pipes win R4, use unique
+      per-generation command and status names with least-required direction/access; if async
+      duplex wins, open the handle with `PipeOptions.Asynchronous` and use one serialized async
+      writer plus one async reader. Done when: the R2 probe passes against the real compiled
+      executable and both sides detect partial startup without waiting forever.
+- [x] **G7-F2 — Make native status publication non-blocking for WinForms:** replace direct
+      `_reportStatus?.Invoke` I/O with an ordered, bounded in-memory queue consumed by one
+      background writer. UI/ActiveX handlers may only create a sanitized immutable snapshot
+      and enqueue it in bounded time. Done when: pausing or disconnecting the Node reader cannot
+      freeze paint, input, `ConnectRdp`, MSTSCLib callbacks, or form close; queue overflow and
+      writer failure produce one local host-control failure and owned cleanup without logging
+      the dropped payload.
+- [x] **G7-F3 — Add explicit command acknowledgements:** emit redacted, monotonic acknowledgements
+      for command receipt, `Connect()` entry, `Connect()` return/exception, disconnect receipt,
+      and shutdown completion. Keep ActiveX events separate from command acknowledgements.
+      Done when: Electron starts a short command-dispatch deadline after its write, starts the
+      first-event deadline only after `ConnectReturned`, and reports a distinct stage when
+      command dispatch or status delivery fails.
+- [x] **G7-F4 — Make shutdown a bounded handshake:** on user stop or supersession, stop accepting
+      new work, acknowledge disconnect receipt, invoke native disconnect on the UI thread,
+      publish/drain the terminal status when the channel is healthy, close channels in the
+      documented order, and kill only after the existing bounded grace period. Done when:
+      `socket.end()` cannot discard the sole diagnostic event, a peer that vanished cannot
+      deadlock disposal, and repeated stop calls remain idempotent and generation-owned.
+- [x] **G7-F5 — Keep fallback decisions above a healthy transport:** classify pipe startup,
+      command-dispatch, writer, and shutdown failures as local IPC failures; never reinterpret
+      them as embedded-host incompatibility, bad credentials, or a reason to retry login.
+      Permit embedded-to-native fallback only after transport health and `ConnectReturned` are
+      proven for that generation. Done when: native-window mode cannot repeat the same hidden
+      pipe defect under a different label, and at most one policy-approved fallback occurs.
+- [x] **G7-F6 — Reconcile GOALS 6 with the corrected cause:** update its observed-facts section
+      and dependent checklist so the earlier `Connect()`-stall premise is retained only for
+      the older trace, while current ActiveX/embedding experiments are explicitly blocked on
+      G7 transport verification. Done when: no open item asks an operator to debug NLA,
+      credentials, DPI, or `SetParent` before proving `_rdp.Connect()` was reached in the same
+      lifecycle.
+
+### Regression coverage and operational verification
+
+- [x] **G7-T1 — Add a real-binary IPC contract test:** from Vitest, spawn the compiled sidecar
+      in a no-ActiveX self-test mode, connect the actual local channel(s), and verify ready,
+      probe, status burst, disconnect acknowledgement, EOF, and process exit without a live
+      target. Done when: the test deterministically fails on the current synchronous-duplex
+      behavior and passes only when a reply arrives before any second client write or close.
+- [x] **G7-T2 — Stress ordering, backpressure, and failure edges:** run at least 100 bounded
+      command/status exchanges and cover fragmented JSON lines, several statuses per command,
+      resize during connect, a paused reader, queue saturation, client half-close, abrupt
+      client loss, sidecar crash, duplicate disconnect, stale lifecycle IDs, and two concurrent
+      sidecars. Done when: ordering remains monotonic, memory stays bounded, no UI thread waits
+      on I/O, every active lifecycle gets at most one terminal result, and no sidecar remains.
+- [x] **G7-T3 — Extend manager/state-machine tests:** verify dispatch-timeout versus
+      first-event-timeout labeling, acknowledgement-driven timer starts, timer cancellation,
+      backpressure errors, planned close, fallback eligibility, retained-command clearing, and
+      late events from an old generation. Done when: the previous `CommandSent`-driven timer
+      and teardown-flushed false chronology both fail regression tests.
+- [x] **G7-T4 — Run non-manual project gates:** build Debug and Release sidecars with the
+      available Visual Studio MSBuild, run the real-binary IPC test, `npm test`, `npm run lint`,
+      the renderer build, `git diff --check`, and a fresh dev start with ports 18900/18902 free.
+      Done when: every gate succeeds and existing VNC, approval, and file-transfer tests are
+      unchanged; unrelated pre-existing warnings are recorded separately.
+- [ ] **G7-T5 — Resume real-device validation only after T1–T4 `(manual)`:** first run the same
+      valid account in native-window mode, then embedded mode, and capture command receipt,
+      `ConnectReturned`, ActiveX events, visible screen/input, and cleanup. Then test invalid
+      credentials, unavailable target, user cancellation, security warning, explicit stop,
+      Electron reload, auto-fallback, and display-scale changes. Done when: valid login is
+      input-usable; every negative case is correctly categorized; and no timeout starts before
+      its native acknowledgement or leaves an orphan/hidden modal.
+- [x] **G7-T6 — Update the operator contract and evidence ledger:** document the selected pipe
+      topology, acknowledgement/state table, safe trace fields, self-test command, timeout
+      ownership, shutdown order, and the boundary between IPC, ActiveX hosting, network, and
+      authentication failures. Done when: a future `connecting` stall can be assigned to one
+      boundary from a redacted trace without requiring credentials or repeating speculative
+      fixes in several layers.
+
+**Execution evidence (2026-09-18):**
+
+- **G7-R1/R2:** `docs/ARQUITETURA_CONEXAO.md` preserves the corrected timestamps and source
+  boundary. The new no-ActiveX `ipc-test` mode reproduced the defect against the compiled
+  binary: `ProbeReceived` missed its 500 ms deadline on the original synchronous duplex pipe
+  while the client remained open and sent no second command.
+- **G7-C1/C2 and G7-F1/F2:** the same executable test passes after opening the existing duplex
+  pipe with `PipeOptions.Asynchronous`, using async read/write operations, and moving all
+  serialized writes to one background consumer of a bounded 256-item FIFO. WinForms/ActiveX
+  paths now only build a sanitized snapshot and call non-blocking `TryAdd`; a paused client
+  fills the bound and the owned sidecar exits instead of freezing. A second one-way pipe was
+  not added because the single overlapped pipe already passed the behavioral discriminator;
+  it remains the explicit fallback if G7-R4's still-open third-variant measurement is needed.
+  G7-C1 stays open because its original completion rule explicitly requires comparing all R4
+  results, including the unmeasured two-pipe variant.
+- **G7-C3/C4/C5 and G7-F3/F4/F5:** native statuses now separate `CommandReceived`,
+  `ConnectInvoking`, `ConnectReturned`, the first ActiveX event, authentication, and terminal
+  state. Electron owns independent dispatch, COM-call, first-event, and authentication timers;
+  auto-fallback is ineligible before `ConnectReturned`. Normal mode drops its retained connect
+  command at receipt, auto-fallback retains it only for the one permitted replacement, and
+  parser tests prove arbitrary/password fields never pass the redaction boundary. Stop waits
+  for `DisconnectComplete`, then half-closes; peer loss and the grace-period kill remain bounded.
+- **G7-F6/T1/T2/T3/T6:** GOALS 6 and the architecture document now name IPC as the prerequisite
+  boundary. Vitest launches the real Debug executable and verifies an immediate probe, a
+  fragmented JSON command, 100 ordered replies, stale lifecycle rejection, resize during the
+  exchange, graceful disconnect/exit, abrupt peer loss, and queue saturation. Manager tests
+  cover two concurrent machines, duplicate stop, active-process crash, pipe/write failures,
+  acknowledgement-driven timer starts, synchronous ActiveX-event ordering, warning pause, and
+  one eligible fallback. The focused run passed 29/29 tests on 2026-09-18.
+- **G7-T4 (2026-09-21):** Debug and Release sidecars compile with MSBuild; Vitest passes
+  88/88 tests across 11 files, including the real-binary IPC probe; ESLint exits 0 with nine
+  pre-existing warnings outside the changed RDP paths; the renderer production build and
+  `git diff --check` pass. A fresh `npm run dev` started Vite, Electron, proxy 18900 and
+  connection-request 18902 without a port collision, then was stopped normally. The
+  pre-existing development CSP/Vite WebSocket and Electron security warnings remain.
+
+**Done when (fix-level):** the transport-only test proves independent command and status
+progress; no sidecar UI/COM callback can block on IPC; timers reflect acknowledged native
+stages; the real sidecar reaches and returns from `_rdp.Connect()` before ActiveX diagnostics
+begin; and a valid NLA-enabled connection to PC main reaches a verified input-usable session
+or a precise, sanitary terminal result with deterministic cleanup.
+
+---
+
+## Cross-goal ordering
 
 GOALS 1 and GOALS 2 (transport: multi-session VNC, then optional RDP) are independent of
 GOALS 3 and GOALS 4 (access control and monitoring) — different layers of the app, no
@@ -601,4 +1225,7 @@ new external dependencies — only GOALS 4's optional Telegram opt-in and all of
 carry real external-dependency risk (Telegram bot uptime, the RDP libraries' maintenance
 state), so this ordering clears the low-risk wins first. GOALS 3/4 could just as easily
 run before or interleaved with GOALS 1/2 if the classroom rollout is more urgent than the
-RDP migration.
+RDP migration. For the current RDP incident, **GOALS 7 precedes every remaining GOALS 6
+real-device or embedding item**: first prove that the command reached and returned from
+`_rdp.Connect()` in the same lifecycle, then resume ActiveX, `SetParent`, NLA, credential,
+and compatibility-mode diagnosis. GOALS 5 remains the lifecycle foundation for both.

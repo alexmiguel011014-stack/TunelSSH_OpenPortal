@@ -11,6 +11,7 @@ import { MachineContext } from '../../App';
 export default function RdpViewer({ machine, isVisible }) {
   const containerRef = useRef(null);
   const startedRef = useRef(false);
+  const lifecycleIdRef = useRef(null);
   const { statuses, disconnectMachine } = useContext(MachineContext);
 
   const vncState = statuses[machine.id] || 'connecting';
@@ -21,6 +22,12 @@ export default function RdpViewer({ machine, isVisible }) {
     disconnected: { color: 'bg-text-muted', label: 'Desconectado' },
   };
   const health = healthMap[vncState] || healthMap.disconnected;
+  const hostModeLabel =
+    machine.rdpHostMode === 'native-window'
+      ? 'RDP em janela compatível'
+      : machine.rdpHostMode === 'auto-fallback'
+        ? 'RDP no app + fallback'
+        : 'RDP dentro do app';
 
   // Pixels físicos: SetWindowPos (Win32) não conhece pixels lógicos do DOM —
   // numa tela com escala 125%/150% os dois divergem.
@@ -41,26 +48,31 @@ export default function RdpViewer({ machine, isVisible }) {
     if (startedRef.current) return;
     const rect = currentRect();
     if (!rect) return;
+    const lifecycleId = window.crypto.randomUUID();
     startedRef.current = true;
+    lifecycleIdRef.current = lifecycleId;
+    console.info(`[rdp-trace] ${machine.id} ${lifecycleId} renderer start`);
     window.electronAPI
-      ?.startRdp(machine, rect)
+      ?.startRdp(machine, rect, lifecycleId)
       .catch((e) => console.warn('[app] RDP start error:', e));
 
     return () => {
       startedRef.current = false;
-      window.electronAPI?.stopRdp(machine.id);
+      if (lifecycleIdRef.current === lifecycleId) lifecycleIdRef.current = null;
+      console.info(`[rdp-trace] ${machine.id} ${lifecycleId} renderer cleanup`);
+      window.electronAPI?.stopRdp(machine.id, lifecycleId);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [machine.id]);
 
   useEffect(() => {
-    window.electronAPI?.setRdpVisible(machine.id, !!isVisible);
+    window.electronAPI?.setRdpVisible(machine.id, !!isVisible, lifecycleIdRef.current);
   }, [isVisible, machine.id]);
 
   useEffect(() => {
     const sendResize = () => {
       const rect = currentRect();
-      if (rect) window.electronAPI?.resizeRdp(machine.id, rect);
+      if (rect) window.electronAPI?.resizeRdp(machine.id, rect, lifecycleIdRef.current);
     };
     window.addEventListener('resize', sendResize);
     let ro;
@@ -94,7 +106,7 @@ export default function RdpViewer({ machine, isVisible }) {
     <div className="flex-1 flex flex-col bg-black overflow-hidden">
       <div className="flex gap-1.5 items-center flex-wrap bg-canvas border-b border-line pl-11 pr-2.5 py-1.5">
         <span className={`${ctrlLabelClass} bg-surface border border-line rounded px-2 py-1`}>
-          RDP nativo
+          {hostModeLabel}
         </span>
         <button
           className={`${ctrlBtnClass} text-danger border-danger/40 border-l ml-1 pl-2.5`}
@@ -120,7 +132,11 @@ export default function RdpViewer({ machine, isVisible }) {
       <div ref={containerRef} className="flex-1 relative flex items-center justify-center">
         <div className="flex flex-col items-center gap-2 text-text-muted pointer-events-none">
           <MonitorSmartphone size={28} />
-          <span className="text-xs">Sessão RDP nativa — {machine.name}</span>
+          <span className="text-xs">
+            {machine.rdpHostMode === 'native-window'
+              ? 'A sessão será exibida em uma janela separada'
+              : `Sessão RDP nativa — ${machine.name}`}
+          </span>
         </div>
       </div>
     </div>

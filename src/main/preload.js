@@ -23,11 +23,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // posicionado pelo renderer (ver RdpViewer.jsx). rect é sempre em pixels
   // físicos (já multiplicado por devicePixelRatio), pois SetWindowPos do lado
   // Win32 não conhece pixels lógicos do DOM.
-  startRdp: (machine, rect) => ipcRenderer.invoke('rdp:start', { machine, rect }),
-  resizeRdp: (machineId, rect) => ipcRenderer.invoke('rdp:resize', { machineId, rect }),
-  setRdpVisible: (machineId, visible) =>
-    ipcRenderer.invoke('rdp:setVisible', { machineId, visible }),
-  stopRdp: (machineId) => ipcRenderer.invoke('rdp:stop', machineId),
+  startRdp: (machine, rect, lifecycleId) =>
+    ipcRenderer.invoke('rdp:start', { machine, rect, lifecycleId }),
+  resizeRdp: (machineId, rect, lifecycleId) =>
+    ipcRenderer.invoke('rdp:resize', { machineId, rect, lifecycleId }),
+  setRdpVisible: (machineId, visible, lifecycleId) =>
+    ipcRenderer.invoke('rdp:setVisible', { machineId, visible, lifecycleId }),
+  stopRdp: (machineId, lifecycleId = null) =>
+    ipcRenderer.invoke('rdp:stop', { machineId, lifecycleId }),
   onRdpStatus: (callback) => {
     const handler = (_, status) => callback(status);
     ipcRenderer.on('rdp:status', handler);

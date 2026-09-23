@@ -456,7 +456,7 @@ export default function ConfigPanel() {
               </div>
 
               {machine.transport === 'rdp' ? (
-                <div className="mt-4 grid grid-cols-1 sm:grid-cols-3 gap-4">
+                <div className="mt-4 grid grid-cols-1 sm:grid-cols-4 gap-4">
                   <div>
                     <label className="block text-xs text-text-faint mb-1">Usuário RDP</label>
                     <input
@@ -491,10 +491,23 @@ export default function ConfigPanel() {
                       placeholder="3389"
                     />
                   </div>
-                  <p className="sm:col-span-3 text-xs text-text-faint">
+                  <div>
+                    <label className="block text-xs text-text-faint mb-1">Exibição RDP</label>
+                    <select
+                      value={machine.rdpHostMode || 'embedded'}
+                      onChange={(e) => updateField(index, 'rdpHostMode', e.target.value)}
+                      className="w-full bg-inset border border-line rounded-lg px-3 py-2 text-sm text-text-primary focus:outline-none focus:border-accent transition-colors"
+                    >
+                      <option value="embedded">Dentro do app</option>
+                      <option value="native-window">Janela compatível</option>
+                      <option value="auto-fallback">App + fallback automático</option>
+                    </select>
+                  </div>
+                  <p className="sm:col-span-4 text-xs text-text-faint">
                     Use a conta dedicada criada na seção &quot;Hospedagem RDP&quot; abaixo (no PC
                     remoto, não aqui) — nunca a senha pessoal de quem está logado lá. Essa máquina
-                    também precisa ter o Remote Desktop habilitado (Pro/Enterprise/Education).
+                    também precisa ter o Remote Desktop habilitado (Pro/Enterprise/Education). O
+                    fallback abre uma única janela nativa somente se o modo embutido não iniciar.
                   </p>
                 </div>
               ) : (

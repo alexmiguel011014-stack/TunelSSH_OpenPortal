@@ -191,11 +191,14 @@ continua ligado — nada muda na autenticação do Windows.
 **Por que precisa de um processo sidecar:** o Chromium/Electron não hospeda
 controles ActiveX/COM dentro do próprio renderer. A solução é um processo
 nativo separado (C#/.NET Framework 4.8 WinForms, `sidecar/`) que hospeda o
-controle em sua própria janela nativa, reparented (Win32 `SetParent`) para
-dentro do HWND do `BrowserWindow` do Electron — visualmente parece estar
-"dentro" do app, como o `<iframe>` do noVNC, mas é uma janela do SO real
-sobreposta à área de um `<div>` posicionado pelo React
-(`RdpViewer.jsx`), não conteúdo do DOM.
+controle. Cada máquina escolhe um dos modos: `embedded` usa Win32 `SetParent`
+para encaixar a janela no `BrowserWindow`; `native-window` mantém a janela
+WinForms separada; `auto-fallback` começa embutido e abre, no máximo uma vez,
+a janela separada somente se o primeiro evento nativo falhar depois de
+`ConnectReturned`. Falhas de pipe, comando ou prontidão são erros locais, não
+evidência de incompatibilidade de embedding. Todos os
+modos usam o mesmo ActiveX, NLA e pipe privado — o fallback não muda protocolo
+nem autenticação.
 
 **Canal de comando (named pipe):** o processo principal (`rdp-sidecar.js`)
 sobe uma sidecar por máquina RDP conectada (`spawn`) e fala com ela por um
@@ -204,11 +207,44 @@ Task Manager/`Get-Process`. Uma linha JSON por comando
 (`rdp-protocol.js`/`sidecar/Program.cs`):
 
 ```
-{"cmd":"connect","host":"100.x.x.x","port":3389,"username":"u","password":"p"}
-{"cmd":"resize","x":10,"y":10,"w":800,"h":600}
-{"cmd":"visibility","visible":true}
-{"cmd":"disconnect"}
+{"cmd":"connect","host":"100.x.x.x","port":3389,"username":"u","password":"p","lifecycleId":"..."}
+{"cmd":"resize","x":10,"y":10,"w":800,"h":600,"lifecycleId":"..."}
+{"cmd":"visibility","visible":true,"lifecycleId":"..."}
+{"cmd":"disconnect","lifecycleId":"..."}
 ```
+
+O pipe duplex é aberto com `PipeOptions.Asynchronous`: leitura de comandos e
+escrita de estados usam operações overlapped independentes. A thread do
+WinForms/ActiveX nunca escreve no pipe; ela apenas tenta inserir um snapshot
+sanitizado numa fila FIFO limitada a 256 itens, e uma thread de transporte é a
+única escritora. Fila cheia, cliente que parou de ler ou pipe rompido encerram
+a geração dona, em vez de bloquear pintura, entrada, `Connect()` ou callbacks
+COM. Não há framework IPC ou serializador novo: o contrato continua sendo JSON
+por linha sobre o named pipe do .NET Framework. Sua ACL permite acesso apenas
+à conta Windows que iniciou a sidecar; o nome aleatório por geração não
+substitui essa restrição.
+
+Foram comparados o duplex síncrono existente (probe bloqueado por mais de
+500 ms) e o mesmo duplex com handle/operações overlapped (probe imediato,
+ordem preservada e encerramento em menos de dois segundos). Dois pipes
+unidirecionais continuam sendo uma alternativa de contingência, mas não foram
+adotados: duplicariam conexão, falha parcial e teardown sem acrescentar uma
+garantia que o teste do executável real já demonstrou no duplex assíncrono.
+Devem ser reconsiderados somente se esse teste voltar a falhar no runtime
+suportado.
+
+Essa separação foi exigida por uma falha real em 2026-09-18: o Electron enviou
+`connect` às `00:57:57.282Z`, a sidecar criou `ConnectCommand` às
+`00:57:57.3230795Z`, mas o estado só chegou ao Electron depois do timeout de
+`00:58:12.285Z`, quando o cliente escreveu `disconnect`/fechou o pipe. Como a
+publicação ocorria antes de `_rdp.Connect()`, aquela tentativa nunca alcançou o
+controle RDP. O teste `rdp-sidecar-binary.test.js` reproduziu o atraso no
+transporte síncrono sem ActiveX nem credenciais e agora exige resposta em menos
+de 500 ms sem uma segunda escrita do cliente.
+
+Autoteste local, sem destino RDP: compilar `sidecar/OpenPortalRdpSidecar.csproj`
+em Debug e executar `npx vitest run
+src/main/connection/__tests__/rdp-sidecar-binary.test.js --maxWorkers=1`.
 
 `resize` acompanha o `<div>` do `RdpViewer` (via `ResizeObserver`, em
 pixels físicos — multiplicados por `devicePixelRatio`, já que
@@ -253,16 +289,114 @@ lib RDP em JS. `SmartSizing` (em `AdvancedSettings2`) deixa o controle
 escalar o desenho para o tamanho do container sem renegociar a resolução
 remota a cada `resize`.
 
-**Estado atual (2026-09-16):** o encaixe visual (embedding), o canal de
-comando e o controle MSTSCLib em si estão implementados e ligados ao fluxo
-real de conexão/desconexão (GOALS 1's `connectedMachines`, sem um segundo
-modelo de estado paralelo). Testado (smoke test) contra `127.0.0.1:3389`
-com credenciais fictícias — só para provar que `Connect()` não derruba a
-sidecar, sem máquina real nem credencial real envolvida. **Ainda não
-verificado**: uma sessão RDP de verdade, autenticada, contra uma máquina
-Pro/Enterprise/Education real com hospedagem RDP habilitada — isso
-continua exigindo uma máquina física fora do alcance deste ambiente de
-desenvolvimento (ver GOALS.md, item de verificação manual).
+**Prontidão, posse e ciclo de vida:** a sidecar só abre o pipe depois de
+`Shown`, da primeira volta do loop visual e da criação explícita do handle do
+ActiveX. O comando recebido é enfileirado com `BeginInvoke`; `Connect()` nunca
+é chamado durante a inicialização ou por um despacho síncrono que prenda o
+loop de mensagens. `CommandReceived`, `ConnectInvoking` e `ConnectReturned`
+confirmam separadamente que o comando chegou, que a chamada começou e que ela
+retornou. `UIParentWindowHandle` aponta para o formulário da sidecar,
+portanto avisos de certificado/autenticação aparecem na janela RDP em vez de
+ficarem escondidos atrás do Electron.
+
+Cada montagem de `RdpViewer` cria um
+`lifecycleId` opaco e não sensível. `start`, `resize`, `visibility` e
+`stop` atravessam preload/IPC com esse identificador; o processo principal
+ignora qualquer comando cujo ID não seja o dono atual da sidecar. Isso é
+especialmente importante no modo de desenvolvimento: o React StrictMode
+executa montagem → cleanup → remontagem como prova, e um cleanup atrasado
+da primeira geração não pode encerrar a segunda. Um `stop` sem ID é
+reservado à ação explícita do usuário. Encerramento intencional,
+supersessão e falha inesperada aparecem separadamente no trace.
+A sidecar também monitora o PID do processo principal e, no modo embutido,
+o HWND pai; perda do pipe, encerramento do Electron ou destruição da janela
+encerra o formulário e a sessão em vez de deixar um processo órfão.
+
+**Estados autoritativos:** abrir o pipe ou criar o processo não significa
+que a sessão está utilizável. O estado visível segue esta tabela; eventos
+repetidos ou pertencentes a uma geração antiga são descartados:
+
+| Origem                                             | Estado da UI                                           | Observação                                                         |
+| -------------------------------------------------- | ------------------------------------------------------ | ------------------------------------------------------------------ |
+| preflight local/TCP falhou                         | `error` / `local-sidecar` ou `network`                 | não cria processo quando executável ou destino não estão prontos   |
+| `ControlReady`/`EmbeddingResult`                   | interno (`control-ready`)                              | requisito obrigatório antes de aceitar `connect`                   |
+| `CommandSent`                                      | `connecting` (`command-written`)                       | aguarda confirmação da sidecar, não evento ActiveX                 |
+| `CommandReceived`                                  | `connecting` (`command-received`)                      | comando está na thread UI; aguarda chamada do controle             |
+| `ConnectInvoking`/`ConnectReturned`                | `connecting`                                           | mede a chamada COM; só no retorno inicia prazo do primeiro evento  |
+| `OnConnecting`                                     | `connecting`                                           | inicia o prazo de transporte/autenticação                           |
+| `OnConnected`                                      | `connecting` (`transport-connected`)                   | confirma transporte, não login concluído                           |
+| aviso de autenticação/certificado                  | `connecting` / `certificate-warning`                   | prazo é pausado; usuário decide na janela RDP                      |
+| `OnLoginComplete`                                  | `connected`                                            | primeiro ponto considerado autenticado e utilizável                |
+| `OnLogonError`                                     | `error` / `authentication`                             | código fica somente no processo principal                          |
+| `OnFatalError`                                     | `error` / `host-control`                               | mensagem sanitizada para o renderer                                |
+| `OnDisconnected` antes/depois do login             | `error` / `session` ou `disconnected` / `remote-*`     | evita falso sucesso seguido de desconexão                          |
+| pipe/processo inesperadamente encerrado            | `error` / `local-sidecar`                              | emitido uma vez, mesmo com vários callbacks locais                 |
+| prazo da etapa expirou                             | `error` / `local-sidecar` ou `timeout`                 | identifica despacho, chamada COM, primeiro evento ou autenticação  |
+| cleanup/supersessão/ação explícita                 | nenhum erro; `disconnected` apenas para ação explícita | não cria histórico falso do probe do StrictMode                    |
+
+Os prazos são independentes: 5 s para `control-ready`, 5 s de `CommandSent`
+até `CommandReceived`, 10 s da confirmação do comando até `ConnectReturned`,
+15 s de `ConnectReturned` até o primeiro evento ActiveX e 45 s para
+autenticação depois desse evento. Se um evento ActiveX ocorrer sincronamente
+dentro de `Connect()`, ele já satisfaz o prazo e o `ConnectReturned` posterior
+não arma outro timer. Avisos que exigem ação humana suspendem o prazo. Cada
+prazo é cancelado ao trocar de etapa e pertence somente ao `lifecycleId` atual.
+
+No encerramento, Node envia `disconnect` e mantém a leitura aberta; a sidecar
+desconecta o controle e responde `DisconnectComplete`. Só então Node faz o
+half-close do pipe. Se a confirmação não chegar, o grace period existente
+fecha o canal e encerra somente o processo daquela geração. Isso impede que
+um `end()` imediato descarte justamente o último diagnóstico.
+
+O trace local registra ID, modo, PID, timestamps, evento, etapa, valor
+`Connected`, HWNDs, pai real/solicitado, estilo, thread, contexto DPI, resultado
+de `SetParent` e versão do controle. Senha, objeto de credencial, comando bruto
+e conteúdo de diálogo nunca são registrados; o renderer recebe só categoria e
+mensagem sanitizadas.
+
+**Recuperação conservadora:**
+
+| Situação | Resultado e limpeza | Repetição automática |
+| --- | --- | --- |
+| executável ausente ou TCP inacessível | erro de preflight, sem sidecar | nenhuma |
+| pipe/processo ou despacho perdido | erro local único; encerra somente a geração dona | nenhuma |
+| prontidão em qualquer modo | erro da etapa e limpeza da sidecar | nenhuma |
+| primeiro evento no modo `auto-fallback`, após `ConnectReturned` | encerra embutido e abre uma janela nativa | uma vez |
+| primeiro evento nos outros modos | erro da etapa e encerramento gracioso | nenhuma |
+| aviso de certificado/autenticação | mostra a janela, pausa prazo e aguarda o usuário | nenhuma |
+| credencial/política rejeitada | erro sanitizado e encerramento | nenhuma |
+| desconexão remota ou cancelamento explícito | estado terminal e limpeza da sidecar | nenhuma |
+| StrictMode, reload ou geração substituída | evento antigo ignorado; só o dono atual permanece | nenhuma |
+| duas máquinas simultâneas | uma entrada, pipe e processo por `machineId` | independente por máquina |
+
+**Preflight e suporte:** cada tentativa escreve no painel de logs um ID de trace
+abreviado, modo e etapa. O log local completo acrescenta host/porta configurados,
+resultado TCP, presença da sidecar e versão do controle. Para escalar um problema,
+anotar o ID, horário, modo, etapa/evento final e quantidade de processos sidecar;
+não copiar `config.json`, senha, comando do pipe nem registros de segurança do
+Windows. Se o modo `native-window` também falhar, conferir no destino o serviço
+Remote Desktop Services, firewall/porta, NLA, formato do usuário e permissão
+"Allow log on through Remote Desktop Services", e comparar com `mstsc.exe` usando
+a mesma conta dedicada.
+
+**Matriz de validação manual:** em uma máquina Windows com NLA ligado,
+confirmar (1) credencial válida chegando a `OnLoginComplete`, com tela e
+entrada utilizáveis; (2) credencial inválida chegando a erro de
+autenticação; (3) destino silencioso chegando ao timeout; (4) desconexão
+explícita sem processo órfão; e (5) remontagem StrictMode deixando uma única
+sidecar dona da sessão. Depois, voltar a mesma máquina para VNC e confirmar
+que o transporte original continua funcionando.
+
+**Estado atual (2026-09-21):** prontidão explícita, transporte duplex
+overlapped, fila de status fora da UI, acknowledgements de comando/chamada,
+encerramento confirmado, diálogos parentados, trace redigido e os três modos
+de hospedagem estão implementados. A regressão automatizada cobre o executável
+real sem ActiveX (100 estados ordenados, JSON fragmentado, geração obsoleta,
+peer perdido e fila saturada), posse obsoleta, perda de pipe, falha de escrita,
+transição dos prazos, pausa por aviso e fallback único. Os 88 testes passam,
+assim como as compilações Debug/Release e o build do renderer. A sessão RDP
+real com credenciais válidas e entrada de tela ainda exige a validação manual
+da matriz acima (ver GOALS.md).
 
 ---
 

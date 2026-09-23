@@ -6,6 +6,7 @@ import {
   buildVisibilityCommand,
   encodeCommand,
   parseStatusMessage,
+  toRendererRdpStatus,
 } from '../rdp-protocol.js';
 
 describe('buildConnectCommand', () => {
@@ -90,11 +91,73 @@ describe('encodeCommand', () => {
 
 describe('parseStatusMessage', () => {
   it('extracts status events sent by the sidecar', () => {
-    expect(parseStatusMessage('{"type":"status","state":"connected"}')).toBe('connected');
+    expect(
+      parseStatusMessage(
+        '{"type":"status","state":"error","eventName":"OnLogonError","reasonCode":1326}',
+      ),
+    ).toEqual({ state: 'error', eventName: 'OnLogonError', reasonCode: 1326 });
+  });
+
+  it('accepts only redacted readiness diagnostics', () => {
+    expect(
+      parseStatusMessage(
+        '{"type":"status","state":"ready","stage":"control-ready","eventName":"ControlReady","category":"host-control","lifecycleId":"generation-1","hostMode":"embedded","formHwnd":123,"sequence":7,"password":"must-not-pass"}',
+      ),
+    ).toEqual({
+      state: 'ready',
+      stage: 'control-ready',
+      eventName: 'ControlReady',
+      category: 'host-control',
+      lifecycleId: 'generation-1',
+      hostMode: 'embedded',
+      formHwnd: 123,
+      sequence: 7,
+    });
   });
 
   it('ignores commands and malformed messages', () => {
     expect(parseStatusMessage('{"cmd":"connect"}')).toBeNull();
+    expect(parseStatusMessage('{"type":"status","state":"unknown"}')).toBeNull();
     expect(parseStatusMessage('not-json')).toBeNull();
+  });
+});
+
+describe('toRendererRdpStatus', () => {
+  it('maps a security warning to an actionable but non-terminal renderer state', () => {
+    expect(
+      toRendererRdpStatus(
+        {
+          state: 'warning',
+          category: 'certificate-warning',
+          lifecycleId: 'generation-1',
+          stage: 'security-warning',
+          hostMode: 'native-window',
+        },
+        'pc-1',
+      ),
+    ).toMatchObject({
+      state: 'connecting',
+      nativeState: 'warning',
+      machineId: 'pc-1',
+      category: 'certificate-warning',
+      lifecycleId: 'generation-1',
+      hostMode: 'native-window',
+    });
+  });
+
+  it('does not forward native reason codes or arbitrary fields', () => {
+    const status = toRendererRdpStatus(
+      {
+        state: 'error',
+        category: 'timeout',
+        eventName: 'FirstEventTimeout',
+        reasonCode: 123,
+        password: 'must-not-pass',
+      },
+      'pc-1',
+    );
+    expect(status).not.toHaveProperty('reasonCode');
+    expect(status).not.toHaveProperty('password');
+    expect(status).toMatchObject({ state: 'error', category: 'timeout' });
   });
 });

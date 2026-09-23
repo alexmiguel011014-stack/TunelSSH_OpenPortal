@@ -5,14 +5,20 @@ const { readConfig, writeConfig } = require('../config/config-manager');
 const { readHistory, addEntry } = require('../config/history-manager');
 const { readActivityLog } = require('../config/activity-log');
 const { execSync } = require('child_process');
+const fs = require('fs');
 const os = require('os');
 const net = require('net');
-const { startRdpSidecar, sendRdpCommand, stopRdpSidecar } = require('../connection/rdp-sidecar');
+const {
+  startRdpSidecar,
+  sendRdpCommand,
+  stopRdpSidecar,
+  SIDECAR_EXE,
+} = require('../connection/rdp-sidecar');
 const {
   buildConnectCommand,
   buildResizeCommand,
-  buildDisconnectCommand,
   buildVisibilityCommand,
+  toRendererRdpStatus,
 } = require('../connection/rdp-protocol');
 const {
   enableRdpHosting,
@@ -28,7 +34,25 @@ function send(mainWindow, channel, data) {
   }
 }
 
+function testTcpReachability(host, port, timeoutMs = 2_000) {
+  return new Promise((resolve) => {
+    const socket = net.createConnection({ host, port });
+    let settled = false;
+    const finish = (reachable) => {
+      if (settled) return;
+      settled = true;
+      socket.destroy();
+      resolve(reachable);
+    };
+    socket.setTimeout(timeoutMs);
+    socket.once('connect', () => finish(true));
+    socket.once('timeout', () => finish(false));
+    socket.once('error', () => finish(false));
+  });
+}
+
 function registerIpcHandlers(mainWindow) {
+  const pendingRdpStarts = new Map();
   ipcMain.handle('config:get', () => {
     return readConfig();
   });
@@ -77,52 +101,109 @@ function registerIpcHandlers(mainWindow) {
     return '0';
   }
 
-  ipcMain.handle('rdp:start', async (_, { machine, rect }) => {
-    const ok = await startRdpSidecar(machine.id, {
-      parentHwnd: getParentHwnd(),
-      x: rect.x,
-      y: rect.y,
-      w: rect.w,
-      h: rect.h,
-    }, (state) => send(mainWindow, 'rdp:status', { state, machineId: machine.id }));
-    if (ok === null) return { success: false, superseded: true };
-    if (!ok) {
-      send(mainWindow, 'rdp:status', { state: 'error', machineId: machine.id });
+  ipcMain.handle('rdp:start', async (_, { machine, rect, lifecycleId }) => {
+    pendingRdpStarts.set(machine.id, lifecycleId);
+    const mode = ['embedded', 'native-window', 'auto-fallback'].includes(machine.rdpHostMode)
+      ? machine.rdpHostMode
+      : 'embedded';
+    const port = machine.rdpPort || 3389;
+    const sidecarAvailable = fs.existsSync(SIDECAR_EXE);
+    const tcpReachable = await testTcpReachability(machine.host, port);
+    if (pendingRdpStarts.get(machine.id) !== lifecycleId) {
+      return { success: false, superseded: true };
+    }
+    console.log(
+      `[rdp-trace] ${machine.id} ${lifecycleId} preflight host=${machine.host} port=${port} mode=${mode} sidecar=${sidecarAvailable} tcp=${tcpReachable}`,
+    );
+    if (!sidecarAvailable || !tcpReachable) {
+      send(
+        mainWindow,
+        'rdp:status',
+        toRendererRdpStatus(
+          {
+            state: 'error',
+            lifecycleId,
+            eventName: sidecarAvailable ? 'TcpPreflightFailed' : 'SidecarMissing',
+            category: sidecarAvailable ? 'network' : 'local-sidecar',
+            stage: 'preflight',
+            hostMode: mode,
+          },
+          machine.id,
+        ),
+      );
+      if (pendingRdpStarts.get(machine.id) === lifecycleId) pendingRdpStarts.delete(machine.id);
       return { success: false };
     }
-    sendRdpCommand(
+    const ok = await startRdpSidecar(
+      machine.id,
+      {
+        parentHwnd: getParentHwnd(),
+        x: rect.x,
+        y: rect.y,
+        w: rect.w,
+        h: rect.h,
+        lifecycleId,
+        mode,
+      },
+      (status) => send(mainWindow, 'rdp:status', toRendererRdpStatus(status, machine.id)),
+    );
+    if (pendingRdpStarts.get(machine.id) !== lifecycleId) {
+      stopRdpSidecar(machine.id, lifecycleId, 'superseded-during-start');
+      return { success: false, superseded: true };
+    }
+    pendingRdpStarts.delete(machine.id);
+    if (ok === null) return { success: false, superseded: true };
+    if (!ok) {
+      return { success: false };
+    }
+    const commandSent = sendRdpCommand(
       machine.id,
       buildConnectCommand({
         host: machine.host,
-        port: machine.rdpPort || 3389,
+        port,
         username: machine.rdpUsername || '',
         password: machine.rdpPassword || '',
       }),
+      lifecycleId,
     );
-    // A sidecar reporta connected/error/disconnected de volta pelo pipe
-    // quando o MSTSCLib mudar de estado.
-    send(mainWindow, 'rdp:status', {
-      state: 'connecting',
-      machineId: machine.id,
-    });
+    if (!commandSent) return { success: false };
+    // A sidecar manager reporta connecting/connected/error/disconnected e
+    // descarta eventos atrasados de gerações que já perderam a posse.
     return { success: true };
   });
 
-  ipcMain.handle('rdp:resize', (_, { machineId, rect }) => {
-    return { success: sendRdpCommand(machineId, buildResizeCommand(rect)) };
+  ipcMain.handle('rdp:resize', (_, { machineId, rect, lifecycleId }) => {
+    return { success: sendRdpCommand(machineId, buildResizeCommand(rect), lifecycleId) };
   });
 
-  ipcMain.handle('rdp:setVisible', (_, { machineId, visible }) => {
+  ipcMain.handle('rdp:setVisible', (_, { machineId, visible, lifecycleId }) => {
     return {
-      success: sendRdpCommand(machineId, buildVisibilityCommand({ visible })),
+      success: sendRdpCommand(machineId, buildVisibilityCommand({ visible }), lifecycleId),
     };
   });
 
-  ipcMain.handle('rdp:stop', (_, machineId) => {
-    sendRdpCommand(machineId, buildDisconnectCommand());
-    stopRdpSidecar(machineId);
-    send(mainWindow, 'rdp:status', { state: 'disconnected', machineId });
-    return { success: true };
+  ipcMain.handle('rdp:stop', (_, payload) => {
+    const { machineId, lifecycleId = null } =
+      typeof payload === 'string' ? { machineId: payload } : payload;
+    console.log(`[rdp-trace] ${machineId} ${lifecycleId || 'unowned'} ipc stop`);
+    if (!lifecycleId || pendingRdpStarts.get(machineId) === lifecycleId) {
+      pendingRdpStarts.delete(machineId);
+    }
+    const intentional = !lifecycleId;
+    const stopped = stopRdpSidecar(
+      machineId,
+      lifecycleId,
+      intentional ? 'user-stop' : 'renderer-cleanup',
+    );
+    if (stopped && intentional) {
+      send(mainWindow, 'rdp:status', {
+        state: 'disconnected',
+        machineId,
+        intentional: true,
+        eventName: 'UserStop',
+      });
+    }
+    return { success: stopped };
   });
 
   // Provisionamento (GOALS 2, "manual, one-time per machine") — cada

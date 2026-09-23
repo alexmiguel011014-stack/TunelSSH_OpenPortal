@@ -131,7 +131,13 @@ export default function App() {
 
   useEffect(() => {
     const handleTransportStatus = (status) => {
-      addLog(`Status: ${status.state} (machine: ${status.machineId || 'none'})`);
+      const detail = status.message ? ` — ${status.message}` : '';
+      const trace = status.lifecycleId ? `, trace: ${status.lifecycleId.slice(0, 8)}` : '';
+      const stage = status.stage ? `, etapa: ${status.stage}` : '';
+      const mode = status.hostMode ? `, modo: ${status.hostMode}` : '';
+      addLog(
+        `Status: ${status.state}${detail} (machine: ${status.machineId || 'none'}${trace}${stage}${mode})`,
+      );
       setStatuses((prev) => ({
         ...prev,
         [status.machineId || 'global']: status.state,
@@ -144,6 +150,7 @@ export default function App() {
       const stateLabel = status.state === 'connected' ? 'connect' : status.state;
       if (
         m &&
+        !status.intentional &&
         (status.state === 'connected' ||
           status.state === 'error' ||
           status.state === 'disconnected')
@@ -152,7 +159,7 @@ export default function App() {
           name: m.name,
           host: m.host,
           state: stateLabel,
-          message: status.state,
+          message: status.message || status.state,
         });
       }
       if (status.state === 'connected' && m) {
