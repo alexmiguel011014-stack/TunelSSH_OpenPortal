@@ -47,5 +47,6 @@ describe('VNC credential and retry policy', () => {
     expect(isRetryableVncState('authentication-failed')).toBe(false);
     expect(isRetryableVncState('credentials-required')).toBe(false);
     expect(isRetryableVncState('access-denied')).toBe(false);
+    expect(isRetryableVncState('server-refused')).toBe(false);
   });
 });

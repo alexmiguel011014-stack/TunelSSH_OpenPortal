@@ -36,6 +36,7 @@ export default function RemoteViewer({ machine, reconnectFlag }) {
     connected: { color: 'bg-success', label: 'Conectado' },
     'credentials-required': { color: 'bg-warning', label: 'Senha necessária' },
     'authentication-failed': { color: 'bg-danger', label: 'Senha recusada' },
+    'server-refused': { color: 'bg-danger', label: 'VNC recusou a conexão' },
     'connection-lost': { color: 'bg-danger', label: 'Conexão perdida' },
     connecting: { color: 'bg-warning', label: 'Conectando...' },
     error: { color: 'bg-danger', label: 'Erro' },
@@ -297,6 +298,18 @@ export default function RemoteViewer({ machine, reconnectFlag }) {
         );
         return;
       }
+      if (state === 'server-refused') {
+        if (!terminalReportedRef.current) {
+          terminalReportedRef.current = true;
+          recordVncState(state, 'Servidor VNC recusou a conexão');
+          if (addLog)
+            addLog(
+              `O TightVNC de ${machine.name} recusou a conexão antes de pedir a senha (${data.message}). Após várias senhas erradas ele bloqueia este IP por alguns minutos: aguarde e use "Reconectar", ou reinicie o serviço TightVNC no PC remoto.`,
+              'error',
+            );
+        }
+        return;
+      }
       if (state === 'connection-lost') {
         if (!terminalReportedRef.current) {
           terminalReportedRef.current = true;
@@ -314,6 +327,7 @@ export default function RemoteViewer({ machine, reconnectFlag }) {
     window.addEventListener('message', handleMessage);
     return () => window.removeEventListener('message', handleMessage);
   }, [
+    addLog,
     attemptId,
     handleReconnect,
     machine.hasVncPassword,

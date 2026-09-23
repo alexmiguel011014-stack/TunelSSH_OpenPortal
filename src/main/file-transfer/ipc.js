@@ -220,7 +220,7 @@ function registerFileTransferIpc(mainWindow) {
       return { success: true, sessionId: res.sessionId, reused: res.reused };
     } catch (err) {
       send(mainWindow, 'ft:status', { host, state: 'error', message: err.message });
-      return { success: false, message: err.message };
+      return { success: false, rejected: err.rejected === true, message: err.message };
     }
   });
 

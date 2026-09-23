@@ -5,7 +5,12 @@ const { FileAgentSession } = require('../file-transfer/file-agent');
 const { FrameDecoder } = require('../file-transfer/protocol');
 
 const SIGNAL_PORT = 18902;
-const REQUEST_TIMEOUT = 15000;
+// Dois prazos distintos: abrir o TCP é rápido (falha → pode tentar de novo),
+// mas depois que o pedido chega o PC remoto mostra "Aceitar/Rejeitar" e uma
+// pessoa precisa ir até lá clicar — 15s totais não bastavam, e cada nova
+// tentativa abria OUTRA janela de aprovação lá (aceitar a antiga não fazia nada).
+const CONNECT_TIMEOUT = 8000;
+const DECISION_TIMEOUT = 60000;
 const MAX_ATTEMPTS = 3;
 const RETRY_DELAY = 5000;
 
@@ -64,6 +69,11 @@ class ConnectionRequestServer extends EventEmitter {
         socket.on('error', onFileSessionEnd);
       };
 
+      // Se quem pediu desistir (timeout/cancelou) antes da decisão, o host
+      // fecha a janela de aprovação pendente em vez de deixá-la órfã.
+      const pendingDecision = new AbortController();
+      socket.on('close', () => pendingDecision.abort());
+
       const dataHandler = (d) => {
         buffer = Buffer.concat([buffer, d]);
         let msg = null;
@@ -103,7 +113,7 @@ class ConnectionRequestServer extends EventEmitter {
           };
 
           if (this.onRequest) {
-            this.onRequest(req, respond);
+            this.onRequest(req, respond, pendingDecision.signal);
           } else {
             respond({
               type: 'connect-response',
@@ -155,8 +165,19 @@ class ConnectionRequestServer extends EventEmitter {
   }
 }
 
+// `delivered`: o pedido já chegou ao PC remoto (TCP aberto e pedido escrito).
+// Antes disso vale tentar de novo; depois, o PC remoto já mostra a janela de
+// aprovação e repetir só empilharia outra janela lá.
+function requestError(message, delivered) {
+  const err = new Error(message);
+  err.delivered = delivered;
+  return err;
+}
+
 function sendConnectRequestOnce(host, fromName, fromIp, port = SIGNAL_PORT, opts = {}) {
   const wantsTunnel = !!opts.wantsTunnel;
+  const connectTimeout = opts.connectTimeoutMs || CONNECT_TIMEOUT;
+  const decisionTimeout = opts.decisionTimeoutMs || DECISION_TIMEOUT;
 
   return new Promise((resolve, reject) => {
     let socket;
@@ -167,6 +188,7 @@ function sendConnectRequestOnce(host, fromName, fromIp, port = SIGNAL_PORT, opts
     }
 
     let responded = false;
+    let delivered = false;
     let buffer = Buffer.alloc(0);
     let timer = null;
 
@@ -180,13 +202,24 @@ function sendConnectRequestOnce(host, fromName, fromIp, port = SIGNAL_PORT, opts
 
     timer = setTimeout(() => {
       fail(
-        new Error(
-          'Sem resposta do PC remoto (timeout de 15s) — verifique se o OpenPortal está aberto lá e se o Firewall do Windows não bloqueou o app na primeira execução',
+        requestError(
+          `Não foi possível contactar ${host}:${port} (sem resposta em ${connectTimeout / 1000}s) — verifique se o OpenPortal está aberto no PC remoto e se o Firewall do Windows liberou o app`,
+          false,
         ),
       );
-    }, REQUEST_TIMEOUT);
+    }, connectTimeout);
 
     socket.on('connect', () => {
+      delivered = true;
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        fail(
+          requestError(
+            `O PC remoto recebeu o pedido, mas ninguém respondeu em ${decisionTimeout / 1000}s — clique em "Aceitar" na janela "Solicitação de conexão" do OpenPortal no PC remoto`,
+            true,
+          ),
+        );
+      }, decisionTimeout);
       socket.write(
         JSON.stringify({
           type: 'connect-request',
@@ -226,30 +259,38 @@ function sendConnectRequestOnce(host, fromName, fromIp, port = SIGNAL_PORT, opts
       }
 
       if (!socket.destroyed) socket.destroy();
-      resolve({ approved: !!msg.approved, message: msg.message || '' });
+      resolve({
+        approved: !!msg.approved,
+        rejected: msg.rejected === true,
+        message: msg.message || '',
+      });
     });
 
     socket.on('error', (err) => {
       const hint =
         err.code === 'ECONNREFUSED' ? ' — verifique se o OpenPortal está aberto no PC remoto' : '';
       fail(
-        new Error(`Não foi possível contactar ${host}:${port} (${err.code || err.message})${hint}`),
+        requestError(
+          `Não foi possível contactar ${host}:${port} (${err.code || err.message})${hint}`,
+          delivered,
+        ),
       );
     });
 
     socket.on('close', () => {
-      fail(new Error('Conexão encerrada pelo PC remoto'));
+      fail(requestError('Conexão encerrada pelo PC remoto', delivered));
     });
   });
 }
 
 function sendConnectRequest(host, fromName, fromIp, port = SIGNAL_PORT, opts = {}) {
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const retryDelay = opts.retryDelayMs ?? RETRY_DELAY;
 
   return (async () => {
     let lastError = null;
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-      if (attempt > 1) await sleep(RETRY_DELAY);
+      if (attempt > 1) await sleep(retryDelay);
       try {
         const res = await sendConnectRequestOnce(host, fromName, fromIp, port, opts);
         return res;
@@ -258,6 +299,7 @@ function sendConnectRequest(host, fromName, fromIp, port = SIGNAL_PORT, opts = {
         console.error(
           `[connection-request] Tentativa ${attempt}/${MAX_ATTEMPTS} falhou para ${host}:${port}: ${err.message}`,
         );
+        if (err.delivered) break;
       }
     }
     throw lastError || new Error('Falha ao contactar o PC remoto');

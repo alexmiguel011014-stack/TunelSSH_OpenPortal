@@ -96,7 +96,23 @@ function reportSessionActivity(req) {
   }
 }
 
-async function handleConnectionRequest(req, respond) {
+// Pedido de acesso com o app minimizado ou atrás de outras janelas: a janela
+// modal de aprovação ficava invisível e o pedido expirava no outro PC.
+function drawAttention(win) {
+  if (!win) return () => {};
+  if (win.isMinimized()) win.restore();
+  win.show();
+  win.setAlwaysOnTop(true);
+  win.focus();
+  win.flashFrame(true);
+  return () => {
+    if (win.isDestroyed()) return;
+    win.setAlwaysOnTop(false);
+    win.flashFrame(false);
+  };
+}
+
+async function handleConnectionRequest(req, respond, signal) {
   const { dialog } = require('electron');
   const finish = (approved) =>
     respond({ type: 'connect-response', requestId: req.requestId, approved });
@@ -109,6 +125,8 @@ async function handleConnectionRequest(req, respond) {
   // instalado, whois falhou, IP não é peer da tailnet) vira 'unknown', que
   // nunca casa com a allow-list nem é útil como identidade de atividade.
   req.identity = await resolveIdentity(req.remoteAddress);
+  // Quem pediu já desistiu enquanto a identidade era resolvida.
+  if (signal?.aborted) return;
 
   const { allowedUsers } = readConfig();
   if (
@@ -136,9 +154,15 @@ async function handleConnectionRequest(req, respond) {
     buttons: ['Aceitar', 'Rejeitar'],
     defaultId: 0,
     cancelId: 1,
+    // Fecha a janela sozinha se o PC que pediu desistir (timeout/cancelou).
+    signal,
   };
+  const releaseAttention = drawAttention(parent);
   const show = parent ? dialog.showMessageBox(parent, options) : dialog.showMessageBox(options);
-  show.then(({ response }) => finish(response === 0)).catch(() => finish(false));
+  show
+    .then(({ response }) => finish(!signal?.aborted && response === 0))
+    .catch(() => finish(false))
+    .finally(releaseAttention);
 }
 
 app.whenReady().then(() => {
@@ -161,8 +185,8 @@ app.whenReady().then(() => {
         : err.message;
   });
 
-  requestServer = new ConnectionRequestServer((req, respond) =>
-    handleConnectionRequest(req, respond),
+  requestServer = new ConnectionRequestServer((req, respond, signal) =>
+    handleConnectionRequest(req, respond, signal),
   );
   requestServer.start();
   requestServer.server.on('listening', () => {

@@ -87,3 +87,69 @@ describe('ConnectionRequestServer', () => {
     }
   });
 });
+
+describe('sendConnectRequest — pedido de acesso', () => {
+  it('relays an explicit rejection as rejected, not as a network failure', async () => {
+    const server = await startServer((req, respond) =>
+      respond({ type: 'connect-response', requestId: req.requestId, approved: false }),
+    );
+    const port = server.server.address().port;
+    try {
+      const res = await sendConnectRequest('127.0.0.1', 'Tester', '127.0.0.1', port);
+      expect(res).toMatchObject({ approved: false, rejected: true });
+    } finally {
+      server.stop();
+    }
+  });
+
+  it('never re-sends a request the remote already received (no stacked approval dialogs)', async () => {
+    const onRequest = vi.fn();
+    const server = await startServer(onRequest);
+    const port = server.server.address().port;
+    try {
+      await expect(
+        sendConnectRequest('127.0.0.1', 'Tester', '127.0.0.1', port, {
+          decisionTimeoutMs: 150,
+          retryDelayMs: 0,
+        }),
+      ).rejects.toMatchObject({ delivered: true });
+      expect(onRequest).toHaveBeenCalledTimes(1);
+    } finally {
+      server.stop();
+    }
+  });
+
+  it('closes the pending approval on the host when the requester gives up', async () => {
+    let signal = null;
+    const server = await startServer((req, respond, s) => {
+      signal = s;
+    });
+    const port = server.server.address().port;
+    try {
+      await expect(
+        sendConnectRequest('127.0.0.1', 'Tester', '127.0.0.1', port, { decisionTimeoutMs: 150 }),
+      ).rejects.toThrow(/ninguém respondeu/);
+      await vi.waitFor(() => expect(signal?.aborted).toBe(true));
+    } finally {
+      server.stop();
+    }
+  });
+
+  it('retries while the request has not reached the remote app yet', async () => {
+    const probe = await startServer(() => {});
+    const port = probe.server.address().port;
+    await new Promise((resolve) => probe.server.close(resolve));
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      await expect(
+        sendConnectRequest('127.0.0.1', 'Tester', '127.0.0.1', port, {
+          connectTimeoutMs: 500,
+          retryDelayMs: 0,
+        }),
+      ).rejects.toMatchObject({ delivered: false });
+      expect(errors).toHaveBeenCalledTimes(3);
+    } finally {
+      errors.mockRestore();
+    }
+  });
+});

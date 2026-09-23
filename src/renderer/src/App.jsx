@@ -265,7 +265,7 @@ export default function App() {
           const message = (res && res.message) || 'Conexão recusada ou sem resposta';
           if (rejected) {
             console.warn(`[app] Connection explicitly rejected by user: ${message}`);
-            addLog(`Conexão recusada pelo PC remoto: ${message}`, 'error');
+            addLog(`Acesso recusado por quem está em ${machine.name}`, 'error');
             setStatuses((prev) => ({ ...prev, [machine.id]: 'access-denied' }));
             recordConn({
               name: machine.name,

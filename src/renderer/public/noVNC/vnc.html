@@ -61,7 +61,7 @@
 
   <script type="module">
     import RFB from './novnc.js';
-    import { isAuthenticationFailure, isExpectedParentMessage } from './vnc-protocol.js';
+    import { isAuthenticationFailure, isExpectedParentMessage, isServerRefusal } from './vnc-protocol.js';
 
     const params = new URLSearchParams(window.location.search);
     const host = params.get('host');
@@ -185,10 +185,16 @@
           );
         });
 
-        rfb.addEventListener('securityfailure', () => {
-          errorMsg.textContent = 'Senha VNC não aceita';
+        rfb.addEventListener('securityfailure', (e) => {
+          const reason = e.detail?.reason || '';
           connectingOverlay.classList.add('hidden');
           errorOverlay.classList.add('visible');
+          if (isServerRefusal({ context: rfb?._securityContext, reason })) {
+            errorMsg.textContent = 'O TightVNC recusou a conexão antes de pedir a senha';
+            reportTerminal('server-refused', reason || 'Servidor VNC recusou a conexão');
+            return;
+          }
+          errorMsg.textContent = 'Senha VNC não aceita';
           reportTerminal('authentication-failed', errorMsg.textContent);
         });
       } catch (err) {

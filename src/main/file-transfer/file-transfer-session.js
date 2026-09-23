@@ -45,7 +45,14 @@ async function connect(host, opts = {}) {
     const fromIp = opts.fromIp || '';
     const res = await sendConnectRequest(target, fromName, fromIp, SIGNAL_PORT, { wantsTunnel: true });
     if (!res.approved || !res.socket) {
-      throw new Error(res.message || 'Conexão de arquivos recusada pelo PC remoto');
+      const err = new Error(
+        res.message ||
+          (res.rejected
+            ? 'Acesso recusado no PC remoto'
+            : 'Conexão de arquivos recusada pelo PC remoto'),
+      );
+      err.rejected = res.rejected === true;
+      throw err;
     }
 
     const client = new FileClient(res.socket);
