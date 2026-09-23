@@ -217,7 +217,12 @@ function registerFileTransferIpc(mainWindow) {
       send(mainWindow, 'ft:status', { host, state: 'connecting' });
       const res = await fileTransferSession.connect(host, opts || {});
       send(mainWindow, 'ft:status', { host, state: 'connected', sessionId: res.sessionId });
-      return { success: true, sessionId: res.sessionId, reused: res.reused };
+      return {
+        success: true,
+        sessionId: res.sessionId,
+        reused: res.reused,
+        vncPassword: res.vncPassword || '',
+      };
     } catch (err) {
       send(mainWindow, 'ft:status', { host, state: 'error', message: err.message });
       return { success: false, rejected: err.rejected === true, message: err.message };

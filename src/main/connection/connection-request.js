@@ -113,7 +113,11 @@ class ConnectionRequestServer extends EventEmitter {
           };
 
           if (this.onRequest) {
-            this.onRequest(req, respond, pendingDecision.signal);
+            // A senha de acesso vai à parte: `req` circula por eventos e pelo
+            // log de atividade e não pode carregá-la.
+            const sessionPassword =
+              typeof msg.sessionPassword === 'string' ? msg.sessionPassword : '';
+            this.onRequest(req, respond, pendingDecision.signal, sessionPassword);
           } else {
             respond({
               type: 'connect-response',
@@ -234,6 +238,7 @@ function sendConnectRequestOnce(host, fromName, fromIp, port = SIGNAL_PORT, opts
           fromName,
           fromIp,
           capability: wantsTunnel ? 'tunnel' : undefined,
+          sessionPassword: opts.sessionPassword || undefined,
         }),
       );
     });
@@ -249,6 +254,9 @@ function sendConnectRequestOnce(host, fromName, fromIp, port = SIGNAL_PORT, opts
       responded = true;
       if (timer) clearTimeout(timer);
 
+      // Senha do TightVNC do PC remoto, entregue junto com a aprovação.
+      const vncPassword = typeof msg.vncPassword === 'string' ? msg.vncPassword : '';
+
       if (msg.type !== 'connect-response') {
         if (!socket.destroyed) socket.destroy();
         resolve({ approved: false, message: 'Resposta inválida do PC remoto' });
@@ -261,7 +269,7 @@ function sendConnectRequestOnce(host, fromName, fromIp, port = SIGNAL_PORT, opts
         socket.removeAllListeners('data');
         socket.removeAllListeners('error');
         socket.removeAllListeners('close');
-        resolve({ approved: true, message: msg.message || '', socket });
+        resolve({ approved: true, message: msg.message || '', vncPassword, socket });
         return;
       }
 
@@ -270,6 +278,7 @@ function sendConnectRequestOnce(host, fromName, fromIp, port = SIGNAL_PORT, opts
         approved: !!msg.approved,
         rejected: msg.rejected === true,
         message: msg.message || '',
+        vncPassword,
       });
     });
 

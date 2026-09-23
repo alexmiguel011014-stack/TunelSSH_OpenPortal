@@ -228,8 +228,10 @@ export default function App() {
   // libera a sessão de arquivos (ver file-transfer-session.js no main),
   // então a tela de Arquivos nunca precisa pedir IP nem permissão de novo.
   const connectMachine = useCallback(
-    async (machine) => {
-      if (!machine || !machine.host) return;
+    async ({ sessionPassword, ...machine } = {}) => {
+      // A senha de acesso vale só para este pedido: nunca entra no estado, no
+      // histórico nem no log.
+      if (!machine.host) return;
       if (connectedMachines[machine.id]) {
         setShowConfig(false);
         setShowFiles(false);
@@ -259,19 +261,20 @@ export default function App() {
         );
         const res = await window.electronAPI.ftConnect(machine.host, {
           fromIp,
+          sessionPassword,
         });
         if (!res || !res.success) {
           const rejected = res?.rejected === true;
           const message = (res && res.message) || 'Conexão recusada ou sem resposta';
           if (rejected) {
             console.warn(`[app] Connection explicitly rejected by user: ${message}`);
-            addLog(`Acesso recusado por quem está em ${machine.name}`, 'error');
+            addLog(`${machine.name}: ${message}`, 'error');
             setStatuses((prev) => ({ ...prev, [machine.id]: 'access-denied' }));
             recordConn({
               name: machine.name,
               host: machine.host,
               state: 'access-denied',
-              message: 'Conexão recusada pelo usuário',
+              message,
             });
           } else {
             console.warn(`[app] Connection failed: ${message}`);
@@ -292,7 +295,11 @@ export default function App() {
         }
         setStatuses((prev) => ({ ...prev, [machine.id]: 'opening-vnc' }));
         setConnectedMachines((prev) =>
-          connectMachineEntry(prev, machine, { ftSessionId: res.sessionId }),
+          connectMachineEntry(prev, machine, {
+            ftSessionId: res.sessionId,
+            // Senha do TightVNC entregue pelo PC remoto na aprovação: só em memória.
+            vncGrant: res.vncPassword || '',
+          }),
         );
         setFocusedMachineId(machine.id);
         console.log(
@@ -468,7 +475,11 @@ export default function App() {
                 {resolveTransport(entry.machine) === 'rdp' ? (
                   <RdpViewer machine={entry.machine} isVisible={isFocusedAndVisible} />
                 ) : (
-                  <RemoteViewer machine={entry.machine} reconnectFlag={reconnectFlag} />
+                  <RemoteViewer
+                    machine={entry.machine}
+                    vncGrant={entry.vncGrant}
+                    reconnectFlag={reconnectFlag}
+                  />
                 )}
               </div>
             );

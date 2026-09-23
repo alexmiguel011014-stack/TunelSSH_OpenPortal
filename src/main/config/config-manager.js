@@ -85,6 +85,8 @@ function readConfig() {
     const { tokenEnc, ...rest } = config.telegram;
     config.telegram = { ...rest, token: decryptSecret(tokenEnc) };
   }
+  // A senha do TightVNC deste PC nunca vai para o renderer.
+  delete config.hostVnc;
   return config;
 }
 
@@ -99,7 +101,8 @@ function writeConfig(config) {
     // top-level fields (allowedUsers, reportTo, telegram) not part of this
     // particular save.
     const existing = readStoredConfig();
-    const toWrite = { ...existing, ...config };
+    // hostVnc só muda por setHostVncPassword, nunca pelo que o renderer mandar.
+    const toWrite = { ...existing, ...config, hostVnc: existing.hostVnc };
     if (Array.isArray(config.machines)) {
       const existingById = new Map(
         (existing.machines || []).map((machine) => [machine.id, machine]),
@@ -154,4 +157,26 @@ function setVncCredential(machineId, password) {
   }
 }
 
-module.exports = { getVncCredential, readConfig, setVncCredential, writeConfig, DEFAULT_CONFIG };
+// Senha do TightVNC DESTE PC, gerada e aplicada pelo app (ver host-vnc.js).
+function getHostVncPassword() {
+  return decryptSecret(readStoredConfig().hostVnc?.passwordEnc);
+}
+
+function setHostVncPassword(password) {
+  if (!fs.existsSync(CONFIG_DIR)) {
+    fs.mkdirSync(CONFIG_DIR, { recursive: true });
+  }
+  const config = readStoredConfig();
+  config.hostVnc = { passwordEnc: encryptSecret(password), updatedAt: Date.now() };
+  writeStoredConfig(config);
+}
+
+module.exports = {
+  getHostVncPassword,
+  getVncCredential,
+  readConfig,
+  setHostVncPassword,
+  setVncCredential,
+  writeConfig,
+  DEFAULT_CONFIG,
+};

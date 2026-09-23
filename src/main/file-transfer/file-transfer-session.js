@@ -36,14 +36,19 @@ async function connect(host, opts = {}) {
 
   if (!opts.force) {
     const existing = findLiveSessionByHost(target);
-    if (existing) return { sessionId: existing.sessionId, reused: true };
+    if (existing) {
+      return { sessionId: existing.sessionId, reused: true, vncPassword: existing.vncPassword };
+    }
     if (connecting.has(target)) return connecting.get(target);
   }
 
   const task = (async () => {
     const fromName = opts.fromName || os.hostname() || 'PC';
     const fromIp = opts.fromIp || '';
-    const res = await sendConnectRequest(target, fromName, fromIp, SIGNAL_PORT, { wantsTunnel: true });
+    const res = await sendConnectRequest(target, fromName, fromIp, SIGNAL_PORT, {
+      wantsTunnel: true,
+      sessionPassword: opts.sessionPassword,
+    });
     if (!res.approved || !res.socket) {
       const err = new Error(
         res.message ||
@@ -57,12 +62,13 @@ async function connect(host, opts = {}) {
 
     const client = new FileClient(res.socket);
     const sessionId = nextSessionId();
-    sessions.set(sessionId, { sessionId, host: target, client });
+    const vncPassword = res.vncPassword || '';
+    sessions.set(sessionId, { sessionId, host: target, client, vncPassword });
 
     res.socket.on('close', () => sessions.delete(sessionId));
     res.socket.on('error', () => sessions.delete(sessionId));
 
-    return { sessionId, reused: false };
+    return { sessionId, reused: false, vncPassword };
   })();
 
   connecting.set(target, task);

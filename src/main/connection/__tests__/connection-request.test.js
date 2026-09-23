@@ -123,6 +123,30 @@ describe('sendConnectRequest — pedido de acesso', () => {
     }
   });
 
+  it('hands the access password to the host apart from req and returns the granted VNC password', async () => {
+    let received = null;
+    const server = await startServer((req, respond, signal, sessionPassword) => {
+      received = { req, sessionPassword };
+      respond({
+        type: 'connect-response',
+        requestId: req.requestId,
+        approved: true,
+        vncPassword: 'Vnc12345',
+      });
+    });
+    const port = server.server.address().port;
+    try {
+      const res = await sendConnectRequest('127.0.0.1', 'Tester', '127.0.0.1', port, {
+        sessionPassword: 'ABCD-EFGH',
+      });
+      expect(res).toMatchObject({ approved: true, vncPassword: 'Vnc12345' });
+      expect(received.sessionPassword).toBe('ABCD-EFGH');
+      expect(JSON.stringify(received.req)).not.toContain('ABCD-EFGH');
+    } finally {
+      server.stop();
+    }
+  });
+
   it('never re-sends a request the remote already received (no stacked approval dialogs)', async () => {
     const onRequest = vi.fn();
     const server = await startServer(onRequest);

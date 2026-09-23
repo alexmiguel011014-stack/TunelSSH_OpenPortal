@@ -3,6 +3,7 @@ import { Monitor } from 'lucide-react';
 import { MachineContext } from '../../App';
 import { isPrivateNetworkHost } from '../../shared/lib/net';
 import { normalizeQuickVncHost } from '../../shared/lib/vncSession';
+import LocalAccessCard from './LocalAccessCard';
 
 const sectionTitle = 'text-xs font-semibold mb-3 uppercase tracking-wide text-text-muted';
 
@@ -30,6 +31,7 @@ export default function Dashboard() {
   const { machines, connectedMachines, focusedMachineId, connectMachine, addLog, connHistory } =
     useContext(MachineContext);
   const [quickIp, setQuickIp] = useState('');
+  const [quickPassword, setQuickPassword] = useState('');
   const [connecting, setConnecting] = useState(false);
 
   // connectMachine já resolve sozinho: se a máquina estiver conectada, só
@@ -55,9 +57,12 @@ export default function Dashboard() {
         name: 'Conexão Direta',
         host: ip,
         port: 5900,
+        sessionPassword: quickPassword.trim(),
       });
     } finally {
       setConnecting(false);
+      // A senha de acesso vale para um único pedido (o outro PC a troca após o uso).
+      setQuickPassword('');
     }
   };
 
@@ -68,6 +73,8 @@ export default function Dashboard() {
       <div className="max-w-3xl w-full">
         <h1 className="text-2xl font-light mb-1 text-text-primary">OpenPortal Remote</h1>
         <p className="text-sm text-text-faint mb-6">Acesso remoto seguro via Tailscale</p>
+
+        <LocalAccessCard />
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div className="bg-surface rounded-xl border border-line-subtle p-5">
@@ -132,9 +139,26 @@ export default function Dashboard() {
                 {connecting ? 'Solicitando...' : 'Solicitar acesso'}
               </button>
             </div>
+            <div className="mt-2">
+              <label className="block text-[11px] text-text-faint mb-1">
+                Senha de acesso do PC remoto (opcional)
+              </label>
+              <input
+                type="text"
+                value={quickPassword}
+                onChange={(e) => setQuickPassword(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') handleQuickConnect();
+                }}
+                placeholder="XXXX-XXXX"
+                autoComplete="off"
+                spellCheck={false}
+                className="w-full px-2.5 py-2 rounded-lg border border-line bg-inset text-text-primary text-sm font-mono uppercase outline-none focus:border-accent transition-colors"
+              />
+            </div>
             <div className="text-[11px] text-text-faint mt-2">
-              Use apenas o IP, sem porta. A porta VNC 5900 é usada automaticamente; a senha só será
-              solicitada se o servidor VNC do PC remoto pedir.
+              Use apenas o IP, sem porta. Com a senha de acesso mostrada no outro PC a conexão entra
+              direto; sem ela, alguém lá precisa clicar em Aceitar.
             </div>
           </div>
         </div>

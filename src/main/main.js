@@ -15,8 +15,14 @@ const { startWebSocketProxy } = require('./connection/proxy');
 const { registerIpcHandlers } = require('./core/ipc-handlers');
 const { ConnectionRequestServer, sendActivityEvent } = require('./connection/connection-request');
 const { registerFileTransferIpc } = require('./file-transfer/ipc');
-const { resolveIdentity, isAllowed, resolveLoginToIp } = require('./connection/identity');
-const { readConfig } = require('./config/config-manager');
+const {
+  resolveIdentity,
+  isAllowed,
+  resolveLoginToIp,
+  normalizeIp,
+} = require('./connection/identity');
+const { SessionPasswordGate } = require('./connection/session-password');
+const { getHostVncPassword, readConfig } = require('./config/config-manager');
 const { addActivityEntry } = require('./config/activity-log');
 const { sendTelegramAlert } = require('./activity/telegram');
 
@@ -26,6 +32,8 @@ let mainWindow = null;
 let wss = null;
 let requestServer = null;
 let updater = null;
+// Senha de acesso exibida na tela inicial (ver session-password.js).
+const accessGate = new SessionPasswordGate();
 
 const isDev = process.env.NODE_ENV === 'development';
 const PROXY_PORT = 18900;
@@ -112,10 +120,24 @@ function drawAttention(win) {
   };
 }
 
-async function handleConnectionRequest(req, respond, signal) {
+async function handleConnectionRequest(req, respond, signal, sessionPassword) {
   const { dialog } = require('electron');
-  const finish = (approved) =>
-    respond({ type: 'connect-response', requestId: req.requestId, approved });
+  const logDecision = (decision) =>
+    console.log(
+      `[main] Pedido de acesso ${req.requestId} de ${req.fromName} (${req.remoteAddress}): ${decision}`,
+    );
+  // Aprovado: a senha do TightVNC deste PC (quando o app a gerencia) segue na
+  // resposta, pelo túnel Tailscale, para quem pediu não precisar digitá-la.
+  const finish = (approved, extra = {}) => {
+    const vncPassword = approved ? getHostVncPassword() : '';
+    respond({
+      type: 'connect-response',
+      requestId: req.requestId,
+      approved,
+      ...(vncPassword ? { vncPassword } : {}),
+      ...extra,
+    });
+  };
 
   // Resolvido sempre (não só quando allowedUsers existe): GOALS 4 usa essa
   // identidade verificada para atribuir sessões no log de atividade, mesmo
@@ -126,7 +148,34 @@ async function handleConnectionRequest(req, respond, signal) {
   // nunca casa com a allow-list nem é útil como identidade de atividade.
   req.identity = await resolveIdentity(req.remoteAddress);
   // Quem pediu já desistiu enquanto a identidade era resolvida.
-  if (signal?.aborted) return;
+  if (signal?.aborted) {
+    logDecision('abandonado por quem pediu');
+    return;
+  }
+
+  // Senha de acesso da tela inicial: certa entra sem clique (e a senha muda);
+  // errada é recusada, e várias erradas bloqueiam o IP por alguns minutos.
+  if (sessionPassword) {
+    const verdict = accessGate.check(normalizeIp(req.remoteAddress), sessionPassword);
+    if (verdict === 'ok') {
+      logDecision('aprovado pela senha de acesso');
+      finish(true);
+      accessGate.rotate();
+      return;
+    }
+    const locked = verdict === 'locked';
+    logDecision(
+      locked
+        ? 'recusado (IP bloqueado por senhas erradas)'
+        : 'recusado (senha de acesso incorreta)',
+    );
+    finish(false, {
+      message: locked
+        ? 'Muitas senhas de acesso erradas: aguarde alguns minutos e tente de novo'
+        : 'Senha de acesso incorreta',
+    });
+    return;
+  }
 
   const { allowedUsers } = readConfig();
   if (
@@ -160,7 +209,13 @@ async function handleConnectionRequest(req, respond, signal) {
   const releaseAttention = drawAttention(parent);
   const show = parent ? dialog.showMessageBox(parent, options) : dialog.showMessageBox(options);
   show
-    .then(({ response }) => finish(!signal?.aborted && response === 0))
+    .then(({ response }) => {
+      const approved = !signal?.aborted && response === 0;
+      let decision = approved ? 'aprovado manualmente' : 'recusado manualmente';
+      if (signal?.aborted) decision = 'abandonado por quem pediu';
+      logDecision(decision);
+      finish(approved);
+    })
     .catch(() => finish(false))
     .finally(releaseAttention);
 }
@@ -185,8 +240,8 @@ app.whenReady().then(() => {
         : err.message;
   });
 
-  requestServer = new ConnectionRequestServer((req, respond, signal) =>
-    handleConnectionRequest(req, respond, signal),
+  requestServer = new ConnectionRequestServer((req, respond, signal, sessionPassword) =>
+    handleConnectionRequest(req, respond, signal, sessionPassword),
   );
   requestServer.start();
   requestServer.server.on('listening', () => {
@@ -240,7 +295,7 @@ app.whenReady().then(() => {
     }
   });
 
-  registerIpcHandlers(mainWindow);
+  registerIpcHandlers(mainWindow, { accessGate });
   registerFileTransferIpc(mainWindow);
 
   // Diagnóstico completo de portas/servidores locais, para o painel de

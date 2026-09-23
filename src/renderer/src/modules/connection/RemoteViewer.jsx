@@ -17,7 +17,7 @@ const QUALITY_LEVELS = [
 const MAX_VNC_RETRIES = 5;
 const VNC_RETRY_DELAYS = [3000, 5000, 10000, 15000, 20000];
 
-export default function RemoteViewer({ machine, reconnectFlag }) {
+export default function RemoteViewer({ machine, vncGrant, reconnectFlag }) {
   const iframeRef = useRef(null);
   const containerRef = useRef(null);
   const [iframeKey, setIframeKey] = useState(0);
@@ -48,6 +48,11 @@ export default function RemoteViewer({ machine, reconnectFlag }) {
   const reconnectTimerRef = useRef(null);
   const mountedRef = useRef(true);
   const savedCredentialTriedRef = useRef(false);
+  // Senha do TightVNC que o PC remoto entregou junto com a aprovação: usada
+  // sozinha em cada tentativa desta sessão (inclui reconexões), até o
+  // TightVNC recusá-la uma vez.
+  const grantTriedRef = useRef(false);
+  const grantRejectedRef = useRef(false);
   const pendingCredentialRef = useRef('');
   const activeAttemptRef = useRef('');
   const terminalReportedRef = useRef(false);
@@ -199,6 +204,7 @@ export default function RemoteViewer({ machine, reconnectFlag }) {
   useEffect(() => {
     activeAttemptRef.current = attemptId;
     terminalReportedRef.current = false;
+    grantTriedRef.current = false;
     if (!pendingCredentialRef.current) savedCredentialTriedRef.current = false;
   }, [attemptId]);
 
@@ -233,6 +239,11 @@ export default function RemoteViewer({ machine, reconnectFlag }) {
         const password = pendingCredentialRef.current;
         pendingCredentialRef.current = '';
         postToViewer({ type: 'vnc-credentials', password });
+        return;
+      }
+      if (vncGrant && !grantRejectedRef.current && !grantTriedRef.current) {
+        grantTriedRef.current = true;
+        postToViewer({ type: 'vnc-credentials', password: vncGrant });
         return;
       }
       if (
@@ -290,12 +301,15 @@ export default function RemoteViewer({ machine, reconnectFlag }) {
           terminalReportedRef.current = true;
           recordVncState(state, 'Senha VNC não aceita');
         }
-        openCredentialDialog(
-          savedCredentialTriedRef.current
-            ? 'A senha VNC salva não foi aceita. Informe outra senha para tentar de novo.'
-            : 'A senha VNC não foi aceita. Confira a senha configurada no TightVNC.',
-          true,
-        );
+        let failure = savedCredentialTriedRef.current
+          ? 'A senha VNC salva não foi aceita. Informe outra senha para tentar de novo.'
+          : 'A senha VNC não foi aceita. Confira a senha configurada no TightVNC.';
+        if (grantTriedRef.current) {
+          grantRejectedRef.current = true;
+          failure =
+            'O TightVNC do PC remoto não aceitou a senha enviada por ele. Lá, use "Configurar TightVNC" de novo ou informe a senha aqui.';
+        }
+        openCredentialDialog(failure, true);
         return;
       }
       if (state === 'server-refused') {
@@ -339,6 +353,7 @@ export default function RemoteViewer({ machine, reconnectFlag }) {
     recordConn,
     scheduleReconnect,
     setStatuses,
+    vncGrant,
   ]);
 
   useEffect(() => {

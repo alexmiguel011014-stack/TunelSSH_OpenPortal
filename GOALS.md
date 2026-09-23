@@ -1268,6 +1268,33 @@ Suggested: gpt-6-astra · xhigh — this crosses the Electron/React/noVNC bounda
 
 ---
 
+## GOALS 9 — Session access password on the home screen (TeamViewer/AnyDesk style)
+
+```mermaid
+flowchart TD
+    A[PC B home screen shows its Tailscale IP and session password] --> B[PC A enters IP and password]
+    B --> C{PC B checks the password on port 18902}
+    C -->|Correct| D[Approve without a click and rotate the password]
+    C -->|Wrong| X[Reject; lock the IP after 5 wrong attempts]
+    C -->|No password| M[Accept/Reject dialog as before]
+    M -->|Accept| D
+    D --> E[Approval carries PC B's app-managed TightVNC password]
+    E --> F[noVNC authenticates by itself; no password dialog]
+```
+
+**Decisions (2026-09-23, user):** a correct session password grants access without anyone clicking Accept (without a password the existing Accept/Reject dialog stays); the app generates and applies each host's TightVNC password once (one UAC prompt per PC) and keeps it encrypted, so nobody needs to know or type it.
+
+- [x] **G9-1 — Session password gate:** `session-password.js` generates 8 unambiguous characters as `XXXX-XXXX`, keeps them in memory only, rotates on app start, after each successful use and on demand, compares in constant time, and locks the socket IP for 5 minutes after 5 wrong attempts. Done when: unit tests cover accept, normalization, reject, lockout and rotation.
+- [x] **G9-2 — Wire protocol:** `connect-request.sessionPassword` reaches the host apart from `req` (never logged nor copied into activity events) and an approved `connect-response` carries `vncPassword` when the host manages it. Done when: a round-trip test proves both.
+- [x] **G9-3 — App-managed host TightVNC password:** `host-vnc.js` generates 8 characters, writes `HKLM\SOFTWARE\TightVNC\Server\Password` (DES with the fixed VNC key) through elevated PowerShell, restarts `tvnserver`, and stores the password with safeStorage only after a real RFB VncAuth handshake against the host's own Tailscale IP succeeds. Done when: script, DES-vector and handshake tests pass and Electron's DES matches .NET's.
+- [x] **G9-4 — Home screen and request form:** an "Este PC" card shows IP and password with copy/regenerate plus a one-time "Configurar TightVNC" action; "Solicitar acesso por IP" gains an optional access-password field. Done when: the renderer build passes.
+- [x] **G9-5 — Viewer uses the grant:** the granted TightVNC password is kept only in memory for that connection, used for every attempt including reconnects, and replaced by the password dialog once the server rejects it. Done when: no password dialog appears on a configured host and none is persisted.
+- [ ] **G9-T1 — Two-PC acceptance `(manual)`:** configure TightVNC through the card on both PCs, then connect A→B and B→A with IP + password (no dialog), a wrong password (rejected; lockout after 5), no password (Accept/Reject), rotation after use, and a reconnect after network loss. Done when: every case behaves as above.
+
+**Known limitation:** TightVNC still listens on 5900 for the whole tailnet, so a viewer that received the app-managed password could reuse it directly until the host runs "Configurar TightVNC" again. Hardening for later: make TightVNC loopback-only and tunnel VNC through the approved 18902 connection.
+
+---
+
 ## Cross-goal ordering
 
 GOALS 1 and GOALS 2 (transport: multi-session VNC, then optional RDP) are independent of

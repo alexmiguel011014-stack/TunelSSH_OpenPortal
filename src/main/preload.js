@@ -51,6 +51,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Server/Agent status
   getLocalIp: () => ipcRenderer.invoke('server:localIp'),
 
+  // Tela inicial "Este PC" (IP + senha de acesso) e senha do TightVNC local
+  getLocalAccess: () => ipcRenderer.invoke('access:getLocal'),
+  rotateSessionPassword: () => ipcRenderer.invoke('access:rotate'),
+  onLocalAccessChanged: (callback) => {
+    const handler = (_, info) => callback(info);
+    ipcRenderer.on('access:changed', handler);
+    return () => ipcRenderer.removeListener('access:changed', handler);
+  },
+  setupHostVnc: () => ipcRenderer.invoke('hostVnc:setup'),
+
   checkForUpdates: () => ipcRenderer.invoke('app:checkUpdate'),
 
   notify: (opts) => ipcRenderer.invoke('app:notify', opts),
