@@ -1291,7 +1291,94 @@ flowchart TD
 - [x] **G9-5 — Viewer uses the grant:** the granted TightVNC password is kept only in memory for that connection, used for every attempt including reconnects, and replaced by the password dialog once the server rejects it. Done when: no password dialog appears on a configured host and none is persisted.
 - [x] **G9-T1 — Two-PC acceptance `(manual)`:** configure TightVNC through the card on both PCs, then connect A→B and B→A with IP + password (no dialog), a wrong password (rejected; lockout after 5), no password (Accept/Reject), rotation after use, and a reconnect after network loss. Done when: every case behaves as above. **Passed 2026-09-23** (PC A skytre ↔ PC B desktop-o18jvru, all ten cases) after two follow-up fixes: request errors show on the card instead of only in the log, and the IP/password inputs format themselves while typed.
 
-**Known limitation:** TightVNC still listens on 5900 for the whole tailnet, so a viewer that received the app-managed password could reuse it directly until the host runs "Configurar TightVNC" again. Hardening for later: make TightVNC loopback-only and tunnel VNC through the approved 18902 connection.
+**Known limitation:** TightVNC still listens on 5900 for the whole tailnet, so a viewer that received the app-managed password could reuse it directly until the host runs "Configurar TightVNC" again. Hardening for later: make TightVNC loopback-only and tunnel VNC through the approved 18902 connection. → Tracked as **GOALS 10**.
+
+---
+
+## GOALS 10 — Make approval the only way into a host's screen (fix)
+
+```mermaid
+flowchart TD
+    R[Repro: 5900 and 18900 reachable from another tailnet PC] --> C[Root cause: VNC and viewer proxy never gated by approval]
+    C --> P[Viewer proxy binds 127.0.0.1 only]
+    C --> T[Approval issues a per-session tunnel token]
+    T --> H[Host pipes VNC over 18902 to 127.0.0.1:5900]
+    H --> L[Configurar TightVNC also sets loopback-only and verifies it]
+    P --> Q[Regression tests]
+    L --> Q
+    Q --> M[Two-PC acceptance, manual]
+```
+
+Suggested: opus · xhigh — security boundary change across main process, wire protocol, TightVNC host configuration (UAC) and both PCs; a mistake either locks users out or leaves the bypass open.
+
+**Observed facts (2026-09-23, PC A skytre 100.66.218.65 ↔ PC B desktop-o18jvru 100.81.199.56, both on `claude/vnc-access-flow-testing-c6ec16` @ 571966a):**
+- TightVNC on each host accepts RFB on `0.0.0.0:5900` from every tailnet peer (an RFB probe from PC A to PC B:5900 is answered with security types VncAuth/Tight). The approval dialog and the GOALS 9 access password only gate port 18902; the VNC connection itself goes straight to 5900. Since GOALS 9 delivers the host's TightVNC password to every approved viewer, anyone who was approved once keeps a credential that works on 5900 without asking again until the host re-runs "Configurar TightVNC".
+- The viewer's WebSocket proxy (`src/main/connection/proxy.js`, `new WebSocket.Server({ port })`) listens on all interfaces (`::` 18900), and a TCP connect from PC A to PC B:18900 over Tailscale succeeds. It should only ever be used by the local renderer.
+- TightVNC for Windows documents the server options `ALLOWLOOPBACK` (0 default / 1 allow loopback connections) and `LOOPBACKONLY` (0 allow / 1 allow only loopback connections) under Access Control → Loopback connections ("TightVNC for Windows: Installing from MSI Packages", v2.7, Table 2). The service-mode registry values under `HKLM\SOFTWARE\TightVNC\Server` follow the same CamelCase names already proven by GOALS 9 (`Password`, `UseVncAuthentication`), i.e. `AllowLoopback` and `LoopbackOnly` (DWORD). Whether `LoopbackOnly` refuses the TCP connection or rejects it after accept is not documented — G10-C2 settles it empirically.
+
+### Repro
+
+- [ ] **G10-R1 — Record the exposure with redacted evidence `(manual)`:** from PC A run the read-only RFB probe (version + security types only, never a password) against PC B:5900, and a plain TCP connect against PC B:18900; repeat from PC B towards PC A. Done when: both results are recorded as "reachable" in this section with date and commit, and no credential was sent.
+
+### Root cause
+
+- [ ] **G10-C1 — Document the two unguarded paths:** trace (a) `RemoteViewer` → `vnc.html` → `proxy.js` → `net.createConnection(host, 5900)`, which never consults the approval, and (b) `startWebSocketProxy` binding without a host. Done when: each path is written down here with file:line and the reason approval cannot constrain it today.
+- [ ] **G10-C2 — Settle TightVNC's loopback behavior on a real host `(manual)`:** on one PC (UAC approved by the user), set `AllowLoopback=1`, `LoopbackOnly=1`, restart `tvnserver`, then check: RFB on `127.0.0.1:5900` still answers with VncAuth; RFB from the other PC to `<tailscale-ip>:5900` is refused or rejected before authentication. Done when: the observed behavior is recorded here. If `LoopbackOnly` does not block remote peers, record the fallback chosen instead (an `IpAccessControl` rule allowing only `127.0.0.1` and denying the rest) and use it in G10-F3.
+
+### Fix
+
+- [ ] **G10-F1 — Bind the viewer proxy to loopback:** `startWebSocketProxy` listens on `127.0.0.1` only (`new WebSocket.Server({ host: '127.0.0.1', port })`); nothing else changes because the renderer already uses `ws://127.0.0.1:18900`. Done when: `Get-NetTCPConnection -LocalPort 18900` shows only `127.0.0.1` and PC A cannot connect to PC B:18900.
+- [ ] **G10-F2 — Issue a tunnel token with every approval:** on any approval path in `handleConnectionRequest` (manual, access password, `allowedUsers`), the host creates a random token (`crypto.randomBytes(32)`, base64url) bound to the requester's socket IP (`normalizeIp(req.remoteAddress)`), returns it as `vncToken` in the `connect-response` next to `vncPassword`, and revokes it when that approved file session's socket closes (plus a hard 12 h cap). Tokens live only in main-process memory, are compared in constant time and never logged. Done when: unit tests cover issue, validation from the bound IP, rejection from another IP, and revocation on session close.
+- [ ] **G10-F3 — Carry VNC through the signal port:** add a `vnc-tunnel` request to `ConnectionRequestServer`: the client sends one newline-terminated JSON line `{"type":"vnc-tunnel","token":...}`; the host validates the token against the socket's real IP, answers one newline-terminated `{"type":"vnc-tunnel-ok"}` (or a rejection and closes), then pipes the socket to `net.createConnection(5900, '127.0.0.1')` in both directions and closes both ends together. Invalid tokens count toward the same per-IP lockout policy as GOALS 9's access password. On the viewer, `file-transfer-session.js` keeps `vncToken` with its session and exposes a lookup by host; `proxy.js` asks for that token by target host (the token never passes through the renderer or a URL), opens the tunnel instead of dialing 5900, strips the handshake line and then relays raw RFB. Without a token it keeps the current direct path, so an un-hardened host keeps working. Done when: an integration test with a fake RFB server on loopback, a real `ConnectionRequestServer` and a real proxy shows RFB bytes flowing both ways through the tunnel, a wrong or revoked token being rejected, and reconnects within the same session reusing the token.
+- [ ] **G10-F4 — Close 5900 in "Configurar TightVNC":** extend `buildApplyVncPasswordScript` to also set the loopback values chosen in G10-C2, and change the post-apply verification in `hostVnc:setup` to (a) VncAuth `ok` on `127.0.0.1:5900` and (b) the host's own Tailscale IP:5900 no longer answering RFB with security types. Store the password only if both hold. The card states that TightVNC now only accepts connections through OpenPortal, and offers a documented way back (a second action that restores `LoopbackOnly=0`) for users who need a plain VNC client. Done when: script tests cover the new registry values and the verification refuses to store the password if (b) fails.
+- [ ] **G10-F5 — Explain a version mismatch instead of failing silently:** a viewer without tunnel support reaching a hardened host fails at 5900; a hardened viewer reaching an old host gets no `vncToken`. In both cases the UI shows an actionable message ("o outro PC precisa da mesma versão do OpenPortal") instead of a generic "Conexão VNC perdida". Done when: the message appears for a response without `vncToken` from a host that reports hardening, and for a refused 5900 after approval.
+
+### Regression test
+
+- [ ] **G10-T1 — Automated gates:** unit + integration tests from F1–F5 (including one asserting the proxy's listening address is `127.0.0.1`), plus `npm test`, lint of changed files, renderer build and `git diff --check`. Every new test must fail on the pre-fix code. Done when: all pass and none stores a real secret.
+- [ ] **G10-T2 — Two-PC acceptance `(manual)`:** after both PCs update and run "Configurar TightVNC" again: repeat G10-R1 and expect both paths closed; then repeat the GOALS 9 matrix (IP + password, no password → Aceitar, wrong password, network drop and reconnect) in both directions over the tunnel. Done when: every case behaves as in GOALS 9 and R1 shows no remote access to 5900 or 18900.
+
+**Done when (fix-level):** the only way for another PC to see or control a host's screen is an approval (dialog, access password or `allowedUsers`) that is still valid; a credential learned in an earlier session is useless on its own.
+
+---
+
+## GOALS 11 — Startup robustness, test/lint scope and plan hygiene (fix)
+
+```mermaid
+flowchart TD
+    S[Scope lint and tests to this checkout] --> I[Single-instance startup race]
+    S --> G8[Reconcile GOALS 8 with 2026-09-23 evidence]
+    I --> D[Delivery: PR, merge on explicit order]
+    G8 --> D
+```
+
+Suggested: sonnet · medium — small, well-understood changes with clear repros; only the single-instance repro needs care with two real processes.
+
+**Observed facts (2026-09-23):**
+- In the main checkout, `npm run lint` reports 1935 errors, all of them in 109 files under `.claude/worktrees/`; the repository's own files lint with 0 errors and 9 old warnings. `npx vitest list` discovers 39 test files, 25 of them copies inside `.claude/worktrees/`, so `npm test` runs other branches' code (the "160 tests" count reported before GOALS 9 was inflated by these copies). `eslint.config.js` does not ignore `.claude/**` and there is no Vitest config excluding it.
+- Both PCs logged `EADDRINUSE` on 18900/18902 on 2026-09-22/23 while another instance held the ports (PC B: two `npm run dev` trees started by mistake; PC A: repeated `App ready` followed by `EADDRINUSE`). `src/main/main.js` calls `app.quit()` when `requestSingleInstanceLock()` fails but still registers the `app.whenReady()` startup, so a losing instance may briefly create a window and servers. d5aa228 already makes a surviving instance retake 18902 and warn once.
+
+### Repro
+
+- [ ] **G11-R1 — Reproduce both scope leaks:** in the main checkout (with at least one worktree present) run `npm run lint` and `npx vitest list --filesOnly`. Done when: the error count and the number of `.claude/` test files are recorded here.
+- [ ] **G11-R2 — Reproduce the startup race `(manual)`:** (a) start two dev instances of the same checkout at the same time; (b) start the installed app and then the dev app. For each, record from the logs whether the second process logs `App ready`, creates a window, or hits `EADDRINUSE` before exiting. Done when: both cases are recorded, telling apart "same app, lost lock" from "different app identity (installed vs dev), no shared lock".
+
+### Root cause
+
+- [ ] **G11-C1 — Confirm the mechanisms:** for the scope leak, the missing ignore/exclude entries; for the race, whether `whenReady` runs after the failed lock (case a) and whether installed and dev builds use different `userData`/lock identities (case b). Done when: each mechanism is written here with evidence from R1/R2.
+
+### Fix
+
+- [ ] **G11-F1 — Scope tooling to this checkout:** add `'.claude/**'` to the ignores in `eslint.config.js` and to `.prettierignore`, and add a root `vitest.config.js` with `exclude: [...configDefaults.exclude, '.claude/**']`. Done when: in the main checkout `npm run lint` reports 0 errors and `npx vitest list` returns no `.claude/` path.
+- [ ] **G11-F2 — Stop the losing instance before it starts anything:** follow Electron's documented pattern (only register startup and `second-instance` when `requestSingleInstanceLock()` succeeds; otherwise quit and return), with one log line saying another instance is already open. Case (b) needs no extra code beyond d5aa228 unless R2 shows otherwise. Done when: in R2 case (a) the second process exits without `App ready` or `EADDRINUSE`, and the first one brings its window to the front.
+- [ ] **G11-F3 — Reconcile GOALS 8 with the 2026-09-23 evidence:** tick what the two-PC session proved (access rejected, password dialog shown after approval, wrong password with no retry storm, cancel, network loss) with dates, and narrow what is still open (password-less server case, parent/iframe contract tests). Done when: every GOALS 8 item is either ticked with evidence or states exactly what remains.
+
+### Regression test
+
+- [ ] **G11-T1 — Gates stay green from the main checkout:** `npm run lint` (0 errors) and `npm test` (only this checkout's files) run from the main checkout with worktrees present, plus a manual repeat of G11-R2 case (a). Done when: both commands pass and the second instance leaves no `EADDRINUSE` line.
+- [ ] **G11-T2 — Deliver `(manual)`:** open a PR from `claude/vnc-access-flow-testing-c6ec16` to `master` (CI runs lint + tests only). Merging to `master` triggers the dev pre-release build in `.github/workflows/nightly.yml`, so merge only on the user's explicit order; afterwards both PCs move to `master`. Done when: the PR is merged by explicit order and both PCs run the merged commit.
+
+**Out of scope, tracked elsewhere:** the global `post-edit-format.js` hook from base_project runs `biome format` with Biome's defaults (tabs, double quotes) on every edited file of this Prettier-based repository, rewriting whole files; that belongs to the base_project repository, not this plan.
 
 ---
 
@@ -1312,3 +1399,10 @@ RDP migration. For the current RDP incident, **GOALS 7 precedes every remaining 
 real-device or embedding item**: first prove that the command reached and returned from
 `_rdp.Connect()` in the same lifecycle, then resume ActiveX, `SetParent`, NLA, credential,
 and compatibility-mode diagnosis. GOALS 5 remains the lifecycle foundation for both.
+
+For the VNC track after GOALS 9: **G11-F1 (lint/test scope) goes first**, because every
+later "gates pass" claim is only trustworthy once `npm run lint` and `npm test` stop
+reading other worktrees. Then **GOALS 10** (approval as the only way in), then the rest of
+GOALS 11, whose delivery item (G11-T2) waits for GOALS 10 so the PR to `master` carries
+the hardening instead of shipping the known bypass. GOALS 10/11 and the RDP track
+(GOALS 5–7) touch different code paths and can proceed independently.
