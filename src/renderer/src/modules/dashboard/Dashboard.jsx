@@ -2,6 +2,7 @@ import { useState, useContext } from 'react';
 import { Monitor } from 'lucide-react';
 import { MachineContext } from '../../App';
 import { isPrivateNetworkHost } from '../../shared/lib/net';
+import { normalizeQuickVncHost } from '../../shared/lib/vncSession';
 
 const sectionTitle = 'text-xs font-semibold mb-3 uppercase tracking-wide text-text-muted';
 
@@ -38,16 +39,9 @@ export default function Dashboard() {
   };
 
   const handleQuickConnect = async () => {
-    // Aceita IP:porta colado sem quebrar — a porta é sempre 5900 aqui, então
-    // só descartamos o que vier depois dos dois-pontos em vez de mandar pro
-    // backend e deixar o erro genérico de validação explicar o formato.
-    const ip = quickIp.trim().split(':')[0];
-    if (!ip) {
-      addLog('Digite um IP para conectar', 'warn');
-      return;
-    }
-    if (!/^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(ip)) {
-      addLog(`IP inválido: use o formato 100.x.x.x (sem porta, sem espaços)`, 'error');
+    const { host: ip, error } = normalizeQuickVncHost(quickIp);
+    if (error) {
+      addLog(error, 'warn');
       return;
     }
     if (!isPrivateNetworkHost(ip)) {
@@ -103,7 +97,7 @@ export default function Dashboard() {
                         className="px-3.5 py-1.5 rounded-md text-xs font-medium bg-accent hover:bg-accent-strong text-white transition-colors whitespace-nowrap"
                         onClick={() => handleConnectMachine(m)}
                       >
-                        {isFocused ? 'Visualizando' : isConnected ? 'Focar' : 'Conectar'}
+                        {isFocused ? 'Visualizando' : isConnected ? 'Focar' : 'Solicitar acesso'}
                       </button>
                     </div>
                   );
@@ -113,11 +107,11 @@ export default function Dashboard() {
           </div>
 
           <div className="bg-surface rounded-xl border border-line-subtle p-5">
-            <h2 className={sectionTitle}>Conectar por IP</h2>
+            <h2 className={sectionTitle}>Solicitar acesso por IP</h2>
             <div className="flex gap-2 items-end">
               <div className="flex-1">
                 <label className="block text-[11px] text-text-faint mb-1">
-                  Endereço IP do PC remoto
+                  IP Tailscale do PC remoto
                 </label>
                 <input
                   type="text"
@@ -126,7 +120,7 @@ export default function Dashboard() {
                   onKeyDown={(e) => {
                     if (e.key === 'Enter') handleQuickConnect();
                   }}
-                  placeholder="100.x.x.x"
+                  placeholder="100.x.x.x (sem porta)"
                   className="w-full px-2.5 py-2 rounded-lg border border-line bg-inset text-text-primary text-sm font-mono outline-none focus:border-accent transition-colors"
                 />
               </div>
@@ -135,12 +129,12 @@ export default function Dashboard() {
                 disabled={connecting}
                 className="px-4 py-2 rounded-lg text-sm font-medium bg-accent hover:bg-accent-strong text-white transition-colors whitespace-nowrap disabled:opacity-60"
               >
-                {connecting ? 'Solicitando...' : 'Solicitar'}
+                {connecting ? 'Solicitando...' : 'Solicitar acesso'}
               </button>
             </div>
             <div className="text-[11px] text-text-faint mt-2">
-              Apenas o IP, sem porta (a porta VNC padrão 5900 é usada automaticamente). O PC remoto
-              receberá um pedido de conexão e precisa aceitar.
+              Use apenas o IP, sem porta. A porta VNC 5900 é usada automaticamente; a senha só será
+              solicitada se o servidor VNC do PC remoto pedir.
             </div>
           </div>
         </div>

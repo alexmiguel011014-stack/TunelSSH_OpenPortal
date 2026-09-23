@@ -1,7 +1,12 @@
 'use strict';
 
 const { ipcMain, app, Notification } = require('electron');
-const { readConfig, writeConfig } = require('../config/config-manager');
+const {
+  getVncCredential,
+  readConfig,
+  setVncCredential,
+  writeConfig,
+} = require('../config/config-manager');
 const { readHistory, addEntry } = require('../config/history-manager');
 const { readActivityLog } = require('../config/activity-log');
 const { execSync } = require('child_process');
@@ -84,6 +89,14 @@ function registerIpcHandlers(mainWindow) {
   ipcMain.handle('vnc:disconnect', (_, machineId) => {
     send(mainWindow, 'vnc:status', { state: 'disconnected', machineId });
     return { success: true };
+  });
+
+  ipcMain.handle('vnc:getCredential', (_, machineId) => {
+    return getVncCredential(machineId);
+  });
+
+  ipcMain.handle('vnc:setCredential', (_, { machineId, password }) => {
+    return { success: setVncCredential(machineId, password) };
   });
 
   ipcMain.handle('vnc:proxyUrl', () => {

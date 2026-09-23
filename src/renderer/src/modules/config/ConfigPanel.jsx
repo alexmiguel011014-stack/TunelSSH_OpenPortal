@@ -18,11 +18,13 @@ function isValidLogin(login) {
 const DEFAULT_TELEGRAM = { enabled: false, token: '', chatId: '' };
 
 export default function ConfigPanel() {
-  const { machines, saveMachines, setShowConfig, maxMachines, addLog } = useContext(MachineContext);
+  const { machines, saveMachines, saveVncCredential, setShowConfig, maxMachines, addLog } =
+    useContext(MachineContext);
 
   const [draft, setDraft] = useState(() => machines.map((m) => ({ ...m })));
   const [saved, setSaved] = useState(false);
   const [errors, setErrors] = useState({});
+  const [vncPasswordUpdates, setVncPasswordUpdates] = useState({});
   const [testing, setTesting] = useState({});
   const [testResults, setTestResults] = useState({});
   const [localIp, setLocalIp] = useState(null); // null = carregando, '' = não achou
@@ -264,14 +266,29 @@ export default function ConfigPanel() {
     });
   };
 
-  const handleSave = () => {
+  const handleSave = async () => {
     const errs = validate(draft);
     if (Object.keys(errs).length > 0) {
       setErrors(errs);
       if (addLog) addLog('Configuração não salva: corrija os campos destacados', 'warn');
       return;
     }
-    saveMachines(draft);
+    const machinesSaved = await saveMachines(draft);
+    if (!machinesSaved) {
+      if (addLog) addLog('Não foi possível salvar a configuração dos PCs', 'error');
+      return;
+    }
+    const credentialResults = await Promise.all(
+      Object.entries(vncPasswordUpdates).map(async ([machineId, password]) => ({
+        machineId,
+        result: await saveVncCredential(machineId, password),
+      })),
+    );
+    if (credentialResults.some(({ result }) => !result)) {
+      if (addLog) addLog('Configuração salva, mas uma senha VNC não pôde ser atualizada', 'error');
+      return;
+    }
+    setVncPasswordUpdates({});
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
   };
@@ -512,17 +529,39 @@ export default function ConfigPanel() {
                 </div>
               ) : (
                 <div className="mt-4">
-                  <label className="block text-xs text-text-faint mb-1">Senha VNC (opcional)</label>
+                  <div className="flex items-center justify-between gap-3 mb-1">
+                    <label className="block text-xs text-text-faint">
+                      Senha VNC salva (opcional)
+                    </label>
+                    {machine.hasVncPassword && !Object.hasOwn(vncPasswordUpdates, machine.id) && (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setVncPasswordUpdates((prev) => ({ ...prev, [machine.id]: '' }))
+                        }
+                        className="text-xs text-danger hover:underline"
+                      >
+                        Remover senha salva
+                      </button>
+                    )}
+                  </div>
                   <input
                     type="password"
-                    value={machine.password || ''}
-                    onChange={(e) => updateField(index, 'password', e.target.value)}
+                    value={vncPasswordUpdates[machine.id] || ''}
+                    onChange={(e) =>
+                      setVncPasswordUpdates((prev) => ({ ...prev, [machine.id]: e.target.value }))
+                    }
                     className="w-full bg-inset border border-line rounded-lg px-3 py-2 text-sm text-text-primary font-mono focus:outline-none focus:border-accent transition-colors"
-                    placeholder="Deixe em branco se não tiver senha"
+                    placeholder={
+                      machine.hasVncPassword
+                        ? 'Senha salva; digite uma nova para substituir'
+                        : 'Deixe em branco se não houver senha'
+                    }
                   />
                   <p className="text-xs text-text-faint mt-1">
-                    Se o VNC tiver senha, configure aqui. Será usada como fallback se a conexão for
-                    recusada.
+                    Esta é uma cópia criptografada neste PC. Ela só é usada depois da aprovação de
+                    acesso e quando o servidor VNC remoto pede uma senha; não altera o TightVNC no
+                    PC remoto.
                   </p>
                 </div>
               )}

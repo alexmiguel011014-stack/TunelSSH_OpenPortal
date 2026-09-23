@@ -1212,6 +1212,62 @@ or a precise, sanitary terminal result with deterministic cleanup.
 
 ---
 
+## GOALS 8 — Clarify VNC access requests and request credentials only when the server needs them (fix)
+
+```mermaid
+flowchart TD
+    A[Enter PC B Tailscale IP] --> B[Request access]
+    B --> C{PC B approves?}
+    C -->|No| X[Show access denied and stop]
+    C -->|Yes| D[Open VNC session]
+    D --> E{VNC requests credentials?}
+    E -->|No| F[Show remote desktop]
+    E -->|Yes| G[Show password dialog for that PC]
+    G --> H[Send one-time credential to the active VNC session]
+    H --> I{Authentication succeeds?}
+    I -->|Yes| F
+    I -->|No| J[Show authentication failed; no automatic retry]
+```
+
+Suggested: gpt-6-astra · xhigh — this crosses the Electron/React/noVNC boundary and handles user credentials, error classification, secure persistence, and a two-PC regression matrix.
+
+**Observed facts (2026-09-22):** Source review shows that the direct-IP input already creates an ephemeral VNC machine with the entered bare IPv4 address and the automatic VNC port 5900; it has no password input. Saved-machine configuration inputs are controlled and their optional VNC password is protected at rest with Electron safeStorage. The confusing behavior comes later: the approval result, a legacy `wasRejected` flag, a VNC password URL query parameter, generic VNC errors, and automatic reconnects are conflated. A real PC A -> PC B trace proved TCP access to port 5900 and then a VNC authentication failure, while the UI reduced it to a lost connection. No real credential belongs in source, logs, URLs, tests, or this plan.
+
+**Dependency and ordering:** GOALS 8 is a VNC-only correction on GOALS 1's verified multi-session approval/proxy foundation. It is independent of the RDP sidecar investigation, but G8-F1 through G8-F5 must precede any broader two-PC acceptance claim so approval, transport, and authentication failures are no longer conflated.
+
+### Reproduce and define the interaction contract
+
+- [ ] **G8-R1 — Record the current two-PC journey with redacted evidence:** on PC A, start from both (a) a bare PC B Tailscale IP and (b) a saved PC B entry; separately capture access rejected, access approved with no password configured, password-required, wrong credentials, correct credentials, and a real network loss. Done when: every result identifies the request/approval, TCP/VNC reachability, or VNC-authentication boundary without revealing a password.
+- [x] **G8-R2 — Specify and validate input ownership before UI changes:** the quick-connect field accepts only a bare Tailscale IP and always uses port 5900; saved-machine fields describe a reusable PC; TightVNC's host password remains configured on that host; and an optional locally saved credential belongs only to the selected saved PC. Done when: no quick-connect label, hint, placeholder, or validation asks the user to combine IP, port, approval data, and password.
+- [x] **G8-R3 — Define a redacted state vocabulary:** distinguish `requesting-access`, `access-denied`, `access-unreachable`, `opening-vnc`, `credentials-required`, `authentication-failed`, `connected`, and `connection-lost`. Done when: status, activity, notification, and retry policy use structured outcomes rather than ambiguous free-form VNC text.
+
+### Root cause and boundary design
+
+- [x] **G8-C1 — Trace the credential and error paths:** document the path from Dashboard quick IP to temporary machine, `App.jsx` approval on port 18902, proxy reachability on port 5900, and the current `RemoteViewer`/`vnc.html` use of `machine.password`, `wasRejected`, and generic status events. Done when: the approval request is explicitly proven credential-free and each removed path maps to one failure mode.
+- [x] **G8-C2 — Separate the three decisions:** remote-user approval, server credential requirement, and local credential-saving choice must be independent. Done when: rejection never enters password logic, a VNC password never substitutes for approval, and quick connection never silently changes a saved profile.
+- [x] **G8-C3 — Choose a narrow, safe iframe credential protocol:** design a per-attempt identifier and parent/iframe handshake so the child asks only after noVNC emits `credentialsrequired`, then accepts submit or cancel for that active request. Done when: expected iframe window and attempt are verified, stale/duplicate messages are ignored, and plaintext is absent from the viewer URL, console, activity history, approval request, and error telemetry.
+
+### Fix the request, password, and retry experience
+
+- [x] **G8-F1 — Make the request phase self-explanatory:** present direct connection as a request to a PC, with an IP-only input, visible automatic VNC-port behavior, and a primary action such as “Request access.” Show pending state until PC B accepts or rejects and stop with a precise access result. Done when: PC B's IP has one unambiguous next action and cannot be confused with VNC credentials or saved configuration.
+- [ ] **G8-F2 — Prompt for VNC credentials at the correct time:** only after access approval and an active `credentialsrequired` event, show a password dialog naming the PC/IP and saying it is the TightVNC password, not the approval request. Offer cancel and submit; quick connection keeps it in memory only by default. Done when: a password-less server prompts never, a password-required server prompts exactly once, and cancel ends only that attempt.
+- [x] **G8-F3 — Give saved profiles a safe credential option:** rename the configuration field to optional saved VNC credential, explain it is used only after approval and a genuine server request, and use encrypted local storage only after explicit opt-in. Permit clearing/replacing without exposing the current value; on rejection offer a new value rather than retrying. Done when: settings never claim to configure the remote host and no credential is copied into an ordinary UI state or connection record.
+- [x] **G8-F4 — Remove URL credentials and legacy rejection coupling:** remove password and `wasRejected` behavior from the noVNC URL and use the scoped one-time message contract; remove or refactor legacy state so approval and authentication cannot influence each other. Done when: viewer URLs/logs contain only non-secret metadata while a valid credential reaches only the expected noVNC instance.
+- [x] **G8-F5 — Classify failures before retrying:** retain bounded reconnect solely for a confirmed transient transport loss, reset it on a real connection, and never auto-retry access denial, credential request, authentication failure, cancel, or explicit disconnect. Done when: a wrong password yields one actionable failure with no retry storm and real connection loss retains manual/retry behavior.
+- [x] **G8-F6 — Make activity and error copy actionable:** provide distinct Portuguese messages for waiting approval, access denied, VNC password needed, saved password rejected, password rejected, VNC unavailable, and connection lost. Done when: a proven authentication failure never shows “Connection lost unexpectedly” or tells the user to edit a generic app password.
+
+### Regression coverage and operational verification
+
+- [ ] **G8-T1 — Add focused state-policy tests:** extract the smallest pure session policy for structured outcomes, input normalization, retry eligibility, saved-versus-quick credential lifetime, and stale attempts. Done when: tests prove bare IP uses 5900 without a credential, rejection stops before VNC, credentials are requested only on the event, authentication failure is not retried, and a transient disconnect remains eligible.
+- [ ] **G8-T2 — Test the parent/iframe credential contract without secrets:** cover iframe-ready, credentials-required, submit, cancel, duplicate message, stale attempt, unexpected message source, and disconnect with synthetic values. Done when: only the matching live session receives a credential, it is not in a URL/status payload, and cancel/error clears the pending request.
+- [ ] **G8-T3 — Preserve configuration and transport regressions:** cover encrypted optional saved credentials, clearing/replacing one, no persistence for quick connection, VNC default transport, RDP isolation, and concurrent machines. Done when: existing profiles stay readable, missing passwords stay valid, and RDP/file-transfer paths are unchanged.
+- [ ] **G8-T4 — Run non-manual project gates:** run focused tests, `npm test`, `npm run lint`, renderer build, and `git diff --check`; inspect generated viewer URLs and redacted logs. Done when: all gates pass and no fixture, assertion, or artifact stores a real password.
+- [ ] **G8-T5 — Complete two-PC manual acceptance `(manual)`:** with PC A client and PC B host, test direct-IP and saved-profile flows for rejection, no password required, correct/wrong password, cancelled dialog, saved-password replacement, and network interruption. Done when: each screen states the correct layer and next action, successful VNC is input-usable, wrong credentials do not retry, and the password is absent from the URL, activity view, and logs inspected by the operator.
+
+**Done when (fix-level):** someone on PC A enters only PC B's Tailscale IP, requests access, receives a distinct VNC password dialog only if PC B's server asks, and understands every failure without accidental credential storage or exposure. The same holds for a saved profile, with any saved credential explicitly opt-in and encrypted locally.
+
+---
+
 ## Cross-goal ordering
 
 GOALS 1 and GOALS 2 (transport: multi-session VNC, then optional RDP) are independent of

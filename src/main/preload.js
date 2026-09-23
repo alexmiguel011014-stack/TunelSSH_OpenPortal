@@ -11,6 +11,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   connectVnc: (machine) => ipcRenderer.invoke('vnc:connect', machine),
   disconnectVnc: (machineId) => ipcRenderer.invoke('vnc:disconnect', machineId),
+  getVncCredential: (machineId) => ipcRenderer.invoke('vnc:getCredential', machineId),
+  setVncCredential: (machineId, password) =>
+    ipcRenderer.invoke('vnc:setCredential', { machineId, password }),
   getProxyUrl: () => ipcRenderer.invoke('vnc:proxyUrl'),
 
   onVncStatus: (callback) => {

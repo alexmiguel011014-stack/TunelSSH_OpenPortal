@@ -61,13 +61,13 @@
 
   <script type="module">
     import RFB from './novnc.js';
+    import { isAuthenticationFailure, isExpectedParentMessage } from './vnc-protocol.js';
 
     const params = new URLSearchParams(window.location.search);
     const host = params.get('host');
     const port = params.get('port') || '5900';
-    const password = params.get('password') || '';
-    const wasRejected = params.get('rejected') === 'true';
     const proxyWs = params.get('proxy') || 'ws://127.0.0.1:18900';
+    const attemptId = params.get('attempt') || '';
 
     const connectingOverlay = document.getElementById('connecting-overlay');
     const connectingText = document.getElementById('connecting-text');
@@ -78,6 +78,22 @@
     let rfb = null;
     let fbWidth = 0;
     let fbHeight = 0;
+    let waitingForCredentials = false;
+    let terminalReported = false;
+
+    function postToParent(payload) {
+      parent.postMessage({ ...payload, attemptId }, '*');
+    }
+
+    function reportStatus(state, message = '') {
+      postToParent({ type: 'vnc-status', state, message });
+    }
+
+    function reportTerminal(state, message) {
+      if (terminalReported) return;
+      terminalReported = true;
+      reportStatus(state, message);
+    }
 
     function getFbWidth() {
       return fbWidth || (rfb && rfb._fbWidth) || 0;
@@ -110,7 +126,7 @@
       }
 
       const wsUrl = `${proxyWs}?host=${host}&port=${port}`;
-      console.log('[vnc] Connect:', { host, port, proxyWs: proxyWs.split('?')[0], password: !!password, wasRejected });
+      console.log('[vnc] Connect:', { host, port, proxyWs: proxyWs.split('?')[0] });
       connectingOverlay.classList.remove('hidden');
       connectingText.textContent = `Connecting to ${host}:${port}...`;
 
@@ -122,7 +138,7 @@
           keyboardDelay: 20,
           qualityLevel: 4,
           compressionLevel: 3,
-          credentials: password ? { password } : undefined,
+          credentials: undefined,
         });
 
         rfb.addEventListener('connect', () => {
@@ -132,7 +148,8 @@
           fbWidth = rfb._fbWidth || 0;
           fbHeight = rfb._fbHeight || 0;
           fitScreen();
-          parent.postMessage({ type: 'vnc-resolution', width: fbWidth, height: fbHeight }, '*');
+          postToParent({ type: 'vnc-resolution', width: fbWidth, height: fbHeight });
+          reportStatus('connected', 'Sessão VNC conectada');
           const roCanvas = new ResizeObserver(() => fitScreen());
           const canvas = container.querySelector('canvas');
           if (canvas) roCanvas.observe(canvas);
@@ -140,50 +157,45 @@
 
         rfb.addEventListener('disconnect', (e) => {
           const clean = e.detail ? e.detail.clean : 'unknown';
-          if (clean === false) {
-            errorMsg.textContent = 'Connection lost unexpectedly';
+          if (!terminalReported && clean === false) {
+            errorMsg.textContent = 'Conexão VNC perdida';
             errorOverlay.classList.add('visible');
+            reportTerminal('connection-lost', 'Conexão VNC perdida');
+          } else if (!terminalReported) {
+            reportTerminal('disconnected', 'Sessão VNC encerrada');
           }
           connectingOverlay.classList.add('hidden');
-          parent.postMessage({ type: 'vnc-status', state: clean ? 'disconnected' : 'error' }, '*');
         });
 
         rfb.addEventListener('credentialsrequired', () => {
-          console.log('[vnc] Server requires password', { hasPassword: !!password, wasRejected });
-
-          if (wasRejected && !password) {
-            // Conexão foi rejeitada explicitamente e não tem senha configurada
-            console.log('[vnc] Connection was rejected; no password configured');
-            if (rfb) rfb.disconnect();
-            parent.postMessage({ type: 'vnc-status', state: 'error', message: 'Connection rejected' }, '*');
-            errorMsg.textContent = 'Conexão recusada pelo PC remoto. Configure uma senha no app para tentar de novo.';
-            errorOverlay.classList.add('visible');
-          } else if (password) {
-            // Temos senha (aprovado ou rejeitado, não importa)
-            console.log('[vnc] Sending configured password...');
-            rfb.sendCredentials({ password });
-          } else {
-            // Sem rejeição explícita e sem senha = erro de configuração
-            console.log('[vnc] Server requires password but none configured');
-            if (rfb) rfb.disconnect();
-            parent.postMessage({ type: 'vnc-status', state: 'error', message: 'Password required' }, '*');
-            errorMsg.textContent = 'VNC server requires a password. Configure a senha no app (Configurações → Senha VNC).';
-            errorOverlay.classList.add('visible');
-          }
+          waitingForCredentials = true;
+          connectingText.textContent = 'Aguardando a senha do servidor VNC...';
+          reportStatus('credentials-required', 'Senha VNC necessária');
         });
 
         rfb.addEventListener('error', (e) => {
           const msg = e.detail?.message || e.detail || 'Unknown error';
-          errorMsg.textContent = msg;
+          const authenticationFailed = isAuthenticationFailure(msg);
+          errorMsg.textContent = authenticationFailed ? 'Senha VNC não aceita' : 'Conexão VNC perdida';
           connectingOverlay.classList.add('hidden');
           errorOverlay.classList.add('visible');
-          parent.postMessage({ type: 'vnc-status', state: 'error', message: msg }, '*');
+          reportTerminal(
+            authenticationFailed ? 'authentication-failed' : 'connection-lost',
+            authenticationFailed ? 'Senha VNC não aceita' : 'Conexão VNC perdida',
+          );
+        });
+
+        rfb.addEventListener('securityfailure', () => {
+          errorMsg.textContent = 'Senha VNC não aceita';
+          connectingOverlay.classList.add('hidden');
+          errorOverlay.classList.add('visible');
+          reportTerminal('authentication-failed', errorMsg.textContent);
         });
       } catch (err) {
-        errorMsg.textContent = err.message;
+        errorMsg.textContent = 'Não foi possível abrir a sessão VNC';
         connectingOverlay.classList.add('hidden');
         errorOverlay.classList.add('visible');
-        parent.postMessage({ type: 'vnc-status', state: 'error', message: err.message }, '*');
+        reportTerminal('connection-lost', 'Não foi possível abrir a sessão VNC');
       }
     }
 
@@ -193,6 +205,7 @@
     }
 
     window.addEventListener('message', (e) => {
+      if (!isExpectedParentMessage(e, parent, attemptId)) return;
       if (e.data?.type === 'resize-viewport') fitScreen();
       if (e.data?.type === 'set-quality' || e.data?.type === 'set-quality-level') {
         if (rfb && typeof rfb.setQualityLevel === 'function') {
@@ -207,19 +220,26 @@
         }
       }
       if (e.data?.type === 'vnc-disconnect') {
+        reportTerminal('disconnected', 'Sessão VNC encerrada pelo usuário');
         if (rfb) { try { rfb.disconnect(); } catch (err) {} rfb = null; }
+      }
+      if (e.data?.type === 'vnc-cancel-credentials' && waitingForCredentials) {
+        waitingForCredentials = false;
+        reportTerminal('disconnected', 'Senha VNC não informada');
+        if (rfb) { try { rfb.disconnect(); } catch (err) {} rfb = null; }
+      }
+      if (e.data?.type === 'vnc-credentials' && waitingForCredentials && rfb && e.data.password) {
+        waitingForCredentials = false;
+        connectingText.textContent = `Conectando a ${host}:${port}...`;
+        rfb.sendCredentials({ password: e.data.password });
       }
     });
 
     window.reconnect = () => {
-      errorOverlay.classList.remove('visible');
-      if (rfb) { rfb.disconnect(); rfb = null; }
-      container.innerHTML = '';
-      fbWidth = 0; fbHeight = 0;
-      connect();
+      postToParent({ type: 'vnc-reconnect-request' });
     };
 
-    parent.postMessage({ type: 'vnc-ready' }, '*');
+    postToParent({ type: 'vnc-ready' });
 
     connect();
   </script>

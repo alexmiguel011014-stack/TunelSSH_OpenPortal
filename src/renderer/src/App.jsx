@@ -62,7 +62,6 @@ export default function App() {
   const [showLogs, setShowLogs] = useState(false);
   const [connHistory, setConnHistory] = useState([]);
   const [theme, setTheme] = useState(() => localStorage.getItem('openportal-theme') || 'dark');
-  const [wasRejected, setWasRejected] = useState(false);
   const logIdRef = useRef(0);
 
   const toggleTheme = useCallback(() => {
@@ -239,11 +238,12 @@ export default function App() {
       }
       setShowConfig(false);
       setShowFiles(false);
+      setStatuses((prev) => ({ ...prev, [machine.id]: 'requesting-access' }));
       addLog(`Solicitando conexão a ${machine.name} (${machine.host})...`);
       recordConn({
         name: machine.name,
         host: machine.host,
-        state: 'connecting',
+        state: 'requesting-access',
         message: `Aguardando aprovação de ${machine.host}`,
       });
 
@@ -266,21 +266,21 @@ export default function App() {
           if (rejected) {
             console.warn(`[app] Connection explicitly rejected by user: ${message}`);
             addLog(`Conexão recusada pelo PC remoto: ${message}`, 'error');
-            setWasRejected(true);
+            setStatuses((prev) => ({ ...prev, [machine.id]: 'access-denied' }));
             recordConn({
               name: machine.name,
               host: machine.host,
-              state: 'error',
+              state: 'access-denied',
               message: 'Conexão recusada pelo usuário',
             });
           } else {
             console.warn(`[app] Connection failed: ${message}`);
             addLog(`Falha na conexão: ${message}`, 'error');
-            setWasRejected(false);
+            setStatuses((prev) => ({ ...prev, [machine.id]: 'access-unreachable' }));
             recordConn({
               name: machine.name,
               host: machine.host,
-              state: 'error',
+              state: 'access-unreachable',
               message,
             });
           }
@@ -290,7 +290,7 @@ export default function App() {
           });
           return;
         }
-        setWasRejected(false);
+        setStatuses((prev) => ({ ...prev, [machine.id]: 'opening-vnc' }));
         setConnectedMachines((prev) =>
           connectMachineEntry(prev, machine, { ftSessionId: res.sessionId }),
         );
@@ -305,15 +305,15 @@ export default function App() {
             ?.connectVnc(machine)
             .catch((e) => console.warn('[app] VNC connect error:', e));
         }
-        addLog(`Conexão aprovada por ${machine.name}.`);
+        addLog(`Acesso aprovado por ${machine.name}. Abrindo a sessão remota...`);
       } catch (err) {
         console.error(`[app] Connection error:`, err);
         addLog(`Erro ao conectar: ${err.message}`, 'error');
-        setWasRejected(false);
+        setStatuses((prev) => ({ ...prev, [machine.id]: 'access-unreachable' }));
         recordConn({
           name: machine.name,
           host: machine.host,
-          state: 'error',
+          state: 'access-unreachable',
           message: err.message,
         });
       }
@@ -322,10 +322,42 @@ export default function App() {
   );
 
   const saveMachines = useCallback(
-    (newMachines) => {
-      setMachines(newMachines);
-      window.electronAPI?.saveConfig({ machines: newMachines });
-      addLog('Config saved');
+    async (newMachines) => {
+      const publicMachines = newMachines.map((machine) => {
+        const publicMachine = { ...machine };
+        delete publicMachine.password;
+        return publicMachine;
+      });
+      try {
+        const saved = await window.electronAPI?.saveConfig({ machines: publicMachines });
+        if (!saved) return false;
+        setMachines(publicMachines);
+        addLog('Configuração dos PCs salva');
+        return true;
+      } catch (err) {
+        addLog(`Falha ao salvar configuração: ${err.message}`, 'error');
+        return false;
+      }
+    },
+    [addLog],
+  );
+
+  const saveVncCredential = useCallback(
+    async (machineId, password) => {
+      try {
+        const result = await window.electronAPI?.setVncCredential(machineId, password);
+        if (!result?.success) return false;
+        setMachines((prev) =>
+          prev.map((machine) =>
+            machine.id === machineId ? { ...machine, hasVncPassword: Boolean(password) } : machine,
+          ),
+        );
+        addLog(password ? 'Senha VNC salva com segurança' : 'Senha VNC salva removida');
+        return true;
+      } catch (err) {
+        addLog(`Falha ao atualizar senha VNC: ${err.message}`, 'error');
+        return false;
+      }
     },
     [addLog],
   );
@@ -386,6 +418,7 @@ export default function App() {
     connectMachine,
     disconnectMachine,
     saveMachines,
+    saveVncCredential,
     addMachine,
     removeMachine,
     triggerReconnect,
@@ -409,7 +442,6 @@ export default function App() {
     theme,
     setTheme,
     toggleTheme,
-    wasRejected,
   };
 
   return (
@@ -436,11 +468,7 @@ export default function App() {
                 {resolveTransport(entry.machine) === 'rdp' ? (
                   <RdpViewer machine={entry.machine} isVisible={isFocusedAndVisible} />
                 ) : (
-                  <RemoteViewer
-                    machine={entry.machine}
-                    reconnectFlag={reconnectFlag}
-                    wasRejected={wasRejected}
-                  />
+                  <RemoteViewer machine={entry.machine} reconnectFlag={reconnectFlag} />
                 )}
               </div>
             );

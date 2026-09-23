@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const { app, safeStorage } = require('electron');
+const { mergeStoredMachine, toRendererMachine } = require('./machine-credentials');
 
 const CONFIG_DIR = app.getPath('userData');
 const CONFIG_FILE = path.join(CONFIG_DIR, 'config.json');
@@ -49,36 +50,42 @@ function decryptSecret(field) {
   return field.plain || '';
 }
 
-function readConfig() {
+function readStoredConfig() {
   try {
     if (fs.existsSync(CONFIG_FILE)) {
       let raw = fs.readFileSync(CONFIG_FILE, 'utf-8');
       if (raw.charCodeAt(0) === 0xfeff) raw = raw.slice(1);
-      const config = JSON.parse(raw);
-      if (Array.isArray(config.machines)) {
-        config.machines = config.machines.map((m) => {
-          let out = m;
-          if (out.passwordEnc) {
-            const { passwordEnc, ...rest } = out;
-            out = { ...rest, password: decryptSecret(passwordEnc) };
-          }
-          if (out.rdpPasswordEnc) {
-            const { rdpPasswordEnc, ...rest } = out;
-            out = { ...rest, rdpPassword: decryptSecret(rdpPasswordEnc) };
-          }
-          return out;
-        });
-      }
-      if (config.telegram?.tokenEnc) {
-        const { tokenEnc, ...rest } = config.telegram;
-        config.telegram = { ...rest, token: decryptSecret(tokenEnc) };
-      }
-      return config;
+      return JSON.parse(raw);
     }
   } catch (err) {
     console.error('[config] Error reading config:', err.message);
   }
   return { ...DEFAULT_CONFIG };
+}
+
+function writeStoredConfig(config) {
+  const tmp = CONFIG_FILE + '.tmp';
+  fs.writeFileSync(tmp, JSON.stringify(config, null, 2), 'utf-8');
+  fs.renameSync(tmp, CONFIG_FILE);
+}
+
+function readConfig() {
+  const config = readStoredConfig();
+  if (Array.isArray(config.machines)) {
+    config.machines = config.machines.map((machine) => {
+      let out = toRendererMachine(machine);
+      if (out.rdpPasswordEnc) {
+        const { rdpPasswordEnc, ...rest } = out;
+        out = { ...rest, rdpPassword: decryptSecret(rdpPasswordEnc) };
+      }
+      return out;
+    });
+  }
+  if (config.telegram?.tokenEnc) {
+    const { tokenEnc, ...rest } = config.telegram;
+    config.telegram = { ...rest, token: decryptSecret(tokenEnc) };
+  }
+  return config;
 }
 
 function writeConfig(config) {
@@ -91,28 +98,29 @@ function writeConfig(config) {
     // { machines }, and a plain overwrite would silently drop unrelated
     // top-level fields (allowedUsers, reportTo, telegram) not part of this
     // particular save.
-    const toWrite = { ...readConfig(), ...config };
-    if (Array.isArray(toWrite.machines)) {
-      toWrite.machines = toWrite.machines.map((m) => {
-        let out = m;
-        if (out.password) {
-          const { password, ...rest } = out;
-          out = { ...rest, passwordEnc: encryptSecret(password) };
-        }
-        if (out.rdpPassword) {
+    const existing = readStoredConfig();
+    const toWrite = { ...existing, ...config };
+    if (Array.isArray(config.machines)) {
+      const existingById = new Map(
+        (existing.machines || []).map((machine) => [machine.id, machine]),
+      );
+      toWrite.machines = config.machines.map((machine) => {
+        let out = mergeStoredMachine(existingById.get(machine.id), machine, encryptSecret);
+        if (Object.prototype.hasOwnProperty.call(machine, 'rdpPassword')) {
           const { rdpPassword, ...rest } = out;
-          out = { ...rest, rdpPasswordEnc: encryptSecret(rdpPassword) };
+          delete rest.rdpPasswordEnc;
+          out = { ...rest };
+          if (rdpPassword) out.rdpPasswordEnc = encryptSecret(rdpPassword);
         }
         return out;
       });
     }
-    if (toWrite.telegram && toWrite.telegram.token) {
-      const { token, ...rest } = toWrite.telegram;
-      toWrite.telegram = { ...rest, tokenEnc: encryptSecret(token) };
+    if (config.telegram && Object.prototype.hasOwnProperty.call(config.telegram, 'token')) {
+      const { token, ...rest } = { ...(existing.telegram || {}), ...config.telegram };
+      toWrite.telegram = { ...rest };
+      if (token) toWrite.telegram.tokenEnc = encryptSecret(token);
     }
-    const tmp = CONFIG_FILE + '.tmp';
-    fs.writeFileSync(tmp, JSON.stringify(toWrite, null, 2), 'utf-8');
-    fs.renameSync(tmp, CONFIG_FILE);
+    writeStoredConfig(toWrite);
     return true;
   } catch (err) {
     console.error('[config] Error writing config:', err.message);
@@ -120,4 +128,30 @@ function writeConfig(config) {
   }
 }
 
-module.exports = { readConfig, writeConfig, DEFAULT_CONFIG };
+function getVncCredential(machineId) {
+  const machine = (readStoredConfig().machines || []).find((entry) => entry.id === machineId);
+  return decryptSecret(machine?.passwordEnc);
+}
+
+function setVncCredential(machineId, password) {
+  try {
+    if (!fs.existsSync(CONFIG_DIR)) {
+      fs.mkdirSync(CONFIG_DIR, { recursive: true });
+    }
+    const config = readStoredConfig();
+    const index = (config.machines || []).findIndex((machine) => machine.id === machineId);
+    if (index < 0) return false;
+    config.machines[index] = mergeStoredMachine(
+      config.machines[index],
+      { id: machineId, password: String(password || '') },
+      encryptSecret,
+    );
+    writeStoredConfig(config);
+    return true;
+  } catch (err) {
+    console.error('[config] Error saving VNC credential:', err.message);
+    return false;
+  }
+}
+
+module.exports = { getVncCredential, readConfig, setVncCredential, writeConfig, DEFAULT_CONFIG };
