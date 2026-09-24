@@ -4,4 +4,5 @@ node_modules/
 graphify-out/
 strix_runs/
 src/renderer/public/noVNC/
+.claude/
 package-lock.json

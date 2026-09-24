@@ -1,6 +1,12 @@
-import { useEffect, useRef, useState, useContext, useCallback } from 'react';
+import { useEffect, useRef, useState, useContext, useCallback, useMemo } from 'react';
 import { RefreshCw, Maximize2, Minimize2, PowerOff } from 'lucide-react';
 import { MachineContext } from '../../App';
+import {
+  buildVncViewerUrl,
+  isRetryableVncState,
+  shouldExplainMissingTunnel,
+  shouldUseSavedVncCredential,
+} from '../../shared/lib/vncSession';
 
 const QUALITY_LEVELS = [
   { label: 'Baixa', level: 0 },
@@ -12,7 +18,7 @@ const QUALITY_LEVELS = [
 const MAX_VNC_RETRIES = 5;
 const VNC_RETRY_DELAYS = [3000, 5000, 10000, 15000, 20000];
 
-export default function RemoteViewer({ machine, reconnectFlag, wasRejected }) {
+export default function RemoteViewer({ machine, vncGrant, vncTunnel, reconnectFlag }) {
   const iframeRef = useRef(null);
   const containerRef = useRef(null);
   const [iframeKey, setIframeKey] = useState(0);
@@ -20,11 +26,19 @@ export default function RemoteViewer({ machine, reconnectFlag, wasRejected }) {
   const [quality, setQuality] = useState(3);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [pingMs, setPingMs] = useState(null);
-  const { addLog, setStatuses, disconnectMachine, statuses } = useContext(MachineContext);
+  const [credentialDialog, setCredentialDialog] = useState(null);
+  const [credentialValue, setCredentialValue] = useState('');
+  const [saveCredential, setSaveCredential] = useState(false);
+  const { addLog, recordConn, saveVncCredential, setStatuses, disconnectMachine, statuses } =
+    useContext(MachineContext);
 
   const vncState = statuses[machine.id] || 'connecting';
   const healthMap = {
     connected: { color: 'bg-success', label: 'Conectado' },
+    'credentials-required': { color: 'bg-warning', label: 'Senha necessária' },
+    'authentication-failed': { color: 'bg-danger', label: 'Senha recusada' },
+    'server-refused': { color: 'bg-danger', label: 'VNC recusou a conexão' },
+    'connection-lost': { color: 'bg-danger', label: 'Conexão perdida' },
     connecting: { color: 'bg-warning', label: 'Conectando...' },
     error: { color: 'bg-danger', label: 'Erro' },
     disconnected: { color: 'bg-text-muted', label: 'Desconectado' },
@@ -34,6 +48,18 @@ export default function RemoteViewer({ machine, reconnectFlag, wasRejected }) {
   const retryCountRef = useRef(0);
   const reconnectTimerRef = useRef(null);
   const mountedRef = useRef(true);
+  const savedCredentialTriedRef = useRef(false);
+  // Senha do TightVNC que o PC remoto entregou junto com a aprovação: usada
+  // sozinha em cada tentativa desta sessão (inclui reconexões), até o
+  // TightVNC recusá-la uma vez.
+  const grantTriedRef = useRef(false);
+  const grantRejectedRef = useRef(false);
+  const everConnectedRef = useRef(false);
+  const tunnelHintShownRef = useRef(false);
+  const pendingCredentialRef = useRef('');
+  const activeAttemptRef = useRef('');
+  const terminalReportedRef = useRef(false);
+  const attemptId = useMemo(() => `vnc-${machine.id}-${iframeKey}`, [iframeKey, machine.id]);
 
   const scheduleReconnect = useCallback(
     (why) => {
@@ -62,36 +88,92 @@ export default function RemoteViewer({ machine, reconnectFlag, wasRejected }) {
     [addLog],
   );
 
-  // A aprovação remota (dialogo Aceitar/Rejeitar) já é a trava de acesso.
-  // Se rejeitada, VNC pede senha. Se aprovada, conecta direto.
   const proxyUrl = `ws://127.0.0.1:18900`;
-  const passwordParam = machine.password ? `&password=${encodeURIComponent(machine.password)}` : '';
-  const rejectedParam = wasRejected ? '&rejected=true' : '';
-  const viewerUrl = `./noVNC/vnc.html?host=${machine.host}&port=${machine.port}&proxy=${encodeURIComponent(proxyUrl)}${passwordParam}${rejectedParam}`;
+  const viewerUrl = buildVncViewerUrl({
+    host: machine.host,
+    port: machine.port,
+    proxyUrl,
+    attemptId,
+  });
+
+  const postToViewer = useCallback(
+    (message) => {
+      try {
+        iframeRef.current?.contentWindow?.postMessage({ ...message, attemptId }, '*');
+      } catch {}
+    },
+    [attemptId],
+  );
 
   const sendResize = useCallback(() => {
-    try {
-      iframeRef.current?.contentWindow?.postMessage({ type: 'resize-viewport' }, '*');
-    } catch {}
-  }, []);
+    postToViewer({ type: 'resize-viewport' });
+  }, [postToViewer]);
 
-  const sendQuality = useCallback((level) => {
-    try {
-      iframeRef.current?.contentWindow?.postMessage({ type: 'set-quality', level }, '*');
-    } catch {}
-  }, []);
+  const sendQuality = useCallback(
+    (level) => {
+      postToViewer({ type: 'set-quality', level });
+    },
+    [postToViewer],
+  );
 
   const handleReconnect = useCallback(() => {
+    setCredentialDialog(null);
+    setCredentialValue('');
+    pendingCredentialRef.current = '';
+    savedCredentialTriedRef.current = false;
+    retryCountRef.current = 0;
     setIframeKey((k) => k + 1);
     if (addLog) addLog(`Reconectando a ${machine.host}:${machine.port}...`);
   }, [machine.host, machine.port, addLog]);
 
   const handleDisconnect = useCallback(() => {
-    try {
-      iframeRef.current?.contentWindow?.postMessage({ type: 'vnc-disconnect' }, '*');
-    } catch {}
-    if (disconnectMachine) disconnectMachine();
-  }, [disconnectMachine]);
+    postToViewer({ type: 'vnc-disconnect' });
+    if (disconnectMachine) disconnectMachine(machine.id);
+  }, [disconnectMachine, machine.id, postToViewer]);
+
+  const openCredentialDialog = useCallback((error = '', restart = false) => {
+    setCredentialValue('');
+    setSaveCredential(false);
+    setCredentialDialog({ error, restart });
+  }, []);
+
+  const submitCredential = useCallback(async () => {
+    const password = credentialValue;
+    if (!password) {
+      setCredentialDialog((current) => ({ ...current, error: 'Digite a senha do servidor VNC.' }));
+      return;
+    }
+
+    const shouldPersist = saveCredential && !machine.id.startsWith('quick-');
+    if (shouldPersist) await saveVncCredential(machine.id, password);
+
+    const shouldRestart = credentialDialog?.restart;
+    setCredentialDialog(null);
+    setCredentialValue('');
+    setSaveCredential(false);
+    if (shouldRestart) {
+      pendingCredentialRef.current = password;
+      savedCredentialTriedRef.current = false;
+      setIframeKey((key) => key + 1);
+      return;
+    }
+    postToViewer({ type: 'vnc-credentials', password });
+  }, [
+    credentialDialog?.restart,
+    credentialValue,
+    machine.id,
+    postToViewer,
+    saveCredential,
+    saveVncCredential,
+  ]);
+
+  const cancelCredential = useCallback(() => {
+    setCredentialDialog(null);
+    setCredentialValue('');
+    setSaveCredential(false);
+    postToViewer({ type: 'vnc-cancel-credentials' });
+    if (disconnectMachine) disconnectMachine(machine.id);
+  }, [disconnectMachine, machine.id, postToViewer]);
 
   const toggleFullscreen = useCallback(() => {
     const el = containerRef.current;
@@ -123,6 +205,13 @@ export default function RemoteViewer({ machine, reconnectFlag, wasRejected }) {
   }, [machine.id, machine.host, machine.port]);
 
   useEffect(() => {
+    activeAttemptRef.current = attemptId;
+    terminalReportedRef.current = false;
+    grantTriedRef.current = false;
+    if (!pendingCredentialRef.current) savedCredentialTriedRef.current = false;
+  }, [attemptId]);
+
+  useEffect(() => {
     if (reconnectFlag > 0) {
       setIframeKey((k) => k + 1);
     }
@@ -142,26 +231,149 @@ export default function RemoteViewer({ machine, reconnectFlag, wasRejected }) {
   }, [iframeKey, sendResize, sendQuality, quality]);
 
   useEffect(() => {
-    function handleMessage(event) {
-      if (event.data?.type === 'vnc-status') {
-        const st = event.data.state;
-        setStatuses((prev) => ({
-          ...prev,
-          [machine.id]: st,
-        }));
-        if (st === 'connected' || st === 'connecting') {
-          retryCountRef.current = 0;
-        } else if (st === 'disconnected' || st === 'error') {
-          scheduleReconnect(st);
-        }
+    const isExpectedIframe = (event) => event.source === iframeRef.current?.contentWindow;
+    const recordVncState = (state, message) => {
+      if (!recordConn) return;
+      recordConn({ name: machine.name, host: machine.host, state, message });
+    };
+
+    const requestCredentials = async () => {
+      if (pendingCredentialRef.current) {
+        const password = pendingCredentialRef.current;
+        pendingCredentialRef.current = '';
+        postToViewer({ type: 'vnc-credentials', password });
+        return;
       }
-      if (event.data?.type === 'vnc-resolution') {
-        setRemoteRes({ w: event.data.width, h: event.data.height });
+      if (vncGrant && !grantRejectedRef.current && !grantTriedRef.current) {
+        grantTriedRef.current = true;
+        postToViewer({ type: 'vnc-credentials', password: vncGrant });
+        return;
+      }
+      if (
+        !shouldUseSavedVncCredential({
+          hasSavedCredential: machine.hasVncPassword,
+          savedCredentialTried: savedCredentialTriedRef.current,
+        })
+      ) {
+        openCredentialDialog();
+        return;
+      }
+
+      savedCredentialTriedRef.current = true;
+      try {
+        const password = await window.electronAPI?.getVncCredential?.(machine.id);
+        if (activeAttemptRef.current !== attemptId || !iframeRef.current?.contentWindow) return;
+        if (password) {
+          postToViewer({ type: 'vnc-credentials', password });
+        } else {
+          openCredentialDialog();
+        }
+      } catch {
+        openCredentialDialog();
+      }
+    };
+
+    function handleMessage(event) {
+      const data = event.data;
+      if (!data || !isExpectedIframe(event) || data.attemptId !== attemptId) return;
+
+      if (data.type === 'vnc-resolution') {
+        setRemoteRes({ w: data.width, h: data.height });
+        return;
+      }
+      if (data.type === 'vnc-reconnect-request') {
+        handleReconnect();
+        return;
+      }
+      if (data.type !== 'vnc-status') return;
+
+      const state = data.state;
+      setStatuses((prev) => ({ ...prev, [machine.id]: state }));
+      if (state === 'connected') {
+        everConnectedRef.current = true;
+        retryCountRef.current = 0;
+        terminalReportedRef.current = false;
+        return;
+      }
+      if (state === 'credentials-required') {
+        recordVncState(state, 'Senha VNC necessária');
+        void requestCredentials();
+        return;
+      }
+      if (state === 'authentication-failed') {
+        if (!terminalReportedRef.current) {
+          terminalReportedRef.current = true;
+          recordVncState(state, 'Senha VNC não aceita');
+        }
+        let failure = savedCredentialTriedRef.current
+          ? 'A senha VNC salva não foi aceita. Informe outra senha para tentar de novo.'
+          : 'A senha VNC não foi aceita. Confira a senha configurada no TightVNC.';
+        if (grantTriedRef.current) {
+          grantRejectedRef.current = true;
+          failure =
+            'O TightVNC do PC remoto não aceitou a senha enviada por ele. Lá, use "Configurar TightVNC" de novo ou informe a senha aqui.';
+        }
+        openCredentialDialog(failure, true);
+        return;
+      }
+      if (state === 'server-refused') {
+        if (!terminalReportedRef.current) {
+          terminalReportedRef.current = true;
+          recordVncState(state, 'Servidor VNC recusou a conexão');
+          if (addLog)
+            addLog(
+              `O TightVNC de ${machine.name} recusou a conexão antes de pedir a senha (${data.message}). Após várias senhas erradas ele bloqueia este IP por alguns minutos: aguarde e use "Reconectar", ou reinicie o serviço TightVNC no PC remoto.`,
+              'error',
+            );
+        }
+        return;
+      }
+      if (state === 'connection-lost') {
+        if (!terminalReportedRef.current) {
+          terminalReportedRef.current = true;
+          recordVncState(state, 'Conexão VNC perdida');
+        }
+        if (
+          addLog &&
+          shouldExplainMissingTunnel({
+            everConnected: everConnectedRef.current,
+            tunnel: vncTunnel,
+            alreadyExplained: tunnelHintShownRef.current,
+          })
+        ) {
+          tunnelHintShownRef.current = true;
+          addLog(
+            `${machine.name} não ofereceu o túnel VNC (versão antiga do OpenPortal) e a porta 5900 dele não respondeu. Atualize o OpenPortal no outro PC: com a versão nova o TightVNC dele aceita só conexões locais.`,
+            'warn',
+          );
+        }
+        if (isRetryableVncState(state)) scheduleReconnect('conexão VNC perdida');
+        return;
+      }
+      if (state === 'disconnected' && !terminalReportedRef.current) {
+        terminalReportedRef.current = true;
+        recordVncState(state, 'Sessão VNC encerrada');
       }
     }
+
     window.addEventListener('message', handleMessage);
     return () => window.removeEventListener('message', handleMessage);
-  }, [machine.id, setStatuses, scheduleReconnect]);
+  }, [
+    addLog,
+    attemptId,
+    handleReconnect,
+    machine.hasVncPassword,
+    machine.host,
+    machine.id,
+    machine.name,
+    openCredentialDialog,
+    postToViewer,
+    recordConn,
+    scheduleReconnect,
+    setStatuses,
+    vncGrant,
+    vncTunnel,
+  ]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -282,6 +494,75 @@ export default function RemoteViewer({ machine, reconnectFlag, wasRejected }) {
           className="w-full h-full border-none block"
           title={`VNC - ${machine.name}`}
         />
+        {credentialDialog && (
+          <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/70 p-4">
+            <form
+              className="w-full max-w-md rounded-xl border border-line bg-surface p-6 shadow-2xl"
+              onSubmit={(event) => {
+                event.preventDefault();
+                void submitCredential();
+              }}
+            >
+              <h2 className="text-base font-semibold text-text-primary">
+                {credentialDialog.error ? 'Senha VNC não aceita' : 'Senha do VNC necessária'}
+              </h2>
+              <p className="mt-2 text-sm text-text-secondary">
+                {machine.name} ({machine.host}) pediu a senha configurada no TightVNC. Isso é
+                diferente da aprovação de acesso.
+              </p>
+              {credentialDialog.error && (
+                <p className="mt-3 rounded-lg border border-danger/40 bg-danger/10 px-3 py-2 text-xs text-danger">
+                  {credentialDialog.error}
+                </p>
+              )}
+              <label
+                className="mt-4 block text-xs text-text-faint"
+                htmlFor={`vnc-password-${machine.id}`}
+              >
+                Senha do servidor VNC
+              </label>
+              <input
+                id={`vnc-password-${machine.id}`}
+                autoFocus
+                type="password"
+                value={credentialValue}
+                onChange={(event) => setCredentialValue(event.target.value)}
+                className="mt-1 w-full rounded-lg border border-line bg-inset px-3 py-2 text-sm text-text-primary font-mono outline-none focus:border-accent"
+                placeholder="Digite a senha do TightVNC"
+              />
+              {!machine.id.startsWith('quick-') && (
+                <label className="mt-3 flex items-center gap-2 text-xs text-text-secondary">
+                  <input
+                    type="checkbox"
+                    checked={saveCredential}
+                    onChange={(event) => setSaveCredential(event.target.checked)}
+                  />
+                  Salvar com segurança para este PC cadastrado
+                </label>
+              )}
+              {machine.id.startsWith('quick-') && (
+                <p className="mt-3 text-xs text-text-faint">
+                  Esta conexão por IP não salva a senha nem cria um PC cadastrado.
+                </p>
+              )}
+              <div className="mt-5 flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={cancelCredential}
+                  className="rounded-lg border border-line px-3 py-2 text-sm text-text-secondary hover:bg-surface-2"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  className="rounded-lg bg-accent px-3 py-2 text-sm font-medium text-white hover:bg-accent-strong"
+                >
+                  {credentialDialog.restart ? 'Tentar novamente' : 'Conectar'}
+                </button>
+              </div>
+            </form>
+          </div>
+        )}
       </div>
     </div>
   );

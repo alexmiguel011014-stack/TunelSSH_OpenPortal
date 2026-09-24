@@ -5,25 +5,36 @@ const { FileAgentSession } = require('../file-transfer/file-agent');
 const { FrameDecoder } = require('../file-transfer/protocol');
 
 const SIGNAL_PORT = 18902;
-const REQUEST_TIMEOUT = 15000;
+// Dois prazos distintos: abrir o TCP é rápido (falha → pode tentar de novo),
+// mas depois que o pedido chega o PC remoto mostra "Aceitar/Rejeitar" e uma
+// pessoa precisa ir até lá clicar — 15s totais não bastavam, e cada nova
+// tentativa abria OUTRA janela de aprovação lá (aceitar a antiga não fazia nada).
+const CONNECT_TIMEOUT = 8000;
+const DECISION_TIMEOUT = 60000;
 const MAX_ATTEMPTS = 3;
 const RETRY_DELAY = 5000;
 
 // Emite 'file-session-open'/'file-session-close' (com o req da conexão)
 // quando um pedido aprovado vira sessão de arquivos — usado pelo main.js
-// para mostrar o aviso "alguém está conectado". É uma aproximação: a sessão
-// VNC em si (porta 5900) fala direto com o TightVNC, sem passar por este
-// servidor, então não há como observar seu início/fim de verdade — mas como
-// o App.jsx abre e fecha a sessão de arquivos junto com a sessão VNC (mesmo
-// clique de conectar/desconectar), esse sinal reflete bem a sessão na prática.
+// para mostrar o aviso "alguém está conectado". É uma aproximação: cada
+// conexão VNC chega depois, por um túnel próprio nesta mesma porta (GOALS 10,
+// openVncTunnel) — mas como o App.jsx abre e fecha a sessão de arquivos junto
+// com a sessão VNC (mesmo clique de conectar/desconectar), esse sinal reflete
+// bem a sessão na prática.
+// Também emite 'activity-event' (GOALS 4): mensagem fire-and-forget enviada
+// por OUTRA instância deste app para reportar uma sessão que aconteceu lá.
 class ConnectionRequestServer extends EventEmitter {
-  constructor(onRequest) {
+  // authorizeVncTunnel(token, remoteAddress) -> 'ok' | 'wrong' | 'locked'
+  // decide os pedidos de túnel VNC (GOALS 10); vncPort é o TightVNC local.
+  constructor(onRequest, { authorizeVncTunnel = null, vncPort = 5900 } = {}) {
     super();
     this.onRequest = onRequest;
+    this.authorizeVncTunnel = authorizeVncTunnel;
+    this.vncPort = vncPort;
     this.server = null;
   }
 
-  start(port = SIGNAL_PORT) {
+  start(port = SIGNAL_PORT, { retryInUseMs = 5000 } = {}) {
     if (this.server) return this.server;
 
     this.server = net.createServer((socket) => {
@@ -52,12 +63,20 @@ class ConnectionRequestServer extends EventEmitter {
         const onFileSessionEnd = () => {
           if (closed) return;
           closed = true;
+          // GOALS 4 lê isso em 'file-session-close' para contar arquivos
+          // movidos na sessão — ver file-agent.js's filesTransferred.
+          req.filesTransferred = session.filesTransferred;
           session.destroy();
           this.emit('file-session-close', req);
         };
         socket.on('close', onFileSessionEnd);
         socket.on('error', onFileSessionEnd);
       };
+
+      // Se quem pediu desistir (timeout/cancelou) antes da decisão, o host
+      // fecha a janela de aprovação pendente em vez de deixá-la órfã.
+      const pendingDecision = new AbortController();
+      socket.on('close', () => pendingDecision.abort());
 
       const dataHandler = (d) => {
         buffer = Buffer.concat([buffer, d]);
@@ -98,7 +117,11 @@ class ConnectionRequestServer extends EventEmitter {
           };
 
           if (this.onRequest) {
-            this.onRequest(req, respond);
+            // A senha de acesso vai à parte: `req` circula por eventos e pelo
+            // log de atividade e não pode carregá-la.
+            const sessionPassword =
+              typeof msg.sessionPassword === 'string' ? msg.sessionPassword : '';
+            this.onRequest(req, respond, pendingDecision.signal, sessionPassword);
           } else {
             respond({
               type: 'connect-response',
@@ -107,6 +130,15 @@ class ConnectionRequestServer extends EventEmitter {
               message: 'Server not ready',
             });
           }
+        } else if (msg.type === 'vnc-tunnel') {
+          socket.removeListener('data', dataHandler);
+          this.openVncTunnel(socket, msg.token);
+        } else if (msg.type === 'activity-event') {
+          // Fire-and-forget (GOALS 4): sem resposta esperada, nunca abre
+          // sessão de arquivos nem interfere num connect-request em curso
+          // na mesma porta.
+          this.emit('activity-event', msg.event);
+          if (!socket.destroyed) socket.end();
         } else {
           if (!socket.destroyed) {
             socket.write(
@@ -127,6 +159,12 @@ class ConnectionRequestServer extends EventEmitter {
 
     this.server.on('error', (err) => {
       console.error('[connection-request] Server error:', err.message);
+      // Outra cópia do app (ex.: a versão instalada) segura a porta: sem isto
+      // este app ficava aberto mas surdo para pedidos de acesso até reiniciar.
+      if (err.code === 'EADDRINUSE' && retryInUseMs > 0) {
+        clearTimeout(this.retryTimer);
+        this.retryTimer = setTimeout(() => this.server?.listen(port, '0.0.0.0'), retryInUseMs);
+      }
     });
 
     this.server.listen(port, '0.0.0.0', () => {
@@ -136,7 +174,36 @@ class ConnectionRequestServer extends EventEmitter {
     return this.server;
   }
 
+  // GOALS 10: com um token de sessão aprovada válido para o IP real do
+  // socket, esta conexão vira o transporte do VNC até o TightVNC local; sem
+  // ele é recusada. A resposta é uma linha JSON e, depois do ok, só RFB.
+  openVncTunnel(socket, token) {
+    const verdict = this.authorizeVncTunnel
+      ? this.authorizeVncTunnel(token, socket.remoteAddress || '')
+      : 'wrong';
+    if (verdict !== 'ok') {
+      socket.end(`${JSON.stringify({ type: 'vnc-tunnel-rejected', reason: verdict })}\n`);
+      return;
+    }
+    const upstream = net.createConnection({ host: '127.0.0.1', port: this.vncPort });
+    upstream.setNoDelay(true);
+    const closeBoth = () => {
+      socket.destroy();
+      upstream.destroy();
+    };
+    upstream.once('connect', () => {
+      if (socket.destroyed) return upstream.destroy();
+      socket.write(`${JSON.stringify({ type: 'vnc-tunnel-ok' })}\n`);
+      socket.pipe(upstream);
+      upstream.pipe(socket);
+    });
+    upstream.on('error', closeBoth);
+    upstream.on('close', closeBoth);
+    socket.on('close', closeBoth);
+  }
+
   stop() {
+    clearTimeout(this.retryTimer);
     if (this.server) {
       this.server.close();
       this.server = null;
@@ -144,8 +211,19 @@ class ConnectionRequestServer extends EventEmitter {
   }
 }
 
+// `delivered`: o pedido já chegou ao PC remoto (TCP aberto e pedido escrito).
+// Antes disso vale tentar de novo; depois, o PC remoto já mostra a janela de
+// aprovação e repetir só empilharia outra janela lá.
+function requestError(message, delivered) {
+  const err = new Error(message);
+  err.delivered = delivered;
+  return err;
+}
+
 function sendConnectRequestOnce(host, fromName, fromIp, port = SIGNAL_PORT, opts = {}) {
   const wantsTunnel = !!opts.wantsTunnel;
+  const connectTimeout = opts.connectTimeoutMs || CONNECT_TIMEOUT;
+  const decisionTimeout = opts.decisionTimeoutMs || DECISION_TIMEOUT;
 
   return new Promise((resolve, reject) => {
     let socket;
@@ -156,6 +234,7 @@ function sendConnectRequestOnce(host, fromName, fromIp, port = SIGNAL_PORT, opts
     }
 
     let responded = false;
+    let delivered = false;
     let buffer = Buffer.alloc(0);
     let timer = null;
 
@@ -169,13 +248,24 @@ function sendConnectRequestOnce(host, fromName, fromIp, port = SIGNAL_PORT, opts
 
     timer = setTimeout(() => {
       fail(
-        new Error(
-          'Sem resposta do PC remoto (timeout de 15s) — verifique se o OpenPortal está aberto lá e se o Firewall do Windows não bloqueou o app na primeira execução',
+        requestError(
+          `Não foi possível contactar ${host}:${port} (sem resposta em ${connectTimeout / 1000}s) — verifique se o OpenPortal está aberto no PC remoto e se o Firewall do Windows liberou o app`,
+          false,
         ),
       );
-    }, REQUEST_TIMEOUT);
+    }, connectTimeout);
 
     socket.on('connect', () => {
+      delivered = true;
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        fail(
+          requestError(
+            `O PC remoto recebeu o pedido, mas ninguém respondeu em ${decisionTimeout / 1000}s — clique em "Aceitar" na janela "Solicitação de conexão" do OpenPortal no PC remoto`,
+            true,
+          ),
+        );
+      }, decisionTimeout);
       socket.write(
         JSON.stringify({
           type: 'connect-request',
@@ -183,6 +273,7 @@ function sendConnectRequestOnce(host, fromName, fromIp, port = SIGNAL_PORT, opts
           fromName,
           fromIp,
           capability: wantsTunnel ? 'tunnel' : undefined,
+          sessionPassword: opts.sessionPassword || undefined,
         }),
       );
     });
@@ -198,6 +289,11 @@ function sendConnectRequestOnce(host, fromName, fromIp, port = SIGNAL_PORT, opts
       responded = true;
       if (timer) clearTimeout(timer);
 
+      // Senha do TightVNC e token do túnel VNC do PC remoto, entregues junto
+      // com a aprovação.
+      const vncPassword = typeof msg.vncPassword === 'string' ? msg.vncPassword : '';
+      const vncToken = typeof msg.vncToken === 'string' ? msg.vncToken : '';
+
       if (msg.type !== 'connect-response') {
         if (!socket.destroyed) socket.destroy();
         resolve({ approved: false, message: 'Resposta inválida do PC remoto' });
@@ -210,35 +306,45 @@ function sendConnectRequestOnce(host, fromName, fromIp, port = SIGNAL_PORT, opts
         socket.removeAllListeners('data');
         socket.removeAllListeners('error');
         socket.removeAllListeners('close');
-        resolve({ approved: true, message: msg.message || '', socket });
+        resolve({ approved: true, message: msg.message || '', vncPassword, vncToken, socket });
         return;
       }
 
       if (!socket.destroyed) socket.destroy();
-      resolve({ approved: !!msg.approved, message: msg.message || '' });
+      resolve({
+        approved: !!msg.approved,
+        rejected: msg.rejected === true,
+        message: msg.message || '',
+        vncPassword,
+        vncToken,
+      });
     });
 
     socket.on('error', (err) => {
       const hint =
         err.code === 'ECONNREFUSED' ? ' — verifique se o OpenPortal está aberto no PC remoto' : '';
       fail(
-        new Error(`Não foi possível contactar ${host}:${port} (${err.code || err.message})${hint}`),
+        requestError(
+          `Não foi possível contactar ${host}:${port} (${err.code || err.message})${hint}`,
+          delivered,
+        ),
       );
     });
 
     socket.on('close', () => {
-      fail(new Error('Conexão encerrada pelo PC remoto'));
+      fail(requestError('Conexão encerrada pelo PC remoto', delivered));
     });
   });
 }
 
 function sendConnectRequest(host, fromName, fromIp, port = SIGNAL_PORT, opts = {}) {
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const retryDelay = opts.retryDelayMs ?? RETRY_DELAY;
 
   return (async () => {
     let lastError = null;
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-      if (attempt > 1) await sleep(RETRY_DELAY);
+      if (attempt > 1) await sleep(retryDelay);
       try {
         const res = await sendConnectRequestOnce(host, fromName, fromIp, port, opts);
         return res;
@@ -247,10 +353,31 @@ function sendConnectRequest(host, fromName, fromIp, port = SIGNAL_PORT, opts = {
         console.error(
           `[connection-request] Tentativa ${attempt}/${MAX_ATTEMPTS} falhou para ${host}:${port}: ${err.message}`,
         );
+        if (err.delivered) break;
       }
     }
     throw lastError || new Error('Falha ao contactar o PC remoto');
   })();
 }
 
-module.exports = { ConnectionRequestServer, sendConnectRequest, SIGNAL_PORT };
+// Push best-effort usado por GOALS 4: sem retry (ao contrário de
+// sendConnectRequest) e sem resposta esperada — se o peer estiver
+// inalcançável, o erro é simplesmente descartado. A sessão em si já
+// aconteceu e não é perdida, só o aviso ao vivo é que fica sem entrega.
+function sendActivityEvent(host, event, port = SIGNAL_PORT) {
+  try {
+    const socket = net.createConnection(port, host);
+    socket.setTimeout(4000, () => socket.destroy());
+    socket.on('connect', () => {
+      socket.end(JSON.stringify({ type: 'activity-event', event }));
+    });
+    socket.on('error', () => {});
+  } catch {}
+}
+
+module.exports = {
+  ConnectionRequestServer,
+  sendConnectRequest,
+  sendActivityEvent,
+  SIGNAL_PORT,
+};

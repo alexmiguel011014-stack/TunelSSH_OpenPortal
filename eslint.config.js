@@ -13,6 +13,8 @@ module.exports = [
       'graphify-out/**',
       'strix_runs/**',
       'src/renderer/public/noVNC/**',
+      // Worktrees de outras sessões (cópias de outros branches) não são deste checkout.
+      '.claude/**',
     ],
   },
   js.configs.recommended,

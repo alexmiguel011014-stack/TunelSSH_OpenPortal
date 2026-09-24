@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Formato clássico (não SDK-style) de propósito: esta máquina tem só o
+  MSBuild via VS Build Tools, sem o workload ".NET SDK" que forneceria o
+  resolvedor "Microsoft.NET.Sdk" usado pelo formato moderno curto. Este
+  formato já funciona com o que já está instalado — ver GOALS.md, "Sidecar
+  scaffold".
+-->
+<Project ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup>
+    <Configuration Condition=" '$(Configuration)' == '' ">Debug</Configuration>
+    <Platform Condition=" '$(Platform)' == '' ">AnyCPU</Platform>
+    <OutputType>WinExe</OutputType>
+    <RootNamespace>OpenPortalRdpSidecar</RootNamespace>
+    <AssemblyName>OpenPortalRdpSidecar</AssemblyName>
+    <TargetFrameworkVersion>v4.8</TargetFrameworkVersion>
+    <FileAlignment>512</FileAlignment>
+    <Deterministic>true</Deterministic>
+  </PropertyGroup>
+  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' ">
+    <DebugSymbols>true</DebugSymbols>
+    <DebugType>full</DebugType>
+    <Optimize>false</Optimize>
+    <OutputPath>bin\Debug\</OutputPath>
+    <DefineConstants>DEBUG;TRACE</DefineConstants>
+    <ErrorReport>prompt</ErrorReport>
+    <WarningLevel>4</WarningLevel>
+  </PropertyGroup>
+  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Release|AnyCPU' ">
+    <Optimize>true</Optimize>
+    <OutputPath>bin\Release\</OutputPath>
+    <DefineConstants>TRACE</DefineConstants>
+    <ErrorReport>prompt</ErrorReport>
+    <WarningLevel>4</WarningLevel>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="System" />
+    <Reference Include="System.Core" />
+    <Reference Include="System.Drawing" />
+    <Reference Include="System.Windows.Forms" />
+    <!-- JavaScriptSerializer: parser JSON simples já presente no .NET
+         Framework, evita puxar Newtonsoft/System.Text.Json como dependência
+         nova só pra decodificar {"cmd":...} de uma linha do pipe. -->
+    <Reference Include="System.Web.Extensions" />
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Include="Program.cs" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- Interop.MSTSCLib.dll/AxInterop.MSTSCLib.dll pré-compilados (modo
+         "Legacy", padrão do pacote para net48) em vez de gerar isso à mão
+         com aximp/tlbimp contra mstscax.dll — ver GOALS.md, GOALS 2. -->
+    <PackageReference Include="Devolutions.MsRdpEx" Version="2026.8.20.1" />
+  </ItemGroup>
+  <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
+</Project>

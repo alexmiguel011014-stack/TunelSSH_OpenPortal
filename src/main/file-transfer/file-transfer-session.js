@@ -36,26 +36,47 @@ async function connect(host, opts = {}) {
 
   if (!opts.force) {
     const existing = findLiveSessionByHost(target);
-    if (existing) return { sessionId: existing.sessionId, reused: true };
+    if (existing) {
+      return {
+        sessionId: existing.sessionId,
+        reused: true,
+        vncPassword: existing.vncPassword,
+        vncTunnel: Boolean(existing.vncToken),
+      };
+    }
     if (connecting.has(target)) return connecting.get(target);
   }
 
   const task = (async () => {
     const fromName = opts.fromName || os.hostname() || 'PC';
     const fromIp = opts.fromIp || '';
-    const res = await sendConnectRequest(target, fromName, fromIp, SIGNAL_PORT, { wantsTunnel: true });
+    const res = await sendConnectRequest(target, fromName, fromIp, SIGNAL_PORT, {
+      wantsTunnel: true,
+      sessionPassword: opts.sessionPassword,
+    });
     if (!res.approved || !res.socket) {
-      throw new Error(res.message || 'Conexão de arquivos recusada pelo PC remoto');
+      const err = new Error(
+        res.message ||
+          (res.rejected
+            ? 'Acesso recusado no PC remoto'
+            : 'Conexão de arquivos recusada pelo PC remoto'),
+      );
+      err.rejected = res.rejected === true;
+      throw err;
     }
 
     const client = new FileClient(res.socket);
     const sessionId = nextSessionId();
-    sessions.set(sessionId, { sessionId, host: target, client });
+    const vncPassword = res.vncPassword || '';
+    // Token do túnel VNC (GOALS 10): fica só aqui, no processo principal; o
+    // proxy o busca pelo host, sem passar pelo renderer nem por URL.
+    const vncToken = res.vncToken || '';
+    sessions.set(sessionId, { sessionId, host: target, client, vncPassword, vncToken });
 
     res.socket.on('close', () => sessions.delete(sessionId));
     res.socket.on('error', () => sessions.delete(sessionId));
 
-    return { sessionId, reused: false };
+    return { sessionId, reused: false, vncPassword, vncTunnel: Boolean(vncToken) };
   })();
 
   connecting.set(target, task);
@@ -64,6 +85,10 @@ async function connect(host, opts = {}) {
   } finally {
     connecting.delete(target);
   }
+}
+
+function getVncTunnelToken(host) {
+  return findLiveSessionByHost(String(host || '').trim())?.vncToken || '';
 }
 
 function getClient(sessionId) {
@@ -82,4 +107,4 @@ function disconnect(sessionId) {
   }
 }
 
-module.exports = { connect, getClient, disconnect };
+module.exports = { connect, getClient, getVncTunnelToken, disconnect };

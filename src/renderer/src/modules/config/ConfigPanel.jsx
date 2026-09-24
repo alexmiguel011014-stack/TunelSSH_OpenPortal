@@ -15,12 +15,16 @@ function isValidLogin(login) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test((login || '').trim());
 }
 
+const DEFAULT_TELEGRAM = { enabled: false, token: '', chatId: '' };
+
 export default function ConfigPanel() {
-  const { machines, saveMachines, setShowConfig, maxMachines, addLog } = useContext(MachineContext);
+  const { machines, saveMachines, saveVncCredential, setShowConfig, maxMachines, addLog } =
+    useContext(MachineContext);
 
   const [draft, setDraft] = useState(() => machines.map((m) => ({ ...m })));
   const [saved, setSaved] = useState(false);
   const [errors, setErrors] = useState({});
+  const [vncPasswordUpdates, setVncPasswordUpdates] = useState({});
   const [testing, setTesting] = useState({});
   const [testResults, setTestResults] = useState({});
   const [localIp, setLocalIp] = useState(null); // null = carregando, '' = não achou
@@ -29,6 +33,26 @@ export default function ConfigPanel() {
   const [newAllowedUser, setNewAllowedUser] = useState('');
   const [allowedUsersSaved, setAllowedUsersSaved] = useState(false);
   const [allowedUsersError, setAllowedUsersError] = useState('');
+
+  // GOALS 4: para quem ESTA máquina empurra o resumo de cada sessão (push
+  // best-effort, ver docs/ARQUITETURA_CONEXAO.md). Independente da lista de
+  // auto-aprovação acima — uma coisa é quem pode entrar, outra é pra quem eu
+  // aviso que entrou.
+  const [reportTo, setReportTo] = useState([]);
+  const [newReportTo, setNewReportTo] = useState('');
+  const [reportToSaved, setReportToSaved] = useState(false);
+  const [reportToError, setReportToError] = useState('');
+
+  const [telegram, setTelegram] = useState(DEFAULT_TELEGRAM);
+  const [telegramSaved, setTelegramSaved] = useState(false);
+
+  // GOALS 2: hospedagem RDP nesta máquina (provisionamento manual, uma vez
+  // por PC) — cada ação abaixo abre um prompt de UAC do Windows.
+  const [rdpHostingStatus, setRdpHostingStatus] = useState(null); // null | 'working' | 'ok' | 'error'
+  const [rdpCredUsername, setRdpCredUsername] = useState('openportal-rdp');
+  const [rdpCredPassword, setRdpCredPassword] = useState('');
+  const [rdpCredStatus, setRdpCredStatus] = useState(null); // null | 'working' | 'ok' | 'error'
+  const [rdpCredError, setRdpCredError] = useState('');
 
   useEffect(() => {
     window.electronAPI
@@ -40,8 +64,16 @@ export default function ConfigPanel() {
   useEffect(() => {
     window.electronAPI
       ?.getConfig?.()
-      .then((cfg) => setAllowedUsers(Array.isArray(cfg?.allowedUsers) ? cfg.allowedUsers : []))
-      .catch(() => setAllowedUsers([]));
+      .then((cfg) => {
+        setAllowedUsers(Array.isArray(cfg?.allowedUsers) ? cfg.allowedUsers : []);
+        setReportTo(Array.isArray(cfg?.reportTo) ? cfg.reportTo : []);
+        setTelegram({ ...DEFAULT_TELEGRAM, ...(cfg?.telegram || {}) });
+      })
+      .catch(() => {
+        setAllowedUsers([]);
+        setReportTo([]);
+        setTelegram(DEFAULT_TELEGRAM);
+      });
   }, []);
 
   const copyLocalIp = () => {
@@ -74,6 +106,101 @@ export default function ConfigPanel() {
   const handleRemoveAllowedUser = (login) => {
     saveAllowedUsers(allowedUsers.filter((u) => u !== login));
     if (addLog) addLog(`Removido da lista de auto-aprovação: ${login}`, 'info');
+  };
+
+  const saveReportTo = (next) => {
+    setReportTo(next);
+    window.electronAPI?.saveConfig({ reportTo: next });
+    setReportToSaved(true);
+    setTimeout(() => setReportToSaved(false), 2000);
+  };
+
+  const handleAddReportTo = () => {
+    const login = newReportTo.trim();
+    if (!isValidLogin(login)) {
+      setReportToError('Informe um e-mail de login Tailscale válido');
+      return;
+    }
+    if (reportTo.includes(login)) {
+      setReportToError('Esse e-mail já está na lista');
+      return;
+    }
+    setReportToError('');
+    setNewReportTo('');
+    saveReportTo([...reportTo, login]);
+    if (addLog) addLog(`Adicionado ao envio de atividade: ${login}`, 'info');
+  };
+
+  const handleRemoveReportTo = (login) => {
+    saveReportTo(reportTo.filter((u) => u !== login));
+    if (addLog) addLog(`Removido do envio de atividade: ${login}`, 'info');
+  };
+
+  const saveTelegram = (next) => {
+    setTelegram(next);
+    window.electronAPI?.saveConfig({ telegram: next });
+    setTelegramSaved(true);
+    setTimeout(() => setTelegramSaved(false), 2000);
+  };
+
+  const handleToggleTelegram = () => {
+    saveTelegram({ ...telegram, enabled: !telegram.enabled });
+  };
+
+  // GOALS 2 — provisionamento de hospedagem RDP nesta máquina. Ambos abrem
+  // um prompt de UAC do Windows; o próprio usuário aprova (ou recusa) ali.
+  const handleEnableRdpHosting = async () => {
+    setRdpHostingStatus('working');
+    try {
+      const res = await window.electronAPI?.enableRdpHosting?.();
+      setRdpHostingStatus(res?.success ? 'ok' : 'error');
+      if (addLog) {
+        addLog(
+          res?.success
+            ? 'Remote Desktop habilitado nesta máquina (NLA continua ativo)'
+            : `Falha ao habilitar Remote Desktop: ${res?.error || 'verifique se o UAC foi aprovado'}`,
+          res?.success ? 'info' : 'error',
+        );
+      }
+    } catch (err) {
+      setRdpHostingStatus('error');
+      if (addLog) addLog(`Falha ao habilitar Remote Desktop: ${err.message}`, 'error');
+    }
+  };
+
+  const handleGenerateRdpPassword = async () => {
+    const pw = await window.electronAPI?.generateRdpPassword?.();
+    if (pw) setRdpCredPassword(pw);
+  };
+
+  const handleCreateRdpCredential = async () => {
+    const username = rdpCredUsername.trim();
+    if (!username) {
+      setRdpCredError('Informe um nome de usuário');
+      return;
+    }
+    if (!rdpCredPassword) {
+      setRdpCredError('Gere uma senha primeiro ("Gerar senha")');
+      return;
+    }
+    setRdpCredError('');
+    setRdpCredStatus('working');
+    try {
+      const res = await window.electronAPI?.createRdpCredential?.(username, rdpCredPassword);
+      setRdpCredStatus(res?.success ? 'ok' : 'error');
+      if (!res?.success) setRdpCredError(res?.error || 'Falha ao criar a conta');
+      if (addLog) {
+        addLog(
+          res?.success
+            ? `Conta RDP dedicada criada: ${username}`
+            : `Falha ao criar conta RDP: ${res?.error || '?'}`,
+          res?.success ? 'info' : 'error',
+        );
+      }
+    } catch (err) {
+      setRdpCredStatus('error');
+      setRdpCredError(err.message);
+    }
   };
 
   const handleTest = async (index, machine) => {
@@ -139,14 +266,29 @@ export default function ConfigPanel() {
     });
   };
 
-  const handleSave = () => {
+  const handleSave = async () => {
     const errs = validate(draft);
     if (Object.keys(errs).length > 0) {
       setErrors(errs);
       if (addLog) addLog('Configuração não salva: corrija os campos destacados', 'warn');
       return;
     }
-    saveMachines(draft);
+    const machinesSaved = await saveMachines(draft);
+    if (!machinesSaved) {
+      if (addLog) addLog('Não foi possível salvar a configuração dos PCs', 'error');
+      return;
+    }
+    const credentialResults = await Promise.all(
+      Object.entries(vncPasswordUpdates).map(async ([machineId, password]) => ({
+        machineId,
+        result: await saveVncCredential(machineId, password),
+      })),
+    );
+    if (credentialResults.some(({ result }) => !result)) {
+      if (addLog) addLog('Configuração salva, mas uma senha VNC não pôde ser atualizada', 'error');
+      return;
+    }
+    setVncPasswordUpdates({});
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
   };
@@ -301,20 +443,128 @@ export default function ConfigPanel() {
                   )}
                 </div>
               </div>
+
               <div className="mt-4">
-                <label className="block text-xs text-text-faint mb-1">Senha VNC (opcional)</label>
-                <input
-                  type="password"
-                  value={machine.password || ''}
-                  onChange={(e) => updateField(index, 'password', e.target.value)}
-                  className="w-full bg-inset border border-line rounded-lg px-3 py-2 text-sm text-text-primary font-mono focus:outline-none focus:border-accent transition-colors"
-                  placeholder="Deixe em branco se não tiver senha"
-                />
-                <p className="text-xs text-text-faint mt-1">
-                  Se o VNC tiver senha, configure aqui. Será usada como fallback se a conexão for
-                  recusada.
-                </p>
+                <label className="block text-xs text-text-faint mb-1">Transporte</label>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => updateField(index, 'transport', 'vnc')}
+                    className={`px-3 py-1.5 text-xs rounded-lg border transition-colors ${
+                      (machine.transport || 'vnc') === 'vnc'
+                        ? 'border-accent text-accent bg-accent/10'
+                        : 'border-line text-text-muted hover:border-text-faint'
+                    }`}
+                  >
+                    VNC
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => updateField(index, 'transport', 'rdp')}
+                    className={`px-3 py-1.5 text-xs rounded-lg border transition-colors ${
+                      machine.transport === 'rdp'
+                        ? 'border-accent text-accent bg-accent/10'
+                        : 'border-line text-text-muted hover:border-text-faint'
+                    }`}
+                  >
+                    RDP (nativo)
+                  </button>
+                </div>
               </div>
+
+              {machine.transport === 'rdp' ? (
+                <div className="mt-4 grid grid-cols-1 sm:grid-cols-4 gap-4">
+                  <div>
+                    <label className="block text-xs text-text-faint mb-1">Usuário RDP</label>
+                    <input
+                      type="text"
+                      value={machine.rdpUsername || ''}
+                      onChange={(e) => updateField(index, 'rdpUsername', e.target.value)}
+                      className="w-full bg-inset border border-line rounded-lg px-3 py-2 text-sm text-text-primary font-mono focus:outline-none focus:border-accent transition-colors"
+                      placeholder="openportal-rdp"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-text-faint mb-1">Senha RDP</label>
+                    <input
+                      type="password"
+                      value={machine.rdpPassword || ''}
+                      onChange={(e) => updateField(index, 'rdpPassword', e.target.value)}
+                      className="w-full bg-inset border border-line rounded-lg px-3 py-2 text-sm text-text-primary font-mono focus:outline-none focus:border-accent transition-colors"
+                      placeholder="Senha da conta dedicada"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-text-faint mb-1">Porta RDP</label>
+                    <input
+                      type="number"
+                      min="1"
+                      max={MAX_PORT}
+                      value={machine.rdpPort || 3389}
+                      onChange={(e) =>
+                        updateField(index, 'rdpPort', parseInt(e.target.value) || 3389)
+                      }
+                      className="w-full bg-inset border border-line rounded-lg px-3 py-2 text-sm text-text-primary font-mono focus:outline-none focus:border-accent transition-colors"
+                      placeholder="3389"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-text-faint mb-1">Exibição RDP</label>
+                    <select
+                      value={machine.rdpHostMode || 'embedded'}
+                      onChange={(e) => updateField(index, 'rdpHostMode', e.target.value)}
+                      className="w-full bg-inset border border-line rounded-lg px-3 py-2 text-sm text-text-primary focus:outline-none focus:border-accent transition-colors"
+                    >
+                      <option value="embedded">Dentro do app</option>
+                      <option value="native-window">Janela compatível</option>
+                      <option value="auto-fallback">App + fallback automático</option>
+                    </select>
+                  </div>
+                  <p className="sm:col-span-4 text-xs text-text-faint">
+                    Use a conta dedicada criada na seção &quot;Hospedagem RDP&quot; abaixo (no PC
+                    remoto, não aqui) — nunca a senha pessoal de quem está logado lá. Essa máquina
+                    também precisa ter o Remote Desktop habilitado (Pro/Enterprise/Education). O
+                    fallback abre uma única janela nativa somente se o modo embutido não iniciar.
+                  </p>
+                </div>
+              ) : (
+                <div className="mt-4">
+                  <div className="flex items-center justify-between gap-3 mb-1">
+                    <label className="block text-xs text-text-faint">
+                      Senha VNC salva (opcional)
+                    </label>
+                    {machine.hasVncPassword && !Object.hasOwn(vncPasswordUpdates, machine.id) && (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setVncPasswordUpdates((prev) => ({ ...prev, [machine.id]: '' }))
+                        }
+                        className="text-xs text-danger hover:underline"
+                      >
+                        Remover senha salva
+                      </button>
+                    )}
+                  </div>
+                  <input
+                    type="password"
+                    value={vncPasswordUpdates[machine.id] || ''}
+                    onChange={(e) =>
+                      setVncPasswordUpdates((prev) => ({ ...prev, [machine.id]: e.target.value }))
+                    }
+                    className="w-full bg-inset border border-line rounded-lg px-3 py-2 text-sm text-text-primary font-mono focus:outline-none focus:border-accent transition-colors"
+                    placeholder={
+                      machine.hasVncPassword
+                        ? 'Senha salva; digite uma nova para substituir'
+                        : 'Deixe em branco se não houver senha'
+                    }
+                  />
+                  <p className="text-xs text-text-faint mt-1">
+                    Esta é uma cópia criptografada neste PC. Ela só é usada depois da aprovação de
+                    acesso e quando o servidor VNC remoto pede uma senha; não altera o TightVNC no
+                    PC remoto.
+                  </p>
+                </div>
+              )}
               {errors[index] && (
                 <ul className="mt-3 space-y-1">
                   {errors[index].map((err) => (
@@ -350,6 +600,91 @@ export default function ConfigPanel() {
               Corrija os campos destacados antes de salvar
             </span>
           )}
+        </div>
+
+        <div className="mt-10 pt-8 border-t border-line">
+          <h3 className="text-sm font-medium text-text-secondary mb-1">
+            Hospedagem RDP nesta máquina (opcional)
+          </h3>
+          <p className="text-xs text-text-faint mb-4">
+            Provisionamento de <strong>uma vez por PC</strong>, para este PC aceitar conexões RDP
+            (transporte alternativo ao VNC, ver campo &quot;Transporte&quot; acima). Cada ação abre
+            um prompt do Controle de Conta de Usuário (UAC) — você aprova ali. Não muda nada na
+            autenticação NLA do Windows.
+          </p>
+
+          <div className="bg-surface rounded-lg px-3 py-3 border border-line mb-4">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-sm text-text-primary">Habilitar Remote Desktop nesta máquina</p>
+                <p className="text-xs text-text-faint mt-0.5">
+                  Liga o serviço de RDP do Windows e a regra de firewall correspondente.
+                </p>
+              </div>
+              <button
+                onClick={handleEnableRdpHosting}
+                disabled={rdpHostingStatus === 'working'}
+                className="shrink-0 px-3 py-1.5 text-xs rounded-lg border border-line text-text-secondary hover:border-accent hover:text-accent transition-colors disabled:opacity-50"
+              >
+                {rdpHostingStatus === 'working' ? 'Aguardando UAC...' : 'Habilitar'}
+              </button>
+            </div>
+            {rdpHostingStatus === 'ok' && (
+              <p className="text-xs text-success mt-2">
+                Remote Desktop habilitado e confirmado no registro.
+              </p>
+            )}
+            {rdpHostingStatus === 'error' && (
+              <p className="text-xs text-danger mt-2">
+                Não foi possível habilitar — o UAC foi recusado ou algo falhou.
+              </p>
+            )}
+          </div>
+
+          <div className="bg-surface rounded-lg px-3 py-3 border border-line">
+            <p className="text-sm text-text-primary mb-1">Criar conta dedicada para RDP</p>
+            <p className="text-xs text-text-faint mb-3">
+              Conta local só para o app usar — nunca a senha pessoal de quem está logado aqui. Anote
+              a senha gerada agora: ela só aparece uma vez, e é o que você cola no campo &quot;Senha
+              RDP&quot; de quem for conectar neste PC.
+            </p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <input
+                type="text"
+                value={rdpCredUsername}
+                onChange={(e) => setRdpCredUsername(e.target.value)}
+                className="w-full bg-inset border border-line rounded-lg px-3 py-2 text-sm text-text-primary font-mono focus:outline-none focus:border-accent transition-colors"
+                placeholder="openportal-rdp"
+              />
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  readOnly
+                  value={rdpCredPassword}
+                  className="flex-1 bg-inset border border-line rounded-lg px-3 py-2 text-sm text-text-primary font-mono"
+                  placeholder="Clique em Gerar senha"
+                />
+                <button
+                  type="button"
+                  onClick={handleGenerateRdpPassword}
+                  className="shrink-0 px-3 py-1.5 text-xs rounded-lg border border-line text-text-secondary hover:border-accent hover:text-accent transition-colors"
+                >
+                  Gerar senha
+                </button>
+              </div>
+            </div>
+            <div className="mt-3 flex items-center gap-3">
+              <button
+                onClick={handleCreateRdpCredential}
+                disabled={rdpCredStatus === 'working'}
+                className="px-4 py-2 text-sm rounded-lg border border-line text-text-secondary hover:border-accent hover:text-accent transition-colors disabled:opacity-50"
+              >
+                {rdpCredStatus === 'working' ? 'Aguardando UAC...' : 'Criar conta'}
+              </button>
+              {rdpCredStatus === 'ok' && <span className="text-xs text-success">Conta criada</span>}
+            </div>
+            {rdpCredError && <p className="text-xs text-danger mt-2">{rdpCredError}</p>}
+          </div>
         </div>
 
         <div className="mt-10 pt-8 border-t border-line">
@@ -404,6 +739,115 @@ export default function ConfigPanel() {
           {allowedUsersSaved && (
             <p className="text-xs text-success mt-2">Lista de auto-aprovação salva</p>
           )}
+        </div>
+
+        <div className="mt-10 pt-8 border-t border-line">
+          <h3 className="text-sm font-medium text-text-secondary mb-1">Reportar atividade para</h3>
+          <p className="text-xs text-text-faint mb-4">
+            Logins Tailscale (e-mail) que recebem um resumo (identidade, duração, arquivos
+            transferidos) toda vez que uma sessão nesta máquina termina — aparece no painel
+            &quot;Atividade&quot; de quem estiver na lista, em tempo real. Envio best-effort: se a
+            pessoa estiver offline, o aviso é só descartado (a sessão em si não é afetada).
+          </p>
+
+          {reportTo.length > 0 && (
+            <ul className="space-y-2 mb-3">
+              {reportTo.map((login) => (
+                <li
+                  key={login}
+                  className="flex items-center justify-between bg-surface rounded-lg px-3 py-2 border border-line"
+                >
+                  <span className="text-sm text-text-primary font-mono">{login}</span>
+                  <button
+                    onClick={() => handleRemoveReportTo(login)}
+                    className="text-xs text-danger hover:opacity-80 transition-opacity bg-transparent border border-danger/40 rounded px-2 py-1"
+                  >
+                    Remover
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+
+          <div className="flex items-center gap-2">
+            <input
+              type="text"
+              value={newReportTo}
+              onChange={(e) => {
+                setNewReportTo(e.target.value);
+                setReportToError('');
+              }}
+              onKeyDown={(e) => e.key === 'Enter' && handleAddReportTo()}
+              className="flex-1 bg-inset border border-line rounded-lg px-3 py-2 text-sm text-text-primary font-mono focus:outline-none focus:border-accent transition-colors"
+              placeholder="professor@exemplo.com"
+            />
+            <button
+              onClick={handleAddReportTo}
+              className="px-4 py-2 text-sm rounded-lg border border-line text-text-secondary hover:border-accent hover:text-accent transition-colors"
+            >
+              Adicionar
+            </button>
+          </div>
+          {reportToError && <p className="text-xs text-danger mt-2">{reportToError}</p>}
+          {reportToSaved && <p className="text-xs text-success mt-2">Lista de envio salva</p>}
+        </div>
+
+        <div className="mt-10 pt-8 border-t border-line">
+          <div className="flex items-center justify-between mb-1">
+            <h3 className="text-sm font-medium text-text-secondary">
+              Alertas do Telegram (opcional)
+            </h3>
+            <button
+              onClick={handleToggleTelegram}
+              className={`text-xs px-3 py-1.5 rounded-lg border transition-colors ${
+                telegram.enabled
+                  ? 'border-success/50 text-success bg-success/10'
+                  : 'border-line text-text-muted hover:border-text-faint'
+              }`}
+            >
+              {telegram.enabled ? 'Ativado' : 'Desativado'}
+            </button>
+          </div>
+          <p className="text-xs text-text-faint mb-4">
+            Envia o mesmo resumo de &quot;Reportar atividade para&quot; também como mensagem no
+            Telegram — um alerta a mais, não o único lugar onde a atividade aparece. Requer
+            <code className="mx-1 px-1 py-0.5 bg-inset rounded text-[11px]">
+              npm install telegraf
+            </code>
+            no app (ver <code className="text-[11px]">docs/TELEGRAM_SETUP.md</code>) e um bot criado
+            com o @BotFather.
+          </p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-xs text-text-faint mb-1">Token do bot</label>
+              <input
+                type="password"
+                value={telegram.token}
+                onChange={(e) => setTelegram((prev) => ({ ...prev, token: e.target.value }))}
+                className="w-full bg-inset border border-line rounded-lg px-3 py-2 text-sm text-text-primary font-mono focus:outline-none focus:border-accent transition-colors"
+                placeholder="123456:ABC-DEF..."
+              />
+            </div>
+            <div>
+              <label className="block text-xs text-text-faint mb-1">Chat ID de destino</label>
+              <input
+                type="text"
+                value={telegram.chatId}
+                onChange={(e) => setTelegram((prev) => ({ ...prev, chatId: e.target.value }))}
+                className="w-full bg-inset border border-line rounded-lg px-3 py-2 text-sm text-text-primary font-mono focus:outline-none focus:border-accent transition-colors"
+                placeholder="123456789"
+              />
+            </div>
+          </div>
+          <div className="mt-3 flex items-center gap-3">
+            <button
+              onClick={() => saveTelegram(telegram)}
+              className="px-4 py-2 text-sm rounded-lg border border-line text-text-secondary hover:border-accent hover:text-accent transition-colors"
+            >
+              Salvar Telegram
+            </button>
+            {telegramSaved && <span className="text-xs text-success">Configuração salva</span>}
+          </div>
         </div>
 
         <div className="mt-6 p-4 bg-surface/50 rounded-lg border border-line-subtle">
