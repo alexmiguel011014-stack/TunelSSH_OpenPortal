@@ -20,6 +20,10 @@ caminho certo. Nenhum log guarda senha.
   aberto de novo.
 - Abra o app pelo `ABRIR_APP.bat` da pasta que está no commit em teste. Ele
   fecha cópias antigas antes de abrir. Depois de atualizar o código, abra de novo.
+- **Minimize a janela do OpenPortal, não feche.** Fechar encerra o app, e o PC
+  some para quem tenta conectar. Se o app sair sozinho, o log diz se foi a
+  janela sendo fechada, o Windows encerrando a sessão, uma queda da tela ou um
+  evento de energia.
 
 ## 1. Preparar o RDP no PC B (GOALS 12, G12-T2; GOALS 2)
 
