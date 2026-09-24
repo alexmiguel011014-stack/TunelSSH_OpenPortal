@@ -1498,4 +1498,10 @@ later "gates pass" claim is only trustworthy once `npm run lint` and `npm test` 
 reading other worktrees. Then **GOALS 10** (approval as the only way in), then the rest of
 GOALS 11, whose delivery item (G11-T2) waits for GOALS 10 so the PR to `master` carries
 the hardening instead of shipping the known bypass. GOALS 10/11 and the RDP track
-(GOALS 5–7) touch different code paths and can proceed independently.
+(GOALS 5–7) touch different code paths and can proceed independently. **GOALS 12's live
+check (G12-T2) comes before G7-T5, G5-R2/T4 and G6-T3**: the destination must be
+provisioned by the fixed scripts before any real RDP login is tried. The two-PC order
+for every remaining manual item is in `docs/BATERIA_DE_TESTES.md`. Known limitation, not
+yet planned: RDP reaches 3389 directly, so approval is not the only way in for RDP
+(Windows authentication and the Tailscale-only rule are); tunnelling RDP through 18902
+like VNC would need its own GOALS.

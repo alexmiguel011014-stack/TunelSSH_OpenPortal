@@ -277,22 +277,42 @@ esconder/mostrar a sidecar explicitamente.
 **Sem mudança em `proxy.js`:** ao contrário do VNC/noVNC (código de
 navegador, só alcança a rede via o bridge WS→TCP de `proxy.js`), a sidecar
 é um processo nativo que abre sua própria conexão TCP direta à porta 3389
-do destino. O fluxo de aprovação existente
-(`connection-request.js`/`handleConnectionRequest`) continua sendo o
-único portão de entrada, igual ao VNC — RDP não pula essa etapa.
+do destino. O app pede a aprovação (`connection-request.js`/
+`handleConnectionRequest`) antes de abrir a sidecar, mas, ao contrário do VNC
+depois do GOALS 10, **ela não é o único portão**: a 3389 atende direto, e
+quem estiver no Tailscale e tiver uma conta com acesso RDP ao destino pode
+entrar com um cliente RDP comum, sem passar pela aprovação. O que protege é
+a autenticação do Windows (NLA, senha da conta) e a regra de firewall que só
+aceita a faixa do Tailscale. Levar o RDP pelo túnel da 18902, como o VNC,
+fica para um GOALS próprio.
 
 **Provisionamento (uma vez por máquina, feito na aba Configurações da
 própria máquina de destino, não em quem conecta):**
 
-1. _Habilitar Remote Desktop_ — liga `fDenyTSConnections=0` no registro e a
-   regra de firewall "Remote Desktop", via PowerShell elevado
-   (`src/main/system/rdp-provisioning.js`). Abre um prompt de UAC; nenhuma
-   mudança em NLA.
+1. _Habilitar Remote Desktop_ — liga `fDenyTSConnections=0` no registro,
+   inicia o `TermService` e cria (ou atualiza) a regra própria
+   `OpenPortal-RDP-Tailscale`: TCP 3389 só de `100.64.0.0/10`. As regras
+   "Remote Desktop" do Windows ficam desligadas, porque valem para qualquer
+   rede e têm nome traduzido ("Área de Trabalho Remota" em pt-BR). Roda em
+   PowerShell elevado (`src/main/system/rdp-provisioning.js`), com prompt de
+   UAC e nenhuma mudança em NLA. O `Start-Process -Verb RunAs` não devolve o
+   código de saída do script, então o app só diz "habilitado" depois de ler
+   de volta: RDP permitido, regra ativa, serviço rodando. O `TermService` é
+   Manual, mas o Windows o inicia no boot enquanto o RDP está permitido.
 2. _Criar conta dedicada_ — cria uma conta local do Windows só para o app
    usar (senha aleatória gerada uma vez, nunca a senha pessoal de quem está
-   logado ali), adicionada ao grupo "Remote Desktop Users". A senha só
-   aparece uma vez na tela — precisa ser copiada para o campo "Senha RDP"
-   de quem for configurar esta máquina como RDP no próprio app.
+   logado ali) e a coloca no grupo de Área de Trabalho Remota pelo SID
+   `S-1-5-32-555`, porque o nome do grupo muda com o idioma. O app confere a
+   entrada no grupo antes de dizer "Conta criada". A senha só aparece uma
+   vez na tela e precisa ser copiada para o campo "Senha RDP" de quem for
+   configurar esta máquina como RDP no próprio app.
+
+Senhas nunca vão na linha de comando do PowerShell elevado, que outros
+processos leem e que pode parar em logs de auditoria. Isso vale para esta
+conta e para a senha que "Proteger TightVNC" gera. O Node grava a senha num
+arquivo temporário no `%TEMP%` do usuário, o script elevado lê o arquivo para
+`$secret` e o apaga na hora, e o Node apaga de novo no fim, caso o UAC tenha
+sido recusado.
 
 **Controle ActiveX (MSTSCLib via Devolutions/MsRdpEx):** `sidecar/Program.cs`
 hospeda um `AxMsRdpClient11NotSafeForScripting` (a versão mais nova de
