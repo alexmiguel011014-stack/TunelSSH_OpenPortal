@@ -618,7 +618,7 @@ export default function ConfigPanel() {
               <div>
                 <p className="text-sm text-text-primary">Habilitar Remote Desktop nesta máquina</p>
                 <p className="text-xs text-text-faint mt-0.5">
-                  Liga o serviço de RDP do Windows e a regra de firewall correspondente.
+                  Liga o RDP do Windows e libera a porta 3389 só para PCs do Tailscale.
                 </p>
               </div>
               <button
