@@ -84,6 +84,14 @@ function parseStatusMessage(line) {
   }
 }
 
+// Modo de hospedagem pedido pela máquina (GOALS 6): embutido é o padrão, e
+// um valor desconhecido cai nele em vez de virar um modo que não existe.
+function resolveRdpHostMode(machine) {
+  return ['embedded', 'native-window', 'auto-fallback'].includes(machine?.rdpHostMode)
+    ? machine.rdpHostMode
+    : 'embedded';
+}
+
 function toRendererRdpStatus(status, machineId) {
   const messages = {
     authentication: 'Falha de autenticação RDP.',
@@ -117,5 +125,6 @@ module.exports = {
   buildVisibilityCommand,
   encodeCommand,
   parseStatusMessage,
+  resolveRdpHostMode,
   toRendererRdpStatus,
 };

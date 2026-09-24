@@ -576,3 +576,226 @@ describe('RDP handshake watchdog and terminal states', () => {
     expect(manager.isRdpSidecarRunning('pc-1')).toBe(true);
   });
 });
+
+function nativeStatus(fields) {
+  return Buffer.from(`${JSON.stringify({ type: 'status', ...fields })}\n`);
+}
+
+// GOALS 6: o contrato do lado nativo sem destino RDP nem senha reais.
+describe('RDP native-host contract', () => {
+  it('refuses a connect command before the control acknowledges readiness', async () => {
+    vi.useFakeTimers();
+    const socket = new FakeSocket(false);
+    const statuses = [];
+    const manager = createRdpSidecarManager({
+      spawnProcess: () => new FakeProcess(90),
+      connectPipe: async () => socket,
+      randomUUID: () => 'pipe',
+    });
+    const starting = manager.startRdpSidecar('pc-1', startOptions('current'), (status) =>
+      statuses.push(status),
+    );
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(manager.sendRdpCommand('pc-1', { cmd: 'connect' }, 'current')).toBe(false);
+    expect(socket.writes).toEqual([]);
+    expect(statuses).toEqual([]);
+
+    socket.emit('data', nativeStatus({ state: 'ready', eventName: 'ControlReady' }));
+    expect(await starting).toBe(true);
+    expect(manager.sendRdpCommand('pc-1', { cmd: 'connect' }, 'current')).toBe(true);
+  });
+
+  it("ignores an old generation's deadline after a replacement starts", async () => {
+    vi.useFakeTimers();
+    const oldSocket = new FakeSocket();
+    const newSocket = new FakeSocket();
+    const sockets = [oldSocket, newSocket];
+    const oldProcess = new FakeProcess(91);
+    const newProcess = new FakeProcess(92);
+    const processes = [oldProcess, newProcess];
+    const oldStatuses = [];
+    const newStatuses = [];
+    const manager = createRdpSidecarManager({
+      spawnProcess: () => processes.shift(),
+      connectPipe: async () => sockets.shift(),
+      randomUUID: () => 'pipe',
+      commandDispatchTimeoutMs: 100,
+    });
+    await manager.startRdpSidecar('pc-1', startOptions('old'), (status) =>
+      oldStatuses.push(status),
+    );
+    manager.sendRdpCommand('pc-1', { cmd: 'connect' }, 'old');
+    await manager.startRdpSidecar('pc-1', startOptions('new'), (status) =>
+      newStatuses.push(status),
+    );
+
+    await vi.advanceTimersByTimeAsync(1000);
+
+    expect(oldStatuses.map(({ eventName }) => eventName)).toEqual(['CommandSent']);
+    expect(newStatuses).toEqual([]);
+    expect(newSocket.writes).toEqual([]);
+    expect(newProcess.killed).toBe(false);
+    expect(oldProcess.killed).toBe(true);
+    expect(manager.isRdpSidecarRunning('pc-1')).toBe(true);
+  });
+
+  it('reports one terminal result when native failure, pipe end and process exit race', async () => {
+    const socket = new FakeSocket();
+    const process = new FakeProcess(93);
+    const statuses = [];
+    const manager = createRdpSidecarManager({
+      spawnProcess: () => process,
+      connectPipe: async () => socket,
+      randomUUID: () => 'pipe',
+    });
+    await manager.startRdpSidecar('pc-1', startOptions('current'), (status) =>
+      statuses.push(status),
+    );
+    manager.sendRdpCommand('pc-1', { cmd: 'connect' }, 'current');
+
+    socket.emit('data', nativeStatus({ state: 'error', eventName: 'OnFatalError', reasonCode: 5 }));
+    socket.emit('end');
+    socket.emit('close', false);
+    process.emit('exit', 3, null);
+
+    expect(statuses.filter(({ state }) => state === 'error' || state === 'disconnected')).toEqual([
+      expect.objectContaining({ eventName: 'OnFatalError', category: 'host-control' }),
+    ]);
+  });
+
+  it('asks for a graceful disconnect and kills only after the grace period', async () => {
+    vi.useFakeTimers();
+    const socket = new FakeSocket();
+    const process = new FakeProcess(94);
+    const manager = createRdpSidecarManager({
+      spawnProcess: () => process,
+      connectPipe: async () => socket,
+      randomUUID: () => 'pipe',
+      stopGraceMs: 200,
+    });
+    await manager.startRdpSidecar('pc-1', startOptions('current'));
+
+    manager.stopRdpSidecar('pc-1', 'current', 'user-stop');
+    expect(socket.writes.at(-1)).toBe('{"cmd":"disconnect","lifecycleId":"current"}\n');
+    await vi.advanceTimersByTimeAsync(199);
+    expect(socket.ended).toBe(false);
+    expect(process.killed).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(socket.ended).toBe(true);
+    expect(process.killed).toBe(true);
+  });
+
+  it('closes the channel as soon as the sidecar confirms the disconnect', async () => {
+    vi.useFakeTimers();
+    const socket = new FakeSocket();
+    const process = new FakeProcess(95);
+    const manager = createRdpSidecarManager({
+      spawnProcess: () => process,
+      connectPipe: async () => socket,
+      randomUUID: () => 'pipe',
+      stopGraceMs: 200,
+    });
+    await manager.startRdpSidecar('pc-1', startOptions('current'));
+
+    manager.stopRdpSidecar('pc-1', 'current', 'user-stop');
+    socket.emit('data', nativeStatus({ state: 'disconnected', eventName: 'DisconnectComplete' }));
+
+    expect(socket.ended).toBe(true);
+    expect(process.killed).toBe(false);
+  });
+
+  it('drops a native status stamped with another generation', async () => {
+    const socket = new FakeSocket();
+    const statuses = [];
+    const manager = createRdpSidecarManager({
+      spawnProcess: () => new FakeProcess(96),
+      connectPipe: async () => socket,
+      randomUUID: () => 'pipe',
+    });
+    await manager.startRdpSidecar('pc-1', startOptions('current'), (status) =>
+      statuses.push(status),
+    );
+
+    socket.emit(
+      'data',
+      nativeStatus({ state: 'error', eventName: 'OnFatalError', lifecycleId: 'previous' }),
+    );
+    socket.emit(
+      'data',
+      nativeStatus({ state: 'connected', eventName: 'OnLoginComplete', lifecycleId: 'previous' }),
+    );
+    expect(statuses).toEqual([]);
+
+    socket.emit(
+      'data',
+      nativeStatus({ state: 'connected', eventName: 'OnLoginComplete', lifecycleId: 'current' }),
+    );
+    expect(statuses).toEqual([
+      expect.objectContaining({ state: 'connected', lifecycleId: 'current' }),
+    ]);
+  });
+
+  it('routes visibility changes only to the owning generation', async () => {
+    const socket = new FakeSocket();
+    const manager = createRdpSidecarManager({
+      spawnProcess: () => new FakeProcess(97),
+      connectPipe: async () => socket,
+      randomUUID: () => 'pipe',
+    });
+    await manager.startRdpSidecar('pc-1', startOptions('current'));
+
+    expect(manager.sendRdpCommand('pc-1', { cmd: 'visibility', visible: false }, 'stale')).toBe(
+      false,
+    );
+    expect(manager.sendRdpCommand('pc-1', { cmd: 'visibility', visible: false }, 'current')).toBe(
+      true,
+    );
+    expect(socket.writes).toEqual([
+      '{"cmd":"visibility","visible":false,"lifecycleId":"current"}\n',
+    ]);
+  });
+
+  it("falls back on one machine without touching another machine's session", async () => {
+    vi.useFakeTimers();
+    const first = new FakeSocket();
+    const other = new FakeSocket();
+    const replacement = new FakeSocket();
+    const sockets = [first, other, replacement];
+    const spawned = [];
+    const firstStatuses = [];
+    const otherStatuses = [];
+    const manager = createRdpSidecarManager({
+      spawnProcess: (_exe, args) => {
+        spawned.push(args);
+        return new FakeProcess(100 + spawned.length);
+      },
+      connectPipe: async () => sockets.shift(),
+      randomUUID: () => `pipe-${spawned.length}`,
+      firstEventTimeoutMs: 100,
+    });
+    await manager.startRdpSidecar(
+      'pc-1',
+      { ...startOptions('first'), mode: 'auto-fallback' },
+      (status) => firstStatuses.push(status),
+    );
+    await manager.startRdpSidecar('pc-2', startOptions('other'), (status) =>
+      otherStatuses.push(status),
+    );
+    manager.sendRdpCommand('pc-1', { cmd: 'connect', host: 'safe-host' }, 'first');
+    first.emit('data', nativeStatus({ state: 'connecting', eventName: 'CommandReceived' }));
+    first.emit('data', nativeStatus({ state: 'connecting', eventName: 'ConnectReturned' }));
+
+    await vi.advanceTimersByTimeAsync(100);
+    await vi.waitFor(() => expect(replacement.writes).toHaveLength(1));
+
+    expect(spawned).toHaveLength(3);
+    expect(spawned[2][6]).toBe('native-window');
+    expect(replacement.writes[0]).toContain('"host":"safe-host"');
+    expect(firstStatuses.map(({ eventName }) => eventName)).toContain('NativeFallbackStarting');
+    expect(otherStatuses).toEqual([]);
+    expect(other.writes).toEqual([]);
+    expect(manager.isRdpSidecarRunning('pc-2')).toBe(true);
+  });
+});

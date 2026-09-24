@@ -27,6 +27,7 @@ namespace OpenPortalRdpSidecar
     //
     // Contrato de argv (nada sensível aqui):
     //   <pipeName> <parentHwnd> <x> <y> <w> <h> <hostMode> <lifecycleId> <ownerPid>
+    //   [<ipcTransport>] — só no modo ipc-test, para a comparação do G7-R4
     // Contrato do pipe: uma linha JSON por comando, UTF-8, terminada em \n:
     //   {"cmd":"resize","x":10,"y":10,"w":800,"h":600}
     //   {"cmd":"connect","host":"100.x.x.x","port":3389,"username":"u","password":"p"}
@@ -63,6 +64,26 @@ namespace OpenPortalRdpSidecar
 
         [DllImport("user32.dll")]
         static extern bool IsWindow(IntPtr hWnd);
+
+        // G7-R4: marcadores de início/fim das operações do pipe no stderr,
+        // ligados só quando o modo ipc-test recebe um transporte explícito.
+        static bool s_traceIpc;
+        static uint s_uiThreadId;
+
+        internal static void IpcTrace(string text)
+        {
+            if (!s_traceIpc) return;
+            uint thread = GetCurrentThreadId();
+            try
+            {
+                Console.Error.WriteLine(
+                    "[ipc] thread=" + (thread == s_uiThreadId ? "ui" : "worker") + " " + text
+                );
+            }
+            catch
+            {
+            }
+        }
 
         internal const int GWL_STYLE = -16;
         const int WS_CHILD = 0x40000000;
@@ -125,6 +146,15 @@ namespace OpenPortalRdpSidecar
                 : "legacy";
             int ownerPid = 0;
             if (args.Length >= 9) int.TryParse(args[8], out ownerPid);
+            // G7-R4: só o modo ipc-test aceita outro transporte, para a
+            // comparação medida; conexões reais usam sempre o duplex assíncrono.
+            string ipcTransport = "async-duplex";
+            if (hostMode == "ipc-test" && args.Length >= 10)
+            {
+                ipcTransport = args[9];
+                s_traceIpc = true;
+            }
+            s_uiThreadId = GetCurrentThreadId();
 
             Application.EnableVisualStyles();
 
@@ -154,7 +184,7 @@ namespace OpenPortalRdpSidecar
                 }
                 if (!string.IsNullOrEmpty(pipeName))
                 {
-                    var listenerThread = new Thread(() => RunPipeServer(pipeName, form));
+                    var listenerThread = new Thread(() => RunPipeServer(pipeName, form, ipcTransport));
                     listenerThread.IsBackground = true;
                     listenerThread.Start();
                 }
@@ -197,7 +227,7 @@ namespace OpenPortalRdpSidecar
             }
         }
 
-        static void ExitForm(SidecarForm form)
+        internal static void ExitForm(SidecarForm form)
         {
             if (form.IsDisposed || !form.IsHandleCreated) return;
             try
@@ -217,98 +247,13 @@ namespace OpenPortalRdpSidecar
         // enfileirado de volta na thread da UI via BeginInvoke antes de
         // tocar em qualquer Win32/WinForms (regra de ouro do WinForms:
         // só a thread que criou o handle pode mexer nele).
-        static void RunPipeServer(string pipeName, SidecarForm form)
+        static void RunPipeServer(string pipeName, SidecarForm form, string ipcTransport)
         {
-            var commandSerializer = new JavaScriptSerializer();
             try
             {
-                var pipeSecurity = new PipeSecurity();
-                pipeSecurity.SetAccessRuleProtection(true, false);
-                pipeSecurity.AddAccessRule(new PipeAccessRule(
-                    WindowsIdentity.GetCurrent().User,
-                    PipeAccessRights.FullControl,
-                    AccessControlType.Allow
-                ));
-                using (var server = new NamedPipeServerStream(
-                    pipeName,
-                    PipeDirection.InOut,
-                    1,
-                    PipeTransmissionMode.Byte,
-                    PipeOptions.Asynchronous,
-                    0,
-                    0,
-                    pipeSecurity
-                ))
-                {
-                    server.WaitForConnection();
-                    using (var statuses = new BlockingCollection<StatusMessage>(256))
-                    using (var writer = new StreamWriter(server, new UTF8Encoding(false), 1024, true))
-                    using (var reader = new StreamReader(server, Encoding.UTF8, true, 1024, true))
-                    {
-                        int transportFailed = 0;
-                        var writerThread = new Thread(() =>
-                        {
-                            var statusSerializer = new JavaScriptSerializer();
-                            try
-                            {
-                                foreach (var message in statuses.GetConsumingEnumerable())
-                                {
-                                    writer.WriteLineAsync(statusSerializer.Serialize(message))
-                                        .GetAwaiter()
-                                        .GetResult();
-                                    writer.FlushAsync().GetAwaiter().GetResult();
-                                }
-                            }
-                            catch
-                            {
-                                if (Interlocked.Exchange(ref transportFailed, 1) == 0)
-                                {
-                                    form.SetStatusReporter(null);
-                                    ExitForm(form);
-                                }
-                            }
-                        });
-                        writerThread.IsBackground = true;
-                        writerThread.Start();
-
-                        form.SetStatusReporter(message =>
-                        {
-                            if (!statuses.TryAdd(message) &&
-                                Interlocked.Exchange(ref transportFailed, 1) == 0)
-                            {
-                                form.SetStatusReporter(null);
-                                ExitForm(form);
-                            }
-                        });
-
-                        try
-                        {
-                            string line;
-                            while ((line = reader.ReadLineAsync().GetAwaiter().GetResult()) != null)
-                            {
-                                object parsed;
-                                try
-                                {
-                                    parsed = commandSerializer.DeserializeObject(line);
-                                }
-                                catch
-                                {
-                                    continue;
-                                }
-                                var cmd = parsed as System.Collections.Generic.Dictionary<string, object>;
-                                if (cmd == null) continue;
-                                DispatchCommand(form, cmd);
-                            }
-                        }
-                        finally
-                        {
-                            form.SetStatusReporter(null);
-                            statuses.CompleteAdding();
-                            if (!writerThread.Join(500)) server.Dispose();
-                        }
-                        ExitForm(form);
-                    }
-                }
+                if (ipcTransport == "sync-duplex") RunSyncDuplexPipe(pipeName, form);
+                else if (ipcTransport == "split") RunSplitPipes(pipeName, form);
+                else RunAsyncDuplexPipe(pipeName, form);
             }
             catch (ObjectDisposedException)
             {
@@ -318,6 +263,177 @@ namespace OpenPortalRdpSidecar
                 // O nome do pipe é exclusivo desta geração; o processo
                 // principal não reconecta. Encerrar evita uma sidecar órfã.
                 ExitForm(form);
+            }
+        }
+
+        static PipeSecurity OwnerOnlyPipeSecurity()
+        {
+            var pipeSecurity = new PipeSecurity();
+            pipeSecurity.SetAccessRuleProtection(true, false);
+            pipeSecurity.AddAccessRule(new PipeAccessRule(
+                WindowsIdentity.GetCurrent().User,
+                PipeAccessRights.FullControl,
+                AccessControlType.Allow
+            ));
+            return pipeSecurity;
+        }
+
+        // Transporte em uso (GOALS 7): um pipe duplex aberto com
+        // PipeOptions.Asynchronous, leitura e escrita independentes, e status
+        // publicados por uma fila consumida fora da thread da UI.
+        static void RunAsyncDuplexPipe(string pipeName, SidecarForm form)
+        {
+            using (var server = new NamedPipeServerStream(
+                pipeName,
+                PipeDirection.InOut,
+                1,
+                PipeTransmissionMode.Byte,
+                PipeOptions.Asynchronous,
+                0,
+                0,
+                OwnerOnlyPipeSecurity()
+            ))
+            {
+                server.WaitForConnection();
+                using (var writer = new StreamWriter(server, new UTF8Encoding(false), 1024, true))
+                using (var reader = new StreamReader(server, Encoding.UTF8, true, 1024, true))
+                using (var channel = new StatusChannel(writer, form, true))
+                {
+                    try
+                    {
+                        ReadCommands(reader, form, true);
+                    }
+                    finally
+                    {
+                        if (!channel.Complete()) server.Dispose();
+                    }
+                    ExitForm(form);
+                }
+            }
+        }
+
+        // G7-R4 (a), só no modo ipc-test: o transporte anterior ao GOALS 7 —
+        // pipe duplex síncrono, com o status escrito pela thread que o gera
+        // (a da UI). Existe só para medir o defeito ao lado das alternativas.
+        static void RunSyncDuplexPipe(string pipeName, SidecarForm form)
+        {
+            using (var server = new NamedPipeServerStream(
+                pipeName,
+                PipeDirection.InOut,
+                1,
+                PipeTransmissionMode.Byte,
+                PipeOptions.None,
+                0,
+                0,
+                OwnerOnlyPipeSecurity()
+            ))
+            {
+                server.WaitForConnection();
+                var serializer = new JavaScriptSerializer();
+                var writeLock = new object();
+                using (var writer = new StreamWriter(server, new UTF8Encoding(false), 1024, true))
+                using (var reader = new StreamReader(server, Encoding.UTF8, true, 1024, true))
+                {
+                    form.SetStatusReporter(message =>
+                    {
+                        lock (writeLock)
+                        {
+                            try
+                            {
+                                IpcTrace("status-write-begin " + message.eventName);
+                                writer.WriteLine(serializer.Serialize(message));
+                                writer.Flush();
+                                IpcTrace("status-write-end " + message.eventName);
+                            }
+                            catch
+                            {
+                                IpcTrace("status-write-failed " + message.eventName);
+                            }
+                        }
+                    });
+                    try
+                    {
+                        ReadCommands(reader, form, false);
+                    }
+                    finally
+                    {
+                        form.SetStatusReporter(null);
+                    }
+                    ExitForm(form);
+                }
+            }
+        }
+
+        // G7-R4 (c), só no modo ipc-test: dois pipes independentes, comandos em
+        // "<nome>-cmd" e status em "<nome>-status", cada um usado num sentido
+        // e na sua thread. É a alternativa medida contra o duplex assíncrono.
+        // Os dois handles são InOut: o cliente `net` do Node sempre lê do pipe
+        // e fecha na hora um pipe só de entrada (PipeDirection.In).
+        static void RunSplitPipes(string pipeName, SidecarForm form)
+        {
+            using (var commandPipe = new NamedPipeServerStream(
+                pipeName + "-cmd",
+                PipeDirection.InOut,
+                1,
+                PipeTransmissionMode.Byte,
+                PipeOptions.None,
+                0,
+                0,
+                OwnerOnlyPipeSecurity()
+            ))
+            using (var statusPipe = new NamedPipeServerStream(
+                pipeName + "-status",
+                PipeDirection.InOut,
+                1,
+                PipeTransmissionMode.Byte,
+                PipeOptions.None,
+                0,
+                0,
+                OwnerOnlyPipeSecurity()
+            ))
+            {
+                statusPipe.WaitForConnection();
+                commandPipe.WaitForConnection();
+                using (var writer = new StreamWriter(statusPipe, new UTF8Encoding(false), 1024, true))
+                using (var reader = new StreamReader(commandPipe, Encoding.UTF8, true, 1024, true))
+                using (var channel = new StatusChannel(writer, form, false))
+                {
+                    try
+                    {
+                        ReadCommands(reader, form, false);
+                    }
+                    finally
+                    {
+                        if (!channel.Complete()) statusPipe.Dispose();
+                    }
+                    ExitForm(form);
+                }
+            }
+        }
+
+        static void ReadCommands(StreamReader reader, SidecarForm form, bool asyncReads)
+        {
+            var commandSerializer = new JavaScriptSerializer();
+            while (true)
+            {
+                IpcTrace("command-read-begin");
+                string line = asyncReads
+                    ? reader.ReadLineAsync().GetAwaiter().GetResult()
+                    : reader.ReadLine();
+                IpcTrace("command-read-end");
+                if (line == null) return;
+                object parsed;
+                try
+                {
+                    parsed = commandSerializer.DeserializeObject(line);
+                }
+                catch
+                {
+                    continue;
+                }
+                var cmd = parsed as System.Collections.Generic.Dictionary<string, object>;
+                if (cmd == null) continue;
+                DispatchCommand(form, cmd);
             }
         }
 
@@ -387,6 +503,75 @@ namespace OpenPortalRdpSidecar
                         break;
                 }
             });
+        }
+    }
+
+    // Fila limitada de status consumida por uma thread de fundo (GOALS 7): a
+    // UI e os eventos do ActiveX só enfileiram, nunca escrevem no pipe. Fila
+    // cheia ou escrita que falha encerram a sidecar uma única vez.
+    sealed class StatusChannel : IDisposable
+    {
+        readonly BlockingCollection<StatusMessage> _statuses = new BlockingCollection<StatusMessage>(256);
+        readonly SidecarForm _form;
+        readonly Thread _writerThread;
+        int _failed;
+
+        public StatusChannel(StreamWriter writer, SidecarForm form, bool asyncWrites)
+        {
+            _form = form;
+            _writerThread = new Thread(() =>
+            {
+                var serializer = new JavaScriptSerializer();
+                try
+                {
+                    foreach (var message in _statuses.GetConsumingEnumerable())
+                    {
+                        string line = serializer.Serialize(message);
+                        Program.IpcTrace("status-write-begin " + message.eventName);
+                        if (asyncWrites)
+                        {
+                            writer.WriteLineAsync(line).GetAwaiter().GetResult();
+                            writer.FlushAsync().GetAwaiter().GetResult();
+                        }
+                        else
+                        {
+                            writer.WriteLine(line);
+                            writer.Flush();
+                        }
+                        Program.IpcTrace("status-write-end " + message.eventName);
+                    }
+                }
+                catch
+                {
+                    Fail();
+                }
+            });
+            _writerThread.IsBackground = true;
+            _writerThread.Start();
+            form.SetStatusReporter(message =>
+            {
+                if (!_statuses.TryAdd(message)) Fail();
+            });
+        }
+
+        void Fail()
+        {
+            if (Interlocked.Exchange(ref _failed, 1) != 0) return;
+            _form.SetStatusReporter(null);
+            Program.ExitForm(_form);
+        }
+
+        // true se o escritor esvaziou a fila a tempo; false se ficou preso.
+        public bool Complete()
+        {
+            _form.SetStatusReporter(null);
+            _statuses.CompleteAdding();
+            return _writerThread.Join(500);
+        }
+
+        public void Dispose()
+        {
+            _statuses.Dispose();
         }
     }
 

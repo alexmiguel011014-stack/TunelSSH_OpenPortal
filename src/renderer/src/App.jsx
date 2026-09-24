@@ -10,6 +10,7 @@ import Dashboard from './modules/dashboard/Dashboard';
 import {
   connectMachineEntry,
   disconnectMachineEntry,
+  isConnectionHistoryEvent,
   pickFocusAfterDisconnect,
   resolveTransport,
 } from './shared/lib/connectionState';
@@ -147,13 +148,7 @@ export default function App() {
         connectedMachines[status.machineId]?.machine ||
         machines.find((x) => x.id === status.machineId);
       const stateLabel = status.state === 'connected' ? 'connect' : status.state;
-      if (
-        m &&
-        !status.intentional &&
-        (status.state === 'connected' ||
-          status.state === 'error' ||
-          status.state === 'disconnected')
-      ) {
+      if (m && isConnectionHistoryEvent(status)) {
         recordConn({
           name: m.name,
           host: m.host,

@@ -35,6 +35,7 @@ const {
   buildConnectCommand,
   buildResizeCommand,
   buildVisibilityCommand,
+  resolveRdpHostMode,
   toRendererRdpStatus,
 } = require('../connection/rdp-protocol');
 const {
@@ -142,9 +143,7 @@ function registerIpcHandlers(mainWindow, { accessGate } = {}) {
 
   ipcMain.handle('rdp:start', async (_, { machine, rect, lifecycleId }) => {
     pendingRdpStarts.set(machine.id, lifecycleId);
-    const mode = ['embedded', 'native-window', 'auto-fallback'].includes(machine.rdpHostMode)
-      ? machine.rdpHostMode
-      : 'embedded';
+    const mode = resolveRdpHostMode(machine);
     const port = machine.rdpPort || 3389;
     const sidecarAvailable = fs.existsSync(SIDECAR_EXE);
     const tcpReachable = await testTcpReachability(machine.host, port);

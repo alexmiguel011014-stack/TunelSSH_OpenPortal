@@ -224,14 +224,34 @@ por linha sobre o named pipe do .NET Framework. Sua ACL permite acesso apenas
 à conta Windows que iniciou a sidecar; o nome aleatório por geração não
 substitui essa restrição.
 
-Foram comparados o duplex síncrono existente (probe bloqueado por mais de
-500 ms) e o mesmo duplex com handle/operações overlapped (probe imediato,
-ordem preservada e encerramento em menos de dois segundos). Dois pipes
-unidirecionais continuam sendo uma alternativa de contingência, mas não foram
-adotados: duplicariam conexão, falha parcial e teardown sem acrescentar uma
-garantia que o teste do executável real já demonstrou no duplex assíncrono.
-Devem ser reconsiderados somente se esse teste voltar a falhar no runtime
-suportado.
+**Decisão do transporte (G7-R4/C1, medida em 2026-09-24):** o modo `ipc-test`
+da sidecar aceita um 10º argumento só para esta comparação (`sync-duplex`,
+`async-duplex` ou `split`) e, com ele, escreve no stderr o início e o fim de
+cada leitura de comando e escrita de estado, com a thread (`ui` ou `worker`).
+O bloco "IPC transport comparison (G7-R4)" de `rdp-sidecar-binary.test.js`
+roda o mesmo probe contra o executável real nos três transportes
+(`RDP_IPC_REPORT=1` imprime a tabela):
+
+| Transporte | Probe sem 2ª escrita | 100 respostas | Ordem | Parada (disconnect → saída) | CPU do processo |
+|---|---|---|---|---|---|
+| duplex síncrono (antigo) | não chegou em 500 ms; só após a próxima escrita do cliente (749 ms) | — | — | sem `DisconnectComplete`; saiu só quando o cliente fechou (2,1 s) | 172 ms |
+| duplex assíncrono (em uso) | 16 ms | 28 ms | preservada | 95 ms, código 0, sem kill | 281 ms |
+| dois pipes | 15 ms | 13 ms | preservada | 92 ms, código 0, sem kill | 172 ms |
+
+No duplex síncrono, no instante do prazo, a thread `ui` estava dentro da
+escrita do estado e a `worker` dentro da leitura do comando — a mesma espera
+descrita no incidente abaixo. A CPU é o tempo total do processo e é dominada
+pela inicialização do WinForms; não separa os transportes.
+
+Os dois transportes corretos passam no mesmo critério (resposta em menos de
+500 ms sem outra escrita, ordem preservada, parada em menos de dois segundos
+sem matar o processo). Fica o **duplex assíncrono**: um handle só, uma conexão,
+uma falha parcial possível e um teardown, contra dois de cada nos dois pipes. A
+variante de dois pipes também não traria acesso mínimo por sentido: o cliente
+`net` do Node sempre lê do pipe e fecha na hora um pipe só de entrada
+(`PipeDirection.In`), então os dois handles precisariam ser `InOut` de
+qualquer jeito. Dois pipes só voltam a ser considerados se o teste do
+executável real falhar no duplex assíncrono no runtime suportado.
 
 Essa separação foi exigida por uma falha real em 2026-09-18: o Electron enviou
 `connect` às `00:57:57.282Z`, a sidecar criou `ConnectCommand` às

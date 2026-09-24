@@ -6,6 +6,7 @@ import {
   buildVisibilityCommand,
   encodeCommand,
   parseStatusMessage,
+  resolveRdpHostMode,
   toRendererRdpStatus,
 } from '../rdp-protocol.js';
 
@@ -159,5 +160,71 @@ describe('toRendererRdpStatus', () => {
     expect(status).not.toHaveProperty('reasonCode');
     expect(status).not.toHaveProperty('password');
     expect(status).toMatchObject({ state: 'error', category: 'timeout' });
+  });
+
+  it('keeps each stage deadline distinct and explains it without native detail', () => {
+    const deadlines = [
+      ['ControlReadyTimeout', 'timeout'],
+      ['CommandDispatchTimeout', 'local-sidecar'],
+      ['ConnectCallTimeout', 'timeout'],
+      ['FirstEventTimeout', 'timeout'],
+      ['AuthenticationTimeout', 'timeout'],
+    ];
+    for (const [eventName, category] of deadlines) {
+      const status = toRendererRdpStatus({ state: 'error', category, eventName }, 'pc-1');
+      expect(status).toMatchObject({ state: 'error', eventName, category });
+      expect(status.message).toBeTruthy();
+    }
+    // Falha do canal local não pode ser lida como destino lento.
+    const local = toRendererRdpStatus(
+      { state: 'error', category: 'local-sidecar', eventName: 'CommandDispatchTimeout' },
+      'pc-1',
+    );
+    const remote = toRendererRdpStatus(
+      { state: 'error', category: 'timeout', eventName: 'FirstEventTimeout' },
+      'pc-1',
+    );
+    expect(local.message).not.toBe(remote.message);
+  });
+
+  it('keeps credentials and host details from the pipe out of the renderer status', () => {
+    const line = JSON.stringify({
+      type: 'status',
+      state: 'error',
+      eventName: 'OnLogonError',
+      category: 'authentication',
+      reasonCode: 2055,
+      password: 'sentinel-password',
+      username: 'sentinel-user',
+      host: '10.0.0.9',
+      message: 'raw native text',
+    });
+    const status = toRendererRdpStatus(parseStatusMessage(line), 'pc-1');
+    const serialized = JSON.stringify(status);
+    for (const leak of [
+      'sentinel-password',
+      'sentinel-user',
+      '10.0.0.9',
+      'raw native text',
+      '2055',
+    ]) {
+      expect(serialized).not.toContain(leak);
+    }
+    expect(status).toMatchObject({
+      state: 'error',
+      category: 'authentication',
+      message: 'Falha de autenticação RDP.',
+    });
+  });
+});
+
+describe('resolveRdpHostMode', () => {
+  it('keeps the three supported modes and falls back to embedded', () => {
+    expect(resolveRdpHostMode({ rdpHostMode: 'native-window' })).toBe('native-window');
+    expect(resolveRdpHostMode({ rdpHostMode: 'auto-fallback' })).toBe('auto-fallback');
+    expect(resolveRdpHostMode({ rdpHostMode: 'embedded' })).toBe('embedded');
+    expect(resolveRdpHostMode({})).toBe('embedded');
+    expect(resolveRdpHostMode({ rdpHostMode: 'fullscreen' })).toBe('embedded');
+    expect(resolveRdpHostMode(null)).toBe('embedded');
   });
 });

@@ -34,3 +34,10 @@ export function pickFocusAfterDisconnect(connectedMachines, focusedId, removedId
 export function resolveTransport(machine) {
   return machine?.transport === 'rdp' ? 'rdp' : 'vnc';
 }
+
+// Só resultados entram no histórico de conexões: conectado, erro ou queda.
+// "Conectando" é passo intermediário, e a desconexão pedida pelo próprio
+// usuário (intentional) não é um evento a registrar.
+export function isConnectionHistoryEvent(status) {
+  return !status?.intentional && ['connected', 'error', 'disconnected'].includes(status?.state);
+}

@@ -3,9 +3,12 @@ import { RefreshCw, Maximize2, Minimize2, PowerOff } from 'lucide-react';
 import { MachineContext } from '../../App';
 import {
   buildVncViewerUrl,
+  isCredentialRequest,
+  isFromActiveViewer,
   isRetryableVncState,
+  nextCredentialSource,
   shouldExplainMissingTunnel,
-  shouldUseSavedVncCredential,
+  shouldPersistVncCredential,
 } from '../../shared/lib/vncSession';
 
 const QUALITY_LEVELS = [
@@ -144,7 +147,10 @@ export default function RemoteViewer({ machine, vncGrant, vncTunnel, reconnectFl
       return;
     }
 
-    const shouldPersist = saveCredential && !machine.id.startsWith('quick-');
+    const shouldPersist = shouldPersistVncCredential({
+      machineId: machine.id,
+      saveRequested: saveCredential,
+    });
     if (shouldPersist) await saveVncCredential(machine.id, password);
 
     const shouldRestart = credentialDialog?.restart;
@@ -231,30 +237,32 @@ export default function RemoteViewer({ machine, vncGrant, vncTunnel, reconnectFl
   }, [iframeKey, sendResize, sendQuality, quality]);
 
   useEffect(() => {
-    const isExpectedIframe = (event) => event.source === iframeRef.current?.contentWindow;
     const recordVncState = (state, message) => {
       if (!recordConn) return;
       recordConn({ name: machine.name, host: machine.host, state, message });
     };
 
     const requestCredentials = async () => {
-      if (pendingCredentialRef.current) {
+      const source = nextCredentialSource({
+        pendingCredential: pendingCredentialRef.current,
+        grant: vncGrant,
+        grantTried: grantTriedRef.current,
+        grantRejected: grantRejectedRef.current,
+        hasSavedCredential: machine.hasVncPassword,
+        savedCredentialTried: savedCredentialTriedRef.current,
+      });
+      if (source === 'pending') {
         const password = pendingCredentialRef.current;
         pendingCredentialRef.current = '';
         postToViewer({ type: 'vnc-credentials', password });
         return;
       }
-      if (vncGrant && !grantRejectedRef.current && !grantTriedRef.current) {
+      if (source === 'grant') {
         grantTriedRef.current = true;
         postToViewer({ type: 'vnc-credentials', password: vncGrant });
         return;
       }
-      if (
-        !shouldUseSavedVncCredential({
-          hasSavedCredential: machine.hasVncPassword,
-          savedCredentialTried: savedCredentialTriedRef.current,
-        })
-      ) {
+      if (source === 'ask') {
         openCredentialDialog();
         return;
       }
@@ -274,8 +282,8 @@ export default function RemoteViewer({ machine, vncGrant, vncTunnel, reconnectFl
     };
 
     function handleMessage(event) {
+      if (!isFromActiveViewer(event, iframeRef.current?.contentWindow, attemptId)) return;
       const data = event.data;
-      if (!data || !isExpectedIframe(event) || data.attemptId !== attemptId) return;
 
       if (data.type === 'vnc-resolution') {
         setRemoteRes({ w: data.width, h: data.height });
@@ -295,7 +303,7 @@ export default function RemoteViewer({ machine, vncGrant, vncTunnel, reconnectFl
         terminalReportedRef.current = false;
         return;
       }
-      if (state === 'credentials-required') {
+      if (isCredentialRequest(data)) {
         recordVncState(state, 'Senha VNC necessária');
         void requestCredentials();
         return;

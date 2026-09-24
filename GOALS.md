@@ -684,6 +684,14 @@ with a useful category instead of remaining indefinitely in `connecting`.
       teardown, and report a specific timeout category if the control emits nothing. Done
       when: an unavailable or nonresponsive RDP session cannot stay in `connecting`
       indefinitely, while a healthy NLA-on login completes without the watchdog firing.
+      **Implemented 2026-09-24 (via G7-C3/F3/F4):** `rdp-sidecar.js` arms generation-owned
+      deadlines — `ControlReadyTimeout`, `CommandDispatchTimeout`, `ConnectCallTimeout`,
+      `FirstEventTimeout`, `AuthenticationTimeout` — each cleared by the terminal/connected
+      path, and every one of them goes through `stopRdpSidecar`, which writes `disconnect`
+      first and kills only after the grace period. Covered by the "RDP handshake watchdog and
+      terminal states" tests and the G6-T1 graceful-stop tests. **Still open:** the second
+      half of Done when — a healthy NLA-on login that completes without any deadline firing
+      needs a real RDP host (G7-T5/G5-T4).
 - [x] **G5-F4 — Preserve native cleanup and diagnostics:** update `Program.cs` so the sidecar
       reports `OnConnecting`, the chosen authenticated-success event, `OnLogonError`,
       `OnFatalError`, and `OnDisconnected` reason data consistently, without exposing
@@ -911,18 +919,42 @@ credentials.
 
 ### Regression coverage, operational verification, and documentation
 
-- [ ] **G6-T1 — Add deterministic native-host contract tests:** isolate the command queue,
+- [x] **G6-T1 — Add deterministic native-host contract tests:** isolate the command queue,
       generation ownership, stage deadlines, state transitions, delayed callbacks, pipe write
       failure, process exit, and graceful-stop race behind injectable boundaries. Add tests that
       fail with direct pre-ready `Connect`, an old generation's timer, and duplicate terminal
       callbacks. Done when: all state transitions and cleanup paths pass without a live RDP
       destination or a real password.
-- [ ] **G6-T2 — Add protocol and renderer contract tests:** test redaction, stage-specific
+      **Done 2026-09-24:** new "RDP native-host contract" block in `rdp-sidecar.test.js`
+      (injected spawn, pipe and timers; no RDP host, no password) adds: connect refused before
+      `ControlReady`; an old generation's deadline ignored after a replacement; one terminal
+      result when a native failure, pipe end and process exit race; graceful stop that writes
+      `disconnect` and kills only after the grace period; early channel close on
+      `DisconnectComplete`. Together with the existing lifecycle/watchdog tests this covers
+      command queue, ownership, deadlines, delayed callbacks, write failure and process exit.
+      Mutation check: removing the ready guard, making a deadline act on
+      `sidecars.get(machineId)` instead of its own generation, or removing the single-terminal
+      guard each makes a new test fail. The C#-side queue/pipe contract stays covered by the
+      real-binary test (G7-T1/T2).
+- [x] **G6-T2 — Add protocol and renderer contract tests:** test redaction, stage-specific
       timeout mapping, security-warning status, modal-required status, compatibility-mode
       selection, history de-duplication, foreground/background visibility, and explicit user
       disconnect. Done when: neither a raw reason/password nor a stale embedded event can
       reach the renderer, and a compatibility fallback cannot overwrite another machine's
       session state.
+      **Done 2026-09-24:** `rdp-protocol.test.js` — a pipe line carrying password, username,
+      host, raw text and reason code reaches the renderer with none of them; the five stage
+      deadlines keep their event names and the local-channel one gets its own message;
+      `resolveRdpHostMode` (extracted from `ipc-handlers.js`) keeps the three modes and falls
+      back to embedded. `connectionState.test.js` — `isConnectionHistoryEvent` (extracted from
+      `App.jsx`) records connected/error/disconnected but never an explicit user stop.
+      `rdp-sidecar.test.js` — a status stamped with another generation is dropped, visibility
+      commands reach only the owning generation, and an auto-fallback on one machine leaves
+      another machine's sidecar, pipe and statuses untouched; the existing
+      single-terminal tests cover history de-duplication. There is no separate modal-required
+      status yet: the security-warning status (`OnAuthenticationWarningDisplayed`, already
+      tested as non-terminal) is today's "user action needed" state, and a new one would come
+      with G6-F3.
 - [ ] **G6-T3 — Run a real-device compatibility matrix `(manual)`:** after the selected fix,
       validate valid login, invalid password, cancelled dialog, target unreachable, certificate
       warning, target-initiated disconnect, Electron reload during connection, explicit
@@ -1046,27 +1078,48 @@ never enter logs, argv, test fixtures, or fallback telemetry.
       waiting for the reply. Done when: the current transport reproduces the delayed reply (or
       disproves the hypothesis) without an RDP host, credentials, `SetParent`, or a timeout
       teardown that could release the blocked operation.
-- [ ] **G7-R3 — Capture the actual wait boundary `(manual)`:** while R2 is stalled, use Visual
+- [x] **G7-R3 — Capture the actual wait boundary `(manual)`:** while R2 is stalled, use Visual
       Studio Break All or Windows wait-chain inspection to capture only function/thread names.
       Done when: the UI thread is shown waiting in the status writer/pipe `WriteFile` path and
       the pipe worker in `ReadLine`/`ReadFile`, or the evidence names the different blocking
       frame that supersedes this diagnosis; do not capture memory, strings, or credential data.
-- [ ] **G7-R4 — Compare transport variants in the same probe:** run the exact R2 payload and
+      **Done 2026-09-24, by instrumentation instead of a debugger:** with an explicit
+      transport argument the `ipc-test` sidecar writes begin/end markers (operation name and
+      `ui`/`worker` thread only — no payload) to stderr. On `sync-duplex`, at the 500 ms
+      deadline the open operations were `ui:status-write` (the UI thread inside the status
+      `WriteLine`) and `worker:command-read` (the pipe worker inside `ReadLine`); the probe
+      reply left only after the client's next write. That is the diagnosed boundary; no
+      different blocking frame appeared.
+- [x] **G7-R4 — Compare transport variants in the same probe:** run the exact R2 payload and
       lifecycle against (a) current synchronous duplex, (b) duplex opened with
       `PipeOptions.Asynchronous` and genuinely asynchronous read/write operations, and (c) two
       independent one-way pipes for commands and statuses. Done when: results record reply
       latency, ordering, CPU use, close behavior, and blocked-thread stacks; a candidate is
       acceptable only if status arrives within 500 ms without another client write and stop
       completes within two seconds without killing a responsive process.
+      **Done 2026-09-24:** `ipc-test` takes a 10th argument (`sync-duplex`, `async-duplex`,
+      `split`); "IPC transport comparison (G7-R4)" in `rdp-sidecar-binary.test.js` runs the
+      same probe on the real Debug binary. Single probe / 100-reply burst / stop: sync duplex
+      — no reply in 500 ms, reply only after the next client write (749 ms), no
+      `DisconnectComplete`, exit only when the client closed (2.1 s); async duplex — 16 ms /
+      28 ms ordered / 95 ms, exit 0, no kill; two pipes — 15 ms / 13 ms ordered / 92 ms, exit
+      0, no kill. Process CPU 172–281 ms, dominated by WinForms startup. Blocked-thread
+      evidence as in R3. Found on the way: Node's `net` pipe client closes a strictly inbound
+      pipe at once, so the two-pipe variant needs `InOut` handles used one way each.
 
 ### Root-cause and design decision gates
 
-- [ ] **G7-C1 — Select the smallest transport that is demonstrably safe on .NET Framework
+- [x] **G7-C1 — Select the smallest transport that is demonstrably safe on .NET Framework
       4.8:** write a short decision note in the connection architecture document comparing the
       R4 results. Prefer two one-way pipes if async duplex cannot prove independent reads,
       writes, cancellation, and deterministic disposal with the project's existing runtime;
       do not add a new IPC framework or serialization dependency. Done when: the selected
       design is justified by the failing/passing probe, not by API naming or a real RDP result.
+      **Done 2026-09-24:** `docs/ARQUITETURA_CONEXAO.md` ("Decisão do transporte") records
+      the R4 table and keeps the async duplex pipe: both correct variants pass the same
+      probe, and the duplex has one handle, one connection, one partial-failure path and one
+      teardown; the two-pipe variant would not even buy per-direction access, since both
+      handles must be `InOut` for the Node client. No new dependency.
 - [x] **G7-C2 — Audit every UI-thread escape path:** inventory `SetStatusReporter`,
       `ReportStatus`, all MSTSCLib event handlers, `ConnectRdp`, `DisconnectRdp`, form close,
       and initialization replay of `_lastStatus`. Done when: each path is classified as UI-only
@@ -1203,6 +1256,9 @@ never enter logs, argv, test fixtures, or fallback telemetry.
   `git diff --check` pass. A fresh `npm run dev` started Vite, Electron, proxy 18900 and
   connection-request 18902 without a port collision, then was stopped normally. The
   pre-existing development CSP/Vite WebSocket and Electron security warnings remain.
+- **G7-R3/R4/C1 (2026-09-24):** the three-transport measurement closed the comparison the
+  two paragraphs above left open; the async duplex pipe stays, and the pipe code now has
+  one `StatusChannel` (bounded queue + background writer) shared by the transports.
 
 **Done when (fix-level):** the transport-only test proves independent command and status
 progress; no sidecar UI/COM callback can block on IPC; timers reflect acknowledged native
@@ -1258,9 +1314,9 @@ Suggested: gpt-6-astra · xhigh — this crosses the Electron/React/noVNC bounda
 
 ### Regression coverage and operational verification
 
-- [ ] **G8-T1 — Add focused state-policy tests:** extract the smallest pure session policy for structured outcomes, input normalization, retry eligibility, saved-versus-quick credential lifetime, and stale attempts. Done when: tests prove bare IP uses 5900 without a credential, rejection stops before VNC, credentials are requested only on the event, authentication failure is not retried, and a transient disconnect remains eligible. **Partial 2026-09-24:** `vncSession.test.js` covers bare-IP normalization, retry eligibility (auth failure and server refusal not retried, connection loss retried) and saved-credential use once; `connection-request.test.js` proves an explicit rejection is reported as rejected. **Still open:** "credentials requested only on the event" and stale attempts lack a pure-policy test.
-- [ ] **G8-T2 — Test the parent/iframe credential contract without secrets:** cover iframe-ready, credentials-required, submit, cancel, duplicate message, stale attempt, unexpected message source, and disconnect with synthetic values. Done when: only the matching live session receives a credential, it is not in a URL/status payload, and cancel/error clears the pending request. **Partial 2026-09-24:** `vncProtocol.test.js` covers stale attempt and unexpected source, plus refusal-vs-wrong-password classification. **Still open:** iframe-ready, submit, cancel, duplicate message and disconnect cases.
-- [ ] **G8-T3 — Preserve configuration and transport regressions:** cover encrypted optional saved credentials, clearing/replacing one, no persistence for quick connection, VNC default transport, RDP isolation, and concurrent machines. Done when: existing profiles stay readable, missing passwords stay valid, and RDP/file-transfer paths are unchanged. **Partial 2026-09-24:** `machine-credentials.test.js` covers the encrypted optional saved credential and clearing it. **Still open:** replacing one, quick connection never persisting, VNC default transport, RDP isolation and concurrent machines.
+- [x] **G8-T1 — Add focused state-policy tests:** extract the smallest pure session policy for structured outcomes, input normalization, retry eligibility, saved-versus-quick credential lifetime, and stale attempts. Done when: tests prove bare IP uses 5900 without a credential, rejection stops before VNC, credentials are requested only on the event, authentication failure is not retried, and a transient disconnect remains eligible. **Partial 2026-09-24:** `vncSession.test.js` covers bare-IP normalization, retry eligibility (auth failure and server refusal not retried, connection loss retried) and saved-credential use once; `connection-request.test.js` proves an explicit rejection is reported as rejected. **Still open:** "credentials requested only on the event" and stale attempts lack a pure-policy test. **Done 2026-09-24:** `RemoteViewer.jsx`'s decisions moved to pure functions in `vncSession.js` — `isCredentialRequest` (only `vnc-status`/`credentials-required` triggers a password; `vnc-ready`, resolution, connected, auth failure, refusal, loss and reconnect never do), `isFromActiveViewer` (another window or a stale attempt is ignored) and `nextCredentialSource` (just-typed password, then the approval grant once and never after the server refused it, then the saved one once, then ask) — each with tests in `vncSession.test.js`.
+- [x] **G8-T2 — Test the parent/iframe credential contract without secrets:** cover iframe-ready, credentials-required, submit, cancel, duplicate message, stale attempt, unexpected message source, and disconnect with synthetic values. Done when: only the matching live session receives a credential, it is not in a URL/status payload, and cancel/error clears the pending request. **Partial 2026-09-24:** `vncProtocol.test.js` covers stale attempt and unexpected source, plus refusal-vs-wrong-password classification. **Still open:** iframe-ready, submit, cancel, duplicate message and disconnect cases. **Done 2026-09-24:** the iframe's handling moved from `vnc.html` to `applyParentMessage`/`credentialsRequested`/`sessionEnded` in `vnc-protocol.js`; `vncProtocol.test.js` now covers a password sent before noVNC asks (dropped — the "iframe ready, nothing requested yet" case), submit once, duplicate ignored, empty password ignored, cancel ends the attempt and refuses later passwords, disconnect closes once, an error clears the pending request, and no close effect carries the password (synthetic values only). Checked in the real noVNC runtime too: the worktree's `vnc.html` served on a spare port and pointed at this PC's own TightVNC reached "Aguardando a senha", ignored a stale-attempt cancel and an empty password, posted exactly one `disconnected` ("Senha VNC não informada") on cancel and nothing for repeated cancel/disconnect, with no console error and no password ever sent.
+- [x] **G8-T3 — Preserve configuration and transport regressions:** cover encrypted optional saved credentials, clearing/replacing one, no persistence for quick connection, VNC default transport, RDP isolation, and concurrent machines. Done when: existing profiles stay readable, missing passwords stay valid, and RDP/file-transfer paths are unchanged. **Partial 2026-09-24:** `machine-credentials.test.js` covers the encrypted optional saved credential and clearing it. **Still open:** replacing one, quick connection never persisting, VNC default transport, RDP isolation and concurrent machines. **Done 2026-09-24:** replacing was already covered ("can replace or clear a credential without retaining plaintext"); new `shouldPersistVncCredential` (extracted from `RemoteViewer.jsx`) never persists for a `quick-` connection; a new `machine-credentials.test.js` case keeps `transport: 'rdp'`, the RDP user and `rdpPasswordEnc` untouched when the VNC credential is replaced or cleared; VNC as default transport (`resolveTransport`) and concurrent machines (`connectionState.test.js`, `proxy.test.js`, the RDP manager's two-machine test) were already covered.
 - [x] **G8-T4 — Run non-manual project gates:** run focused tests, `npm test`, `npm run lint`, renderer build, and `git diff --check`; inspect generated viewer URLs and redacted logs. Done when: all gates pass and no fixture, assertion, or artifact stores a real password. **Passed 2026-09-24:** `npm test` 135 passed/4 skipped, `npm run lint` 0 errors (9 old warnings, clean now that G11-F1 scoped it), renderer build OK, `git diff --check` clean; viewer URLs carry only host/port/proxy/attempt (`buildVncViewerUrl`); a scan of PC A's real `electron-out.log`/`electron-err.log` found no password, `vncPassword`, `sessionPassword` or tunnel token.
 - [ ] **G8-T5 — Complete two-PC manual acceptance `(manual)`:** with PC A client and PC B host, test direct-IP and saved-profile flows for rejection, no password required, correct/wrong password, cancelled dialog, saved-password replacement, and network interruption. Done when: each screen states the correct layer and next action, successful VNC is input-usable, wrong credentials do not retry, and the password is absent from the URL, activity view, and logs inspected by the operator. **Mostly covered 2026-09-23 on PC A → PC B** (direct IP and saved profile): rejection, password-required, wrong password without retry and without "Connection lost unexpectedly", cancelled dialog, saved password removal, network interruption; no password in inspected logs. **Still open:** a server with no password, and replacing a saved password.
 

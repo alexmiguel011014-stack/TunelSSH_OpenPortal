@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   connectMachineEntry,
   disconnectMachineEntry,
+  isConnectionHistoryEvent,
   pickFocusAfterDisconnect,
   resolveTransport,
 } from '../connectionState.js';
@@ -51,6 +52,19 @@ describe('pickFocusAfterDisconnect', () => {
   it('focus becomes null when the last connected machine disconnects', () => {
     const state = connectMachineEntry({}, { id: 'pc-a', name: 'A' });
     expect(pickFocusAfterDisconnect(state, 'pc-a', 'pc-a')).toBe(null);
+  });
+});
+
+describe('isConnectionHistoryEvent', () => {
+  it('records real results only, never an explicit user disconnect', () => {
+    expect(isConnectionHistoryEvent({ state: 'connected' })).toBe(true);
+    expect(isConnectionHistoryEvent({ state: 'error' })).toBe(true);
+    expect(isConnectionHistoryEvent({ state: 'disconnected' })).toBe(true);
+    expect(
+      isConnectionHistoryEvent({ state: 'disconnected', intentional: true, eventName: 'UserStop' }),
+    ).toBe(false);
+    expect(isConnectionHistoryEvent({ state: 'connecting' })).toBe(false);
+    expect(isConnectionHistoryEvent(null)).toBe(false);
   });
 });
 
