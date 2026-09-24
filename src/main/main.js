@@ -1,4 +1,11 @@
-const { app, BrowserWindow, ipcMain, globalShortcut, Notification } = require('electron');
+const {
+  app,
+  BrowserWindow,
+  ipcMain,
+  globalShortcut,
+  Notification,
+  powerMonitor,
+} = require('electron');
 const os = require('os');
 const { initLogging } = require('./logging');
 const { createMainWindow } = require('./windows/main-window');
@@ -249,6 +256,19 @@ app.whenReady().then(() => {
   mainWindow = createMainWindow(isDev);
   buildAppMenu(() => mainWindow);
 
+  // Suspensão, retomada e troca de fonte de energia no log, para cruzar com
+  // quedas do app (o PC B hiberna sozinho e trocou de fonte nas duas quedas).
+  for (const event of [
+    'suspend',
+    'resume',
+    'on-ac',
+    'on-battery',
+    'lock-screen',
+    'unlock-screen',
+  ]) {
+    powerMonitor.on(event, () => console.log(`[power] ${event}`));
+  }
+
   wss = startWebSocketProxy(PROXY_PORT, {
     getTunnelToken: (host) => fileTransferSession.getVncTunnelToken(host),
   });
@@ -394,6 +414,7 @@ app.whenReady().then(() => {
 });
 
 app.on('window-all-closed', () => {
+  console.log('[main] Todas as janelas fechadas; o app vai encerrar');
   globalShortcut.unregisterAll();
   if (wss) wss.close();
   if (requestServer) requestServer.stop();
