@@ -5,8 +5,23 @@ import {
   formatIpInput,
   isRetryableVncState,
   normalizeQuickVncHost,
+  shouldExplainMissingTunnel,
   shouldUseSavedVncCredential,
 } from '../vncSession.js';
+
+describe('shouldExplainMissingTunnel', () => {
+  it('explains once when a session without tunnel never opened', () => {
+    expect(shouldExplainMissingTunnel({ everConnected: false, tunnel: false })).toBe(true);
+    expect(
+      shouldExplainMissingTunnel({ everConnected: false, tunnel: false, alreadyExplained: true }),
+    ).toBe(false);
+  });
+
+  it('stays quiet for tunnelled sessions and for drops after the session opened', () => {
+    expect(shouldExplainMissingTunnel({ everConnected: false, tunnel: true })).toBe(false);
+    expect(shouldExplainMissingTunnel({ everConnected: true, tunnel: false })).toBe(false);
+  });
+});
 
 describe('formatIpInput', () => {
   it('adds the dot after a full octet while typing, but not while deleting', () => {

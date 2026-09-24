@@ -16,17 +16,21 @@ const RETRY_DELAY = 5000;
 
 // Emite 'file-session-open'/'file-session-close' (com o req da conexão)
 // quando um pedido aprovado vira sessão de arquivos — usado pelo main.js
-// para mostrar o aviso "alguém está conectado". É uma aproximação: a sessão
-// VNC em si (porta 5900) fala direto com o TightVNC, sem passar por este
-// servidor, então não há como observar seu início/fim de verdade — mas como
-// o App.jsx abre e fecha a sessão de arquivos junto com a sessão VNC (mesmo
-// clique de conectar/desconectar), esse sinal reflete bem a sessão na prática.
+// para mostrar o aviso "alguém está conectado". É uma aproximação: cada
+// conexão VNC chega depois, por um túnel próprio nesta mesma porta (GOALS 10,
+// openVncTunnel) — mas como o App.jsx abre e fecha a sessão de arquivos junto
+// com a sessão VNC (mesmo clique de conectar/desconectar), esse sinal reflete
+// bem a sessão na prática.
 // Também emite 'activity-event' (GOALS 4): mensagem fire-and-forget enviada
 // por OUTRA instância deste app para reportar uma sessão que aconteceu lá.
 class ConnectionRequestServer extends EventEmitter {
-  constructor(onRequest) {
+  // authorizeVncTunnel(token, remoteAddress) -> 'ok' | 'wrong' | 'locked'
+  // decide os pedidos de túnel VNC (GOALS 10); vncPort é o TightVNC local.
+  constructor(onRequest, { authorizeVncTunnel = null, vncPort = 5900 } = {}) {
     super();
     this.onRequest = onRequest;
+    this.authorizeVncTunnel = authorizeVncTunnel;
+    this.vncPort = vncPort;
     this.server = null;
   }
 
@@ -126,6 +130,9 @@ class ConnectionRequestServer extends EventEmitter {
               message: 'Server not ready',
             });
           }
+        } else if (msg.type === 'vnc-tunnel') {
+          socket.removeListener('data', dataHandler);
+          this.openVncTunnel(socket, msg.token);
         } else if (msg.type === 'activity-event') {
           // Fire-and-forget (GOALS 4): sem resposta esperada, nunca abre
           // sessão de arquivos nem interfere num connect-request em curso
@@ -165,6 +172,34 @@ class ConnectionRequestServer extends EventEmitter {
     });
 
     return this.server;
+  }
+
+  // GOALS 10: com um token de sessão aprovada válido para o IP real do
+  // socket, esta conexão vira o transporte do VNC até o TightVNC local; sem
+  // ele é recusada. A resposta é uma linha JSON e, depois do ok, só RFB.
+  openVncTunnel(socket, token) {
+    const verdict = this.authorizeVncTunnel
+      ? this.authorizeVncTunnel(token, socket.remoteAddress || '')
+      : 'wrong';
+    if (verdict !== 'ok') {
+      socket.end(`${JSON.stringify({ type: 'vnc-tunnel-rejected', reason: verdict })}\n`);
+      return;
+    }
+    const upstream = net.createConnection({ host: '127.0.0.1', port: this.vncPort });
+    upstream.setNoDelay(true);
+    const closeBoth = () => {
+      socket.destroy();
+      upstream.destroy();
+    };
+    upstream.once('connect', () => {
+      if (socket.destroyed) return upstream.destroy();
+      socket.write(`${JSON.stringify({ type: 'vnc-tunnel-ok' })}\n`);
+      socket.pipe(upstream);
+      upstream.pipe(socket);
+    });
+    upstream.on('error', closeBoth);
+    upstream.on('close', closeBoth);
+    socket.on('close', closeBoth);
   }
 
   stop() {
@@ -254,8 +289,10 @@ function sendConnectRequestOnce(host, fromName, fromIp, port = SIGNAL_PORT, opts
       responded = true;
       if (timer) clearTimeout(timer);
 
-      // Senha do TightVNC do PC remoto, entregue junto com a aprovação.
+      // Senha do TightVNC e token do túnel VNC do PC remoto, entregues junto
+      // com a aprovação.
       const vncPassword = typeof msg.vncPassword === 'string' ? msg.vncPassword : '';
+      const vncToken = typeof msg.vncToken === 'string' ? msg.vncToken : '';
 
       if (msg.type !== 'connect-response') {
         if (!socket.destroyed) socket.destroy();
@@ -269,7 +306,7 @@ function sendConnectRequestOnce(host, fromName, fromIp, port = SIGNAL_PORT, opts
         socket.removeAllListeners('data');
         socket.removeAllListeners('error');
         socket.removeAllListeners('close');
-        resolve({ approved: true, message: msg.message || '', vncPassword, socket });
+        resolve({ approved: true, message: msg.message || '', vncPassword, vncToken, socket });
         return;
       }
 
@@ -279,6 +316,7 @@ function sendConnectRequestOnce(host, fromName, fromIp, port = SIGNAL_PORT, opts
         rejected: msg.rejected === true,
         message: msg.message || '',
         vncPassword,
+        vncToken,
       });
     });
 

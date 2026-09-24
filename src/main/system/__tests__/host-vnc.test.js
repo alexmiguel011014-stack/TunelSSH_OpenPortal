@@ -2,8 +2,13 @@ import crypto from 'crypto';
 import net from 'net';
 import { describe, expect, it } from 'vitest';
 import {
+  buildAllowDirectVncScript,
   buildApplyVncPasswordScript,
+  decideSetupOutcome,
   generateVncPassword,
+  parseServiceExe,
+  probeVncExposure,
+  relaunchTightVncTray,
   reverseBits,
   vncAuthResponse,
   verifyVncPassword,
@@ -121,5 +126,102 @@ describe('VNC password primitives', () => {
     expect(script).toContain('65,98,51,100,69,102,55,104');
     expect(script).toContain('Restart-Service -Name tvnserver');
     expect(script).not.toContain('Ab3dEf7h');
+  });
+
+  it('makes TightVNC accept only local connections when applying the password', () => {
+    const script = buildApplyVncPasswordScript('Ab3dEf7h');
+    expect(script).toContain("-Name 'AllowLoopback' -Value 1 -Type DWord");
+    expect(script).toContain("-Name 'LoopbackOnly' -Value 1 -Type DWord");
+    expect(script.indexOf('LoopbackOnly')).toBeLessThan(script.indexOf('Restart-Service'));
+  });
+
+  it('offers a way back that reopens 5900 without touching the password', () => {
+    const script = buildAllowDirectVncScript();
+    expect(script).toContain("-Name 'LoopbackOnly' -Value 0 -Type DWord");
+    expect(script).toContain('Restart-Service -Name tvnserver');
+    expect(script).not.toContain('Password');
+  });
+});
+
+describe('decideSetupOutcome', () => {
+  it('claims local-only protection only when 5900 no longer answers on the network', () => {
+    expect(decideSetupOutcome({ verdict: 'ok', exposure: 'closed' })).toEqual({
+      store: true,
+      localOnly: true,
+      error: '',
+    });
+    expect(decideSetupOutcome({ verdict: 'ok', exposure: 'open' })).toEqual({
+      store: true,
+      localOnly: false,
+      error: 'exposed',
+    });
+  });
+
+  it('never stores a password the local login did not confirm', () => {
+    for (const verdict of ['wrong', 'refused', 'no-auth', 'error']) {
+      expect(decideSetupOutcome({ verdict, exposure: 'closed' })).toMatchObject({
+        store: false,
+        localOnly: false,
+        error: verdict,
+      });
+    }
+  });
+});
+
+describe('probeVncExposure', () => {
+  it('tells an open VNC server from a refusing one and from a closed port, without authenticating', async () => {
+    const open = await startFakeVncServer({ types: [2, 16] });
+    const refusing = await startFakeVncServer({ types: [] });
+    const closed = await startFakeVncServer();
+    const closedPort = closed.address().port;
+    await new Promise((resolve) => closed.close(resolve));
+    try {
+      expect(await probeVncExposure('127.0.0.1', open.address().port)).toBe('open');
+      expect(await probeVncExposure('127.0.0.1', refusing.address().port)).toBe('refused');
+      expect(await probeVncExposure('127.0.0.1', closedPort, { timeoutMs: 1000 })).toBe('closed');
+    } finally {
+      open.close();
+      refusing.close();
+    }
+  });
+});
+
+describe('TightVNC tray icon relaunch', () => {
+  const imagePath =
+    '\r\nHKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Services\\tvnserver\r\n    ImagePath    REG_EXPAND_SZ    "C:\\Program Files\\TightVNC\\tvnserver.exe" -service\r\n';
+
+  it('reads the service executable from reg query output, quoted or not', () => {
+    expect(parseServiceExe(imagePath)).toBe('C:\\Program Files\\TightVNC\\tvnserver.exe');
+    expect(parseServiceExe('    ImagePath    REG_SZ    C:\\VNC\\tvnserver.exe -service')).toBe(
+      'C:\\VNC\\tvnserver.exe',
+    );
+    expect(parseServiceExe('')).toBe('');
+  });
+
+  function fakes(tasklistOutput) {
+    const spawned = [];
+    const execFile = (cmd, args, opts, cb) =>
+      cb(null, cmd === 'tasklist' ? tasklistOutput : imagePath);
+    const spawn = (exe, args) => {
+      spawned.push({ exe, args });
+      return { unref() {} };
+    };
+    return { spawned, execFile, spawn };
+  }
+
+  it('reopens the service control interface unelevated when only the service is running', async () => {
+    const f = fakes('"tvnserver.exe","5992","Services","0","9.876 K"\r\n');
+    expect(await relaunchTightVncTray(f)).toBe(true);
+    expect(f.spawned).toEqual([
+      { exe: 'C:\\Program Files\\TightVNC\\tvnserver.exe', args: ['-controlservice', '-slave'] },
+    ]);
+  });
+
+  it('does nothing when the tray icon is already open in the user session', async () => {
+    const f = fakes(
+      '"tvnserver.exe","5992","Services","0","9.876 K"\r\n"tvnserver.exe","7001","Console","1","4.321 K"\r\n',
+    );
+    expect(await relaunchTightVncTray(f)).toBe(false);
+    expect(f.spawned).toEqual([]);
   });
 });

@@ -42,17 +42,34 @@ export default function LocalAccessCard() {
     if (next) setInfo(next);
   };
 
-  const setupHostVnc = async () => {
+  // As duas ações pedem UAC e devolvem o estado atualizado mesmo em falha
+  // parcial (ex.: senha aplicada, mas a 5900 ainda aberta na rede).
+  const runHostVncAction = async (action, fallbackError) => {
     setSettingUp(true);
     setSetupError('');
     try {
-      const res = await window.electronAPI?.setupHostVnc?.();
-      if (res?.success) setInfo(res);
-      else setSetupError(res?.error || 'Não foi possível configurar o TightVNC deste PC.');
+      const res = await action();
+      if (res && 'hostVncConfigured' in res) setInfo(res);
+      if (!res?.success) setSetupError(res?.error || fallbackError);
     } finally {
       setSettingUp(false);
     }
   };
+
+  const setupHostVnc = () =>
+    runHostVncAction(
+      () => window.electronAPI?.setupHostVnc?.(),
+      'Não foi possível configurar o TightVNC deste PC.',
+    );
+
+  const allowDirectVnc = () =>
+    runHostVncAction(
+      () => window.electronAPI?.allowDirectVnc?.(),
+      'Não foi possível liberar o VNC direto.',
+    );
+
+  let setupLabel = info?.hostVncConfigured ? 'Proteger TightVNC' : 'Configurar TightVNC';
+  if (settingUp) setupLabel = 'Configurando...';
 
   const field = (key, label, value, placeholder, extra = null) => (
     <div className="bg-inset border border-line-subtle rounded-lg px-3 py-2.5">
@@ -102,11 +119,12 @@ export default function LocalAccessCard() {
         Quem tiver este IP e a senha entra sem você clicar em Aceitar. A senha muda depois de cada
         acesso e sempre que o app abre.
       </p>
-      {info && !info.hostVncConfigured && (
+      {info && !info.hostVncLocalOnly && (
         <div className="mt-3 flex items-center gap-3 rounded-lg border border-warning/40 bg-warning/10 px-3 py-2.5 text-xs text-text-secondary">
           <span className="flex-1">
-            O TightVNC deste PC ainda não foi configurado pelo app, então quem conectar precisará
-            digitar a senha dele. Configure uma vez; o Windows pede permissão de administrador.
+            {info.hostVncConfigured
+              ? 'O TightVNC deste PC ainda aceita conexões diretas pela rede, sem passar pela aprovação. Proteja uma vez: ele passa a aceitar só conexões feitas pelo OpenPortal (o Windows pede permissão de administrador).'
+              : 'O TightVNC deste PC ainda não foi configurado pelo app: quem conectar precisaria digitar a senha dele, e ele aceita conexões sem passar pela aprovação. Configure uma vez; o Windows pede permissão de administrador.'}
           </span>
           <button
             type="button"
@@ -114,7 +132,22 @@ export default function LocalAccessCard() {
             disabled={settingUp}
             className="px-3 py-1.5 rounded-md text-xs font-medium bg-accent hover:bg-accent-strong text-white transition-colors whitespace-nowrap disabled:opacity-60"
           >
-            {settingUp ? 'Configurando...' : 'Configurar TightVNC'}
+            {setupLabel}
+          </button>
+        </div>
+      )}
+      {info?.hostVncLocalOnly && (
+        <div className="mt-3 flex items-center gap-3 text-[11px] text-text-faint">
+          <span className="flex-1">
+            TightVNC protegido: só aceita conexões feitas pelo OpenPortal, depois da aprovação.
+          </span>
+          <button
+            type="button"
+            onClick={allowDirectVnc}
+            disabled={settingUp}
+            className="text-text-muted hover:text-text-primary underline underline-offset-2 disabled:opacity-60"
+          >
+            {settingUp ? 'Aguarde...' : 'Liberar VNC direto'}
           </button>
         </div>
       )}

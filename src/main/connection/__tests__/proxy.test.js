@@ -16,6 +16,8 @@ import WebSocket from 'ws';
 // code in this file would get a chance to set the env var first.
 describe('startWebSocketProxy — concurrent bridges (integration)', () => {
   let startWebSocketProxy;
+  let ConnectionRequestServer;
+  let VncTunnelTokens;
   let originalNodeEnv;
 
   beforeAll(async () => {
@@ -23,6 +25,8 @@ describe('startWebSocketProxy — concurrent bridges (integration)', () => {
     process.env.NODE_ENV = 'development';
     vi.resetModules();
     ({ startWebSocketProxy } = await import('../proxy.js'));
+    ({ ConnectionRequestServer } = await import('../connection-request.js'));
+    ({ VncTunnelTokens } = await import('../vnc-tunnel.js'));
   });
 
   afterAll(() => {
@@ -52,6 +56,66 @@ describe('startWebSocketProxy — concurrent bridges (integration)', () => {
   function waitForMessage(ws) {
     return new Promise((resolve) => ws.once('message', (data) => resolve(data.toString())));
   }
+
+  // Servidor RFB falso: manda a versão, como o TightVNC, e ecoa o resto.
+  function startFakeRfbServer() {
+    return new Promise((resolve) => {
+      const server = net.createServer((socket) => {
+        socket.on('error', () => {});
+        socket.write('RFB 003.008\n');
+        socket.on('data', (chunk) => socket.write(Buffer.concat([Buffer.from('echo:'), chunk])));
+      });
+      server.listen(0, '127.0.0.1', () => resolve(server));
+    });
+  }
+
+  it('carries VNC through the approved-session tunnel, also on reconnect, and refuses a bad token', async () => {
+    const rfb = await startFakeRfbServer();
+    const tokens = new VncTunnelTokens();
+    const host = new ConnectionRequestServer(() => {}, {
+      vncPort: rfb.address().port,
+      authorizeVncTunnel: (token, address) => tokens.check(token, address.replace(/^::ffff:/, '')),
+    });
+    host.start(0);
+    await new Promise((resolve) => host.server.once('listening', resolve));
+    let token = tokens.issue('127.0.0.1');
+    const wss = startWebSocketProxy(0, {
+      getTunnelToken: () => token,
+      tunnelPort: host.server.address().port,
+    });
+    await new Promise((resolve) => wss.once('listening', resolve));
+    const url = `ws://127.0.0.1:${wss.address().port}/?host=127.0.0.1&port=5900`;
+
+    try {
+      for (const attempt of ['first', 'reconnect']) {
+        const ws = new WebSocket(url);
+        expect(await waitForMessage(ws)).toBe('RFB 003.008\n');
+        const echo = waitForMessage(ws);
+        ws.send(attempt);
+        expect(await echo).toBe(`echo:${attempt}`);
+        ws.close();
+      }
+
+      token = 'forged-token';
+      const refused = new WebSocket(url);
+      const code = await new Promise((resolve) => refused.once('close', resolve));
+      expect(code).toBe(4005);
+    } finally {
+      wss.close();
+      host.stop();
+      rfb.close();
+    }
+  });
+
+  it('listens on loopback only, so other PCs on the network cannot use it', async () => {
+    const wss = startWebSocketProxy(0);
+    await new Promise((resolve) => wss.once('listening', resolve));
+    try {
+      expect(wss.address().address).toBe('127.0.0.1');
+    } finally {
+      wss.close();
+    }
+  });
 
   it('bridges two concurrent connections to two different targets without cross-talk', async () => {
     const serverA = await startEchoServer('A:');

@@ -37,7 +37,12 @@ async function connect(host, opts = {}) {
   if (!opts.force) {
     const existing = findLiveSessionByHost(target);
     if (existing) {
-      return { sessionId: existing.sessionId, reused: true, vncPassword: existing.vncPassword };
+      return {
+        sessionId: existing.sessionId,
+        reused: true,
+        vncPassword: existing.vncPassword,
+        vncTunnel: Boolean(existing.vncToken),
+      };
     }
     if (connecting.has(target)) return connecting.get(target);
   }
@@ -63,12 +68,15 @@ async function connect(host, opts = {}) {
     const client = new FileClient(res.socket);
     const sessionId = nextSessionId();
     const vncPassword = res.vncPassword || '';
-    sessions.set(sessionId, { sessionId, host: target, client, vncPassword });
+    // Token do túnel VNC (GOALS 10): fica só aqui, no processo principal; o
+    // proxy o busca pelo host, sem passar pelo renderer nem por URL.
+    const vncToken = res.vncToken || '';
+    sessions.set(sessionId, { sessionId, host: target, client, vncPassword, vncToken });
 
     res.socket.on('close', () => sessions.delete(sessionId));
     res.socket.on('error', () => sessions.delete(sessionId));
 
-    return { sessionId, reused: false, vncPassword };
+    return { sessionId, reused: false, vncPassword, vncTunnel: Boolean(vncToken) };
   })();
 
   connecting.set(target, task);
@@ -77,6 +85,10 @@ async function connect(host, opts = {}) {
   } finally {
     connecting.delete(target);
   }
+}
+
+function getVncTunnelToken(host) {
+  return findLiveSessionByHost(String(host || '').trim())?.vncToken || '';
 }
 
 function getClient(sessionId) {
@@ -95,4 +107,4 @@ function disconnect(sessionId) {
   }
 }
 
-module.exports = { connect, getClient, disconnect };
+module.exports = { connect, getClient, getVncTunnelToken, disconnect };

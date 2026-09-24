@@ -60,6 +60,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     return () => ipcRenderer.removeListener('access:changed', handler);
   },
   setupHostVnc: () => ipcRenderer.invoke('hostVnc:setup'),
+  allowDirectVnc: () => ipcRenderer.invoke('hostVnc:allowDirect'),
 
   checkForUpdates: () => ipcRenderer.invoke('app:checkUpdate'),
 

@@ -2,14 +2,21 @@ const WebSocket = require('ws');
 const net = require('net');
 const { URL } = require('url');
 const { isAllowedHost } = require('./net-guard');
+const { SIGNAL_PORT } = require('./connection-request');
 
 const CONNECT_TIMEOUT = 10000;
 const IDLE_TIMEOUT = 30 * 60 * 1000;
 const HEARTBEAT_INTERVAL = 30000; // ping WS a cada 30s
 const HEARTBEAT_MAX_MISSED = 2; // encerra após ~60s sem pong
 
-function startWebSocketProxy(port = 18900) {
-  const wss = new WebSocket.Server({ port });
+// getTunnelToken(host) devolve o token da sessão aprovada com aquele PC (ou '').
+function startWebSocketProxy(
+  port = 18900,
+  { getTunnelToken = null, tunnelPort = SIGNAL_PORT } = {},
+) {
+  // Só o renderer deste PC usa o proxy: escutar em todas as interfaces deixava
+  // outros PCs da rede usá-lo para abrir conexões TCP a partir daqui.
+  const wss = new WebSocket.Server({ host: '127.0.0.1', port });
 
   wss.on('error', (err) => {
     console.error(`[proxy] WebSocket server error (port ${port}):`, err.message);
@@ -72,7 +79,15 @@ function startWebSocketProxy(port = 18900) {
       missedPongs = 0;
     });
 
-    tcpSocket = net.createConnection(targetPort, targetHost);
+    // GOALS 10: com o token da sessão aprovada, o VNC vai pelo túnel da porta
+    // de pedidos até o TightVNC local do outro PC; sem token (PC remoto com a
+    // versão antiga), segue direto para a 5900 como antes.
+    const tunnelToken = getTunnelToken ? getTunnelToken(targetHost) : '';
+    let awaitingTunnel = Boolean(tunnelToken);
+    let handshake = Buffer.alloc(0);
+    tcpSocket = tunnelToken
+      ? net.createConnection(tunnelPort, targetHost)
+      : net.createConnection(targetPort, targetHost);
 
     tcpSocket.setNoDelay(true);
     tcpSocket.setKeepAlive(true, 5000);
@@ -84,7 +99,12 @@ function startWebSocketProxy(port = 18900) {
     }, CONNECT_TIMEOUT);
 
     tcpSocket.on('connect', () => {
-      console.log(`[proxy] TCP connected to ${targetHost}:${targetPort}`);
+      if (tunnelToken) {
+        console.log(`[proxy] TCP connected to ${targetHost}:${tunnelPort}, pedindo túnel VNC`);
+        tcpSocket.write(`${JSON.stringify({ type: 'vnc-tunnel', token: tunnelToken })}\n`);
+      } else {
+        console.log(`[proxy] TCP connected to ${targetHost}:${targetPort}`);
+      }
       settled = true;
       clearTimeout(connectTimer);
       tcpSocket.setTimeout(IDLE_TIMEOUT);
@@ -97,8 +117,31 @@ function startWebSocketProxy(port = 18900) {
     });
 
     tcpSocket.on('data', (chunk) => {
+      let payload = chunk;
+      if (awaitingTunnel) {
+        // Primeira linha do host: o veredito do túnel; o resto já é RFB.
+        handshake = Buffer.concat([handshake, chunk]);
+        const end = handshake.indexOf(0x0a);
+        if (end < 0) return;
+        let reply = null;
+        try {
+          reply = JSON.parse(handshake.subarray(0, end).toString('utf8'));
+        } catch {}
+        if (reply?.type !== 'vnc-tunnel-ok') {
+          console.error(
+            `[proxy] Túnel VNC recusado por ${targetHost}: ${reply?.reason || 'resposta inválida'}`,
+          );
+          tcpSocket.destroy();
+          if (ws.readyState === WebSocket.OPEN) ws.close(4005, 'VNC tunnel refused');
+          return;
+        }
+        awaitingTunnel = false;
+        payload = handshake.subarray(end + 1);
+        handshake = null;
+        if (payload.length === 0) return;
+      }
       if (ws.readyState === WebSocket.OPEN) {
-        ws.send(chunk);
+        ws.send(payload);
       }
     });
 
@@ -142,7 +185,9 @@ function startWebSocketProxy(port = 18900) {
     });
   });
 
-  console.log(`[proxy] WebSocket proxy listening on ws://localhost:${port}`);
+  wss.on('listening', () => {
+    console.log(`[proxy] WebSocket proxy listening on ws://127.0.0.1:${wss.address().port}`);
+  });
   return wss;
 }
 

@@ -58,6 +58,12 @@ export function buildVncViewerUrl({ host, port = 5900, proxyUrl, attemptId }) {
   return `./noVNC/vnc.html?${params}`;
 }
 
+// Conexão perdida antes de a sessão abrir, sem túnel VNC: o outro PC está com
+// uma versão antiga do OpenPortal (VNC direto na 5900) e a 5900 não respondeu.
+export function shouldExplainMissingTunnel({ everConnected, tunnel, alreadyExplained }) {
+  return !everConnected && !tunnel && !alreadyExplained;
+}
+
 export function isRetryableVncState(state) {
   return state === 'connection-lost';
 }

@@ -2,16 +2,21 @@
 
 const { ipcMain, app, Notification } = require('electron');
 const {
-  getHostVncPassword,
+  getHostVncState,
   getVncCredential,
   readConfig,
+  setHostVncLocalOnly,
   setHostVncPassword,
   setVncCredential,
   writeConfig,
 } = require('../config/config-manager');
 const {
+  allowDirectVnc,
   applyHostVncPassword,
+  decideSetupOutcome,
   generateVncPassword,
+  probeVncExposure,
+  relaunchTightVncTray,
   verifyVncPassword,
 } = require('../system/host-vnc');
 const { readHistory, addEntry } = require('../config/history-manager');
@@ -69,9 +74,13 @@ const HOST_VNC_ERRORS = {
   refused:
     'O TightVNC recusou a conexão de teste (IP bloqueado por senhas erradas?). Tente de novo em alguns minutos.',
   'no-auth': 'O TightVNC continua sem senha: a alteração não foi aplicada.',
-  error:
-    'Não foi possível confirmar a senha nova no TightVNC (serviço parado ou Tailscale desconectado).',
+  error: 'Não foi possível confirmar a senha nova no TightVNC (serviço parado?).',
+  exposed:
+    'A senha nova foi aplicada, mas o TightVNC continua aceitando conexões pela rede: a opção de só aceitar conexões locais não fez efeito. O acesso segue pelo caminho antigo.',
 };
+
+const UAC_DENIED = 'O Windows não autorizou a alteração (pedido de administrador cancelado?).';
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function registerIpcHandlers(mainWindow, { accessGate } = {}) {
   const pendingRdpStarts = new Map();
@@ -330,10 +339,12 @@ function registerIpcHandlers(mainWindow, { accessGate } = {}) {
   let cachedIp = '';
   const localAccessInfo = () => {
     if (!cachedIp) cachedIp = getLocalTailscaleIp();
+    const hostVnc = getHostVncState();
     return {
       ip: cachedIp,
       sessionPassword: accessGate?.password || '',
-      hostVncConfigured: Boolean(getHostVncPassword()),
+      hostVncConfigured: hostVnc.configured,
+      hostVncLocalOnly: hostVnc.localOnly,
     };
   };
   accessGate?.on('rotated', () => send(mainWindow, 'access:changed', localAccessInfo()));
@@ -343,31 +354,60 @@ function registerIpcHandlers(mainWindow, { accessGate } = {}) {
     return localAccessInfo();
   });
 
-  // Gera uma senha forte para o TightVNC deste PC, grava com UAC e só a
-  // guarda depois de confirmar, com um handshake VNC real, que ela funciona.
+  // Gera uma senha forte para o TightVNC deste PC e o deixa aceitando só
+  // conexões locais (GOALS 10), com UAC. Confere de verdade antes de guardar:
+  // a senha vale em 127.0.0.1 (por onde o túnel entrega o VNC) e a 5900 não
+  // atende mais pelo IP Tailscale deste PC.
   ipcMain.handle('hostVnc:setup', async () => {
     const password = generateVncPassword();
     try {
       await applyHostVncPassword(password);
     } catch {
-      return {
-        success: false,
-        error: 'O Windows não autorizou a alteração (pedido de administrador cancelado?).',
-      };
+      return { success: false, error: UAC_DENIED };
     }
-    const { ip } = localAccessInfo();
+    relaunchTightVncTray().catch(() => {});
     let verdict = 'error';
     for (let attempt = 0; attempt < 5 && verdict === 'error'; attempt++) {
-      if (attempt > 0) await new Promise((resolve) => setTimeout(resolve, 1500));
-      if (ip) verdict = await verifyVncPassword(ip, 5900, password);
+      if (attempt > 0) await sleep(1500);
+      verdict = await verifyVncPassword('127.0.0.1', 5900, password);
     }
-    if (verdict !== 'ok') {
-      console.error(`[hostVnc] Senha nova não confirmada no TightVNC: ${verdict}`);
-      return { success: false, error: HOST_VNC_ERRORS[verdict] || HOST_VNC_ERRORS.error };
+    const { ip } = localAccessInfo();
+    const exposure = verdict === 'ok' && ip ? await probeVncExposure(ip, 5900) : 'closed';
+    const outcome = decideSetupOutcome({ verdict, exposure });
+    if (outcome.store) setHostVncPassword(password, { localOnly: outcome.localOnly });
+    if (outcome.error) {
+      console.error(`[hostVnc] Configuração do TightVNC incompleta: ${outcome.error}`);
+      const error = HOST_VNC_ERRORS[outcome.error] || HOST_VNC_ERRORS.error;
+      return { success: false, error, ...localAccessInfo() };
     }
-    setHostVncPassword(password);
-    console.log('[hostVnc] Senha do TightVNC deste PC gerada, aplicada e confirmada');
+    console.log('[hostVnc] TightVNC deste PC: senha nova confirmada e só conexões locais');
     return { success: true, ...localAccessInfo() };
+  });
+
+  // Caminho de volta: aceitar de novo VNC direto da rede. Sem só-local este PC
+  // deixa de oferecer o túnel e quem conectar volta ao caminho antigo (5900).
+  ipcMain.handle('hostVnc:allowDirect', async () => {
+    try {
+      await allowDirectVnc();
+    } catch {
+      return { success: false, error: UAC_DENIED };
+    }
+    relaunchTightVncTray().catch(() => {});
+    const { ip } = localAccessInfo();
+    let exposure = 'closed';
+    for (let attempt = 0; attempt < 5 && exposure !== 'open' && ip; attempt++) {
+      if (attempt > 0) await sleep(1500);
+      exposure = await probeVncExposure(ip, 5900);
+    }
+    setHostVncLocalOnly(exposure !== 'open');
+    console.log(`[hostVnc] VNC direto liberado: 5900 pela rede ${exposure}`);
+    return exposure === 'open'
+      ? { success: true, ...localAccessInfo() }
+      : {
+          success: false,
+          error: 'O TightVNC continua aceitando só conexões locais.',
+          ...localAccessInfo(),
+        };
   });
 }
 

@@ -222,6 +222,8 @@ function registerFileTransferIpc(mainWindow) {
         sessionId: res.sessionId,
         reused: res.reused,
         vncPassword: res.vncPassword || '',
+        // Só o fato de haver túnel VNC; o token em si fica no processo principal.
+        vncTunnel: res.vncTunnel === true,
       };
     } catch (err) {
       send(mainWindow, 'ft:status', { host, state: 'error', message: err.message });

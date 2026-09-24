@@ -132,6 +132,7 @@ describe('sendConnectRequest — pedido de acesso', () => {
         requestId: req.requestId,
         approved: true,
         vncPassword: 'Vnc12345',
+        vncToken: 'tunnel-token',
       });
     });
     const port = server.server.address().port;
@@ -139,7 +140,11 @@ describe('sendConnectRequest — pedido de acesso', () => {
       const res = await sendConnectRequest('127.0.0.1', 'Tester', '127.0.0.1', port, {
         sessionPassword: 'ABCD-EFGH',
       });
-      expect(res).toMatchObject({ approved: true, vncPassword: 'Vnc12345' });
+      expect(res).toMatchObject({
+        approved: true,
+        vncPassword: 'Vnc12345',
+        vncToken: 'tunnel-token',
+      });
       expect(received.sessionPassword).toBe('ABCD-EFGH');
       expect(JSON.stringify(received.req)).not.toContain('ABCD-EFGH');
     } finally {

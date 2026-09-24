@@ -299,6 +299,7 @@ export default function App() {
             ftSessionId: res.sessionId,
             // Senha do TightVNC entregue pelo PC remoto na aprovação: só em memória.
             vncGrant: res.vncPassword || '',
+            vncTunnel: res.vncTunnel === true,
           }),
         );
         setFocusedMachineId(machine.id);
@@ -480,6 +481,7 @@ export default function App() {
                   <RemoteViewer
                     machine={entry.machine}
                     vncGrant={entry.vncGrant}
+                    vncTunnel={entry.vncTunnel}
                     reconnectFlag={reconnectFlag}
                   />
                 )}

@@ -32,13 +32,40 @@ function sameSecret(attempt, expected) {
   return a.length > 0 && a.length === b.length && crypto.timingSafeEqual(a, b);
 }
 
+// Bloqueio por IP depois de tentativas erradas seguidas; usado pela senha de
+// acesso e pelo token do túnel VNC (vnc-tunnel.js).
+class FailureLimiter {
+  constructor({ now = Date.now } = {}) {
+    this.now = now;
+    this.failures = new Map(); // ip -> { count, lockedUntil }
+  }
+
+  isLocked(ip) {
+    const entry = this.failures.get(ip);
+    return Boolean(entry && entry.lockedUntil > this.now());
+  }
+
+  reset(ip) {
+    this.failures.delete(ip);
+  }
+
+  // Registra uma falha: 'wrong', ou 'locked' ao atingir o limite.
+  fail(ip) {
+    const entry = this.failures.get(ip);
+    const count = entry && !entry.lockedUntil ? entry.count + 1 : 1;
+    const locked = count >= MAX_FAILURES;
+    this.failures.set(ip, { count, lockedUntil: locked ? this.now() + LOCKOUT_MS : 0 });
+    return locked ? 'locked' : 'wrong';
+  }
+}
+
 // Emite 'rotated' sempre que a senha muda, para a tela inicial se atualizar.
 class SessionPasswordGate extends EventEmitter {
   constructor({ now = Date.now, generate = generateSessionPassword } = {}) {
     super();
     this.now = now;
     this.generate = generate;
-    this.failures = new Map(); // ip -> { count, lockedUntil }
+    this.limiter = new FailureLimiter({ now });
     this.current = generate();
   }
 
@@ -55,23 +82,17 @@ class SessionPasswordGate extends EventEmitter {
   // 'ok' | 'wrong' | 'locked'. `ip` precisa ser o endereço real do socket
   // (req.remoteAddress), nunca um valor declarado no payload.
   check(ip, attempt) {
-    const entry = this.failures.get(ip);
-    if (entry && entry.lockedUntil > this.now()) return 'locked';
+    if (this.limiter.isLocked(ip)) return 'locked';
     if (sameSecret(attempt, this.current)) {
-      this.failures.delete(ip);
+      this.limiter.reset(ip);
       return 'ok';
     }
-    const count = entry && !entry.lockedUntil ? entry.count + 1 : 1;
-    const locked = count >= MAX_FAILURES;
-    this.failures.set(ip, {
-      count,
-      lockedUntil: locked ? this.now() + LOCKOUT_MS : 0,
-    });
-    return locked ? 'locked' : 'wrong';
+    return this.limiter.fail(ip);
   }
 }
 
 module.exports = {
+  FailureLimiter,
   SessionPasswordGate,
   generateSessionPassword,
   normalizeSessionPassword,

@@ -22,7 +22,9 @@ const {
   normalizeIp,
 } = require('./connection/identity');
 const { SessionPasswordGate } = require('./connection/session-password');
-const { getHostVncPassword, readConfig } = require('./config/config-manager');
+const { VncTunnelTokens } = require('./connection/vnc-tunnel');
+const fileTransferSession = require('./file-transfer/file-transfer-session');
+const { getHostVncPassword, getHostVncState, readConfig } = require('./config/config-manager');
 const { addActivityEntry } = require('./config/activity-log');
 const { sendTelegramAlert } = require('./activity/telegram');
 
@@ -34,6 +36,10 @@ let requestServer = null;
 let updater = null;
 // Senha de acesso exibida na tela inicial (ver session-password.js).
 const accessGate = new SessionPasswordGate();
+// GOALS 10: token do túnel VNC por aprovação (requestId -> token), revogado
+// quando a sessão aprovada fecha.
+const vncTunnelTokens = new VncTunnelTokens();
+const tunnelTokenByRequest = new Map();
 
 const isDev = process.env.NODE_ENV === 'development';
 const PROXY_PORT = 18900;
@@ -43,7 +49,12 @@ const UPDATE_CHECK_INTERVAL_MS = parseInt(
 );
 const ALLOW_PRERELEASE = process.env.OPENPORTAL_ALLOW_PRERELEASE !== 'false';
 
-if (!app.requestSingleInstanceLock()) {
+// Outra instância deste app já está aberta: ela recebe 'second-instance' e vem
+// para a frente. Esta sai sem abrir janela nem portas — antes o whenReady
+// abaixo rodava mesmo assim e batia EADDRINUSE nas 18900/18902 antes de fechar.
+const isPrimaryInstance = app.requestSingleInstanceLock();
+if (!isPrimaryInstance) {
+  console.log('[main] Outra instância do OpenPortal já está aberta; esta vai fechar.');
   app.quit();
 }
 
@@ -130,11 +141,21 @@ async function handleConnectionRequest(req, respond, signal, sessionPassword) {
   // resposta, pelo túnel Tailscale, para quem pediu não precisar digitá-la.
   const finish = (approved, extra = {}) => {
     const vncPassword = approved ? getHostVncPassword() : '';
+    // Só pedidos que viram sessão ('tunnel') recebem token — é o fechamento
+    // dessa sessão que o revoga — e só se o TightVNC deste PC foi confirmado
+    // aceitando conexões locais; senão o túnel não teria onde chegar e quem
+    // pediu segue pelo caminho antigo (5900 direto).
+    let vncToken = '';
+    if (approved && req.capability === 'tunnel' && getHostVncState().localOnly) {
+      vncToken = vncTunnelTokens.issue(normalizeIp(req.remoteAddress));
+      tunnelTokenByRequest.set(req.requestId, vncToken);
+    }
     respond({
       type: 'connect-response',
       requestId: req.requestId,
       approved,
       ...(vncPassword ? { vncPassword } : {}),
+      ...(vncToken ? { vncToken } : {}),
       ...extra,
     });
   };
@@ -221,13 +242,16 @@ async function handleConnectionRequest(req, respond, signal, sessionPassword) {
 }
 
 app.whenReady().then(() => {
+  if (!isPrimaryInstance) return;
   console.log('[main] App ready, starting...');
   console.log('[main] Proxy port:', PROXY_PORT);
 
   mainWindow = createMainWindow(isDev);
   buildAppMenu(() => mainWindow);
 
-  wss = startWebSocketProxy(PROXY_PORT);
+  wss = startWebSocketProxy(PROXY_PORT, {
+    getTunnelToken: (host) => fileTransferSession.getVncTunnelToken(host),
+  });
   wss.on('listening', () => {
     portStatus.proxy.listening = true;
     portStatus.proxy.error = null;
@@ -240,8 +264,17 @@ app.whenReady().then(() => {
         : err.message;
   });
 
-  requestServer = new ConnectionRequestServer((req, respond, signal, sessionPassword) =>
-    handleConnectionRequest(req, respond, signal, sessionPassword),
+  requestServer = new ConnectionRequestServer(
+    (req, respond, signal, sessionPassword) =>
+      handleConnectionRequest(req, respond, signal, sessionPassword),
+    {
+      authorizeVncTunnel: (token, remoteAddress) => {
+        const ip = normalizeIp(remoteAddress);
+        const verdict = vncTunnelTokens.check(token, ip);
+        if (verdict !== 'ok') console.log(`[main] Túnel VNC recusado para ${ip}: ${verdict}`);
+        return verdict;
+      },
+    },
   );
   requestServer.start();
   requestServer.server.on('listening', () => {
@@ -278,6 +311,8 @@ app.whenReady().then(() => {
   });
   requestServer.on('file-session-close', (req) => {
     onFileSessionClose();
+    vncTunnelTokens.revoke(tunnelTokenByRequest.get(req.requestId));
+    tunnelTokenByRequest.delete(req.requestId);
     reportSessionActivity(req);
   });
   requestServer.on('activity-event', (event) => {

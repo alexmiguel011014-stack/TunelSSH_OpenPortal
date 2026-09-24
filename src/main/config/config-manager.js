@@ -162,19 +162,35 @@ function getHostVncPassword() {
   return decryptSecret(readStoredConfig().hostVnc?.passwordEnc);
 }
 
-function setHostVncPassword(password) {
+// localOnly: o TightVNC foi confirmado aceitando só conexões locais (GOALS
+// 10); só então este PC oferece o túnel VNC a quem ele aprova.
+function getHostVncState() {
+  const hostVnc = readStoredConfig().hostVnc || {};
+  return { configured: Boolean(hostVnc.passwordEnc), localOnly: hostVnc.localOnly === true };
+}
+
+function setHostVncPassword(password, { localOnly = false } = {}) {
   if (!fs.existsSync(CONFIG_DIR)) {
     fs.mkdirSync(CONFIG_DIR, { recursive: true });
   }
   const config = readStoredConfig();
-  config.hostVnc = { passwordEnc: encryptSecret(password), updatedAt: Date.now() };
+  config.hostVnc = { passwordEnc: encryptSecret(password), localOnly, updatedAt: Date.now() };
+  writeStoredConfig(config);
+}
+
+function setHostVncLocalOnly(localOnly) {
+  const config = readStoredConfig();
+  if (!config.hostVnc) return;
+  config.hostVnc = { ...config.hostVnc, localOnly, updatedAt: Date.now() };
   writeStoredConfig(config);
 }
 
 module.exports = {
   getHostVncPassword,
+  getHostVncState,
   getVncCredential,
   readConfig,
+  setHostVncLocalOnly,
   setHostVncPassword,
   setVncCredential,
   writeConfig,

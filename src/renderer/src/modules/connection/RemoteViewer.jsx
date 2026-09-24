@@ -4,6 +4,7 @@ import { MachineContext } from '../../App';
 import {
   buildVncViewerUrl,
   isRetryableVncState,
+  shouldExplainMissingTunnel,
   shouldUseSavedVncCredential,
 } from '../../shared/lib/vncSession';
 
@@ -17,7 +18,7 @@ const QUALITY_LEVELS = [
 const MAX_VNC_RETRIES = 5;
 const VNC_RETRY_DELAYS = [3000, 5000, 10000, 15000, 20000];
 
-export default function RemoteViewer({ machine, vncGrant, reconnectFlag }) {
+export default function RemoteViewer({ machine, vncGrant, vncTunnel, reconnectFlag }) {
   const iframeRef = useRef(null);
   const containerRef = useRef(null);
   const [iframeKey, setIframeKey] = useState(0);
@@ -53,6 +54,8 @@ export default function RemoteViewer({ machine, vncGrant, reconnectFlag }) {
   // TightVNC recusá-la uma vez.
   const grantTriedRef = useRef(false);
   const grantRejectedRef = useRef(false);
+  const everConnectedRef = useRef(false);
+  const tunnelHintShownRef = useRef(false);
   const pendingCredentialRef = useRef('');
   const activeAttemptRef = useRef('');
   const terminalReportedRef = useRef(false);
@@ -287,6 +290,7 @@ export default function RemoteViewer({ machine, vncGrant, reconnectFlag }) {
       const state = data.state;
       setStatuses((prev) => ({ ...prev, [machine.id]: state }));
       if (state === 'connected') {
+        everConnectedRef.current = true;
         retryCountRef.current = 0;
         terminalReportedRef.current = false;
         return;
@@ -329,6 +333,20 @@ export default function RemoteViewer({ machine, vncGrant, reconnectFlag }) {
           terminalReportedRef.current = true;
           recordVncState(state, 'Conexão VNC perdida');
         }
+        if (
+          addLog &&
+          shouldExplainMissingTunnel({
+            everConnected: everConnectedRef.current,
+            tunnel: vncTunnel,
+            alreadyExplained: tunnelHintShownRef.current,
+          })
+        ) {
+          tunnelHintShownRef.current = true;
+          addLog(
+            `${machine.name} não ofereceu o túnel VNC (versão antiga do OpenPortal) e a porta 5900 dele não respondeu. Atualize o OpenPortal no outro PC: com a versão nova o TightVNC dele aceita só conexões locais.`,
+            'warn',
+          );
+        }
         if (isRetryableVncState(state)) scheduleReconnect('conexão VNC perdida');
         return;
       }
@@ -354,6 +372,7 @@ export default function RemoteViewer({ machine, vncGrant, reconnectFlag }) {
     scheduleReconnect,
     setStatuses,
     vncGrant,
+    vncTunnel,
   ]);
 
   useEffect(() => {
