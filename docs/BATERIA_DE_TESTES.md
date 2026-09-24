@@ -12,6 +12,15 @@ Depois de cada bloco, avise quem estiver acompanhando: ele confere nos logs dos
 dois apps (`%APPDATA%\openportal-remote\logs\`) se cada caso passou pelo
 caminho certo. Nenhum log guarda senha.
 
+## 0. Antes de começar
+
+- **Desligue a suspensão e a hibernação nos dois PCs** durante a bateria
+  (Configurações → Sistema → Energia). Um PC suspenso some da rede e o app
+  cai: o PC B hibernou sozinho em 2026-09-24 e o app só voltou depois de ser
+  aberto de novo.
+- Abra o app pelo `ABRIR_APP.bat` da pasta que está no commit em teste. Ele
+  fecha cópias antigas antes de abrir. Depois de atualizar o código, abra de novo.
+
 ## 1. Preparar o RDP no PC B (GOALS 12, G12-T2; GOALS 2)
 
 No PC B, em **Configurações → Hospedagem RDP nesta máquina**:

@@ -550,7 +550,19 @@ namespace OpenPortalRdpSidecar
             _writerThread.Start();
             form.SetStatusReporter(message =>
             {
-                if (!_statuses.TryAdd(message)) Fail();
+                bool added;
+                try
+                {
+                    added = _statuses.TryAdd(message);
+                }
+                catch (InvalidOperationException)
+                {
+                    // A UI leu o reporter um instante antes de o canal fechar
+                    // (CompleteAdding/Dispose): o status é descartado em vez de
+                    // virar exceção não tratada na thread da UI.
+                    return;
+                }
+                if (!added) Fail();
             });
         }
 
