@@ -22,19 +22,24 @@ function generateVncPassword(randomInt = crypto.randomInt) {
 
 // O TightVNC guarda a senha no registro cifrada com DES e a chave fixa do
 // VNC (já com os bits invertidos para DES padrão). O .NET faz o DES dentro
-// do próprio script elevado: o Node do sistema (OpenSSL 3) não tem DES.
-function buildApplyVncPasswordScript(password) {
-  const bytes = [...Buffer.from(String(password).slice(0, VNC_PASSWORD_LENGTH), 'latin1')];
+// do próprio script elevado: o Node do sistema (OpenSSL 3) não tem DES. A
+// senha chega em $secret (runElevatedPowerShell), nunca no texto do script.
+const VNC_DES_STEPS = [
+  '$plain = New-Object byte[] 8',
+  '$pw = [Text.Encoding]::GetEncoding(28591).GetBytes([string]$secret)',
+  '[Array]::Copy($pw, $plain, [Math]::Min($pw.Length, 8))',
+  '$des = New-Object System.Security.Cryptography.DESCryptoServiceProvider',
+  "$des.Mode = 'ECB'",
+  "$des.Padding = 'None'",
+  '$des.Key = [byte[]](0xE8,0x4A,0xD6,0x60,0xC4,0x72,0x1A,0xE0)',
+  '$enc = $des.CreateEncryptor().TransformFinalBlock($plain, 0, 8)',
+];
+
+function buildApplyVncPasswordScript() {
   return [
     "$ErrorActionPreference = 'Stop'",
     `if (-not (Test-Path '${TIGHTVNC_KEY}')) { exit 3 }`,
-    '$plain = New-Object byte[] 8',
-    `([byte[]]@(${bytes.join(',')})).CopyTo($plain, 0)`,
-    '$des = New-Object System.Security.Cryptography.DESCryptoServiceProvider',
-    "$des.Mode = 'ECB'",
-    "$des.Padding = 'None'",
-    '$des.Key = [byte[]](0xE8,0x4A,0xD6,0x60,0xC4,0x72,0x1A,0xE0)',
-    '$enc = $des.CreateEncryptor().TransformFinalBlock($plain, 0, 8)',
+    ...VNC_DES_STEPS,
     `Set-ItemProperty -Path '${TIGHTVNC_KEY}' -Name 'Password' -Value $enc -Type Binary`,
     `Set-ItemProperty -Path '${TIGHTVNC_KEY}' -Name 'UseVncAuthentication' -Value 1 -Type DWord`,
     // GOALS 10: só conexões locais; outros PCs chegam pelo túnel da 18902.
@@ -45,7 +50,9 @@ function buildApplyVncPasswordScript(password) {
 }
 
 function applyHostVncPassword(password, deps = {}) {
-  return runElevatedPowerShell(buildApplyVncPasswordScript(password), deps);
+  return runElevatedPowerShell(buildApplyVncPasswordScript(), deps, {
+    secret: String(password).slice(0, VNC_PASSWORD_LENGTH),
+  });
 }
 
 // Caminho de volta: aceitar de novo VNC direto da rede (cliente VNC comum).
@@ -210,6 +217,7 @@ function verifyVncPassword(host, port, password, opts = {}) {
 }
 
 module.exports = {
+  VNC_DES_STEPS,
   generateVncPassword,
   buildApplyVncPasswordScript,
   applyHostVncPassword,

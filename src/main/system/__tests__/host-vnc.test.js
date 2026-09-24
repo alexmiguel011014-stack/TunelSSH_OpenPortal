@@ -1,7 +1,10 @@
 import crypto from 'crypto';
 import net from 'net';
 import { describe, expect, it } from 'vitest';
+import { execFileSync } from 'node:child_process';
 import {
+  VNC_DES_STEPS,
+  applyHostVncPassword,
   buildAllowDirectVncScript,
   buildApplyVncPasswordScript,
   decideSetupOutcome,
@@ -119,17 +122,49 @@ describe('VNC password primitives', () => {
     }
   });
 
-  it('builds the elevated script with the fixed TightVNC key and without the plaintext', () => {
-    const script = buildApplyVncPasswordScript('Ab3dEf7h');
+  it('builds the elevated script with the fixed TightVNC key and reads the password from $secret', () => {
+    const script = buildApplyVncPasswordScript();
     expect(script).toContain("'HKLM:\\SOFTWARE\\TightVNC\\Server'");
     expect(script).toContain('0xE8,0x4A,0xD6,0x60,0xC4,0x72,0x1A,0xE0');
-    expect(script).toContain('65,98,51,100,69,102,55,104');
+    expect(script).toContain('GetBytes([string]$secret)');
     expect(script).toContain('Restart-Service -Name tvnserver');
-    expect(script).not.toContain('Ab3dEf7h');
   });
 
+  it('never carries the password on the elevated command line', async () => {
+    const commandLines = [];
+    const spawn = (_cmd, args) => {
+      commandLines.push(args.join(' '));
+      return { on: (event, cb) => event === 'exit' && setTimeout(() => cb(0), 0) };
+    };
+    await applyHostVncPassword('Ab3dEf7h', { spawn });
+    const encoded = /'-EncodedCommand','([^']+)'/.exec(commandLines[0])[1];
+    const script = Buffer.from(encoded, 'base64').toString('utf16le');
+    expect(commandLines[0]).not.toContain('Ab3dEf7h');
+    expect(script).not.toContain('Ab3dEf7h');
+    expect(script).not.toContain('65,98,51,100,69,102,55,104');
+    expect(script).toContain('[IO.File]::ReadAllText(');
+  });
+
+  it.skipIf(process.platform !== 'win32')(
+    'encrypts $secret exactly as TightVNC stores it (known vector)',
+    () => {
+      const snippet = [
+        "$secret = 'password'",
+        ...VNC_DES_STEPS,
+        "($enc | ForEach-Object { $_.ToString('x2') }) -join ''",
+      ].join('; ');
+      const out = execFileSync(
+        'powershell.exe',
+        ['-NoProfile', '-EncodedCommand', Buffer.from(snippet, 'utf16le').toString('base64')],
+        { encoding: 'utf8', windowsHide: true },
+      );
+      expect(out.trim()).toBe('dbd83cfd727a1458');
+    },
+    20_000,
+  );
+
   it('makes TightVNC accept only local connections when applying the password', () => {
-    const script = buildApplyVncPasswordScript('Ab3dEf7h');
+    const script = buildApplyVncPasswordScript();
     expect(script).toContain("-Name 'AllowLoopback' -Value 1 -Type DWord");
     expect(script).toContain("-Name 'LoopbackOnly' -Value 1 -Type DWord");
     expect(script.indexOf('LoopbackOnly')).toBeLessThan(script.indexOf('Restart-Service'));

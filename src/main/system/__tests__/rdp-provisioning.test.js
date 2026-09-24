@@ -1,3 +1,4 @@
+import { existsSync, readFileSync } from 'node:fs';
 import { describe, it, expect } from 'vitest';
 import {
   buildEnableHostingScript,
@@ -29,16 +30,16 @@ describe('buildEnableHostingScript', () => {
 
 describe('buildCreateCredentialScript', () => {
   it('creates the user and adds it to Remote Desktop Users by SID', () => {
-    const script = buildCreateCredentialScript('openportal-rdp', 'S3cret!');
+    const script = buildCreateCredentialScript('openportal-rdp');
     expect(script).toContain("$ErrorActionPreference = 'Stop'");
+    expect(script).toContain('ConvertTo-SecureString $secret -AsPlainText -Force');
     expect(script).toContain("New-LocalUser -Name 'openportal-rdp'");
     expect(script).toContain("Add-LocalGroupMember -SID 'S-1-5-32-555' -Member 'openportal-rdp'");
     expect(script).not.toContain("'Remote Desktop Users'");
-    expect(script).toContain('S3cret!');
   });
 
   it('escapes single quotes in the username to avoid breaking out of the PowerShell string', () => {
-    const script = buildCreateCredentialScript("o'brien", 'pw');
+    const script = buildCreateCredentialScript("o'brien");
     expect(script).toContain("o''brien");
   });
 });
@@ -75,6 +76,32 @@ describe('runElevatedPowerShell', () => {
   it('rejects when the elevated process exits non-zero (e.g. UAC declined)', async () => {
     const spawn = makeFakeSpawn({ exitCode: 1 });
     await expect(runElevatedPowerShell('Get-Date', { spawn })).rejects.toThrow();
+  });
+
+  it('hands a secret over through a temporary file, never the command line, and removes it', async () => {
+    const seen = [];
+    const spawn = (cmd, args) => {
+      const encoded = /'-EncodedCommand','([^']+)'/.exec(args[2])[1];
+      const script = Buffer.from(encoded, 'base64').toString('utf16le');
+      const file = /ReadAllText\('([^']+)'\)/.exec(script)[1];
+      seen.push({ commandLine: args.join(' '), script, file, content: readFileSync(file, 'utf8') });
+      return makeFakeSpawn({ exitCode: 1 })(cmd, args);
+    };
+
+    await expect(
+      runElevatedPowerShell(
+        'Write-Output $secret.Length',
+        { spawn },
+        { secret: 'sentinel-secret' },
+      ),
+    ).rejects.toThrow();
+
+    const [{ commandLine, script, file, content }] = seen;
+    expect(content).toBe('sentinel-secret');
+    expect(commandLine).not.toContain('sentinel-secret');
+    expect(script).not.toContain('sentinel-secret');
+    expect(script).toContain(`Remove-Item -LiteralPath '${file}' -Force`);
+    expect(existsSync(file)).toBe(false);
   });
 });
 

@@ -10,6 +10,9 @@
 
 const { spawn } = require('child_process');
 const crypto = require('crypto');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
 
 const TERMINAL_SERVER_KEY = 'HKLM:\\System\\CurrentControlSet\\Control\\Terminal Server';
 // Grupo "Remote Desktop Users" pelo SID: o nome muda com o idioma do Windows
@@ -38,12 +41,12 @@ function psQuote(value) {
   return String(value).replace(/'/g, "''");
 }
 
-function buildCreateCredentialScript(username, password) {
+// A senha chega ao script elevado em $secret (ver runElevatedPowerShell).
+function buildCreateCredentialScript(username) {
   const user = psQuote(username);
-  const pass = psQuote(password);
   return [
     "$ErrorActionPreference = 'Stop'",
-    `$sec = ConvertTo-SecureString '${pass}' -AsPlainText -Force`,
+    '$sec = ConvertTo-SecureString $secret -AsPlainText -Force',
     `New-LocalUser -Name '${user}' -Password $sec -PasswordNeverExpires -AccountNeverExpires`,
     `Add-LocalGroupMember -SID '${REMOTE_DESKTOP_USERS_SID}' -Member '${user}'`,
   ].join('; ');
@@ -52,8 +55,7 @@ function buildCreateCredentialScript(username, password) {
 // -EncodedCommand em UTF-16LE/Base64 evita todo o inferno de escaping de
 // aspas ao atravessar Start-Process -ArgumentList -> nova instância do
 // PowerShell.
-function runElevatedPowerShell(script, deps = {}) {
-  const spawnFn = deps.spawn || spawn;
+function spawnElevated(script, spawnFn) {
   return new Promise((resolve, reject) => {
     const encoded = Buffer.from(script, 'utf16le').toString('base64');
     const proc = spawnFn('powershell.exe', [
@@ -67,6 +69,25 @@ function runElevatedPowerShell(script, deps = {}) {
       else reject(new Error(`PowerShell elevado saiu com código ${code}`));
     });
   });
+}
+
+// Um segredo (senha do TightVNC ou da conta RDP) nunca vai na linha de
+// comando, que outros processos leem e que pode parar em logs de auditoria:
+// vai num arquivo temporário do perfil do usuário, que o script elevado lê
+// para $secret e apaga na hora. O Node apaga de novo no fim (UAC recusado).
+async function runElevatedPowerShell(script, deps = {}, { secret } = {}) {
+  const spawnFn = deps.spawn || spawn;
+  if (secret === undefined) return spawnElevated(script, spawnFn);
+  const fsApi = deps.fs || fs;
+  const dir = fsApi.mkdtempSync(path.join(os.tmpdir(), 'openportal-'));
+  const file = psQuote(path.join(dir, 'secret.txt'));
+  try {
+    fsApi.writeFileSync(path.join(dir, 'secret.txt'), String(secret), 'utf8');
+    const preamble = `$ErrorActionPreference = 'Stop'; $secret = [IO.File]::ReadAllText('${file}'); Remove-Item -LiteralPath '${file}' -Force`;
+    return await spawnElevated(`${preamble}; ${script}`, spawnFn);
+  } finally {
+    fsApi.rmSync(dir, { recursive: true, force: true });
+  }
 }
 
 // Leitura sem elevação. O Start-Process -Verb RunAs não devolve o código de
@@ -117,7 +138,7 @@ function verifyRdpCredential(username, deps = {}) {
 }
 
 async function createRdpCredential(username, password, deps = {}) {
-  await runElevatedPowerShell(buildCreateCredentialScript(username, password), deps);
+  await runElevatedPowerShell(buildCreateCredentialScript(username), deps, { secret: password });
   if (!(await verifyRdpCredential(username, deps))) {
     throw new Error(
       'A conta não apareceu no grupo de Área de Trabalho Remota (UAC recusado, nome já usado ou senha fora da política do Windows).',

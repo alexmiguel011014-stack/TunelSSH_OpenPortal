@@ -259,7 +259,9 @@ flowchart TD
   RDP nesta máquina" section. Unit-tested with an injectable `spawn` (never shells out in
   tests). Still open: the actual "Done when" — a live UAC-approved run on a real
   Pro-edition machine — needs a real machine and a human clicking "Aceitar" on the UAC
-  prompt, neither available in this session.
+  prompt, neither available in this session. **2026-09-24:** the script above would not
+  have worked on PC B (pt-BR Windows) and opened 3389 to any network; replaced by a
+  Tailscale-only rule with a read-back check — see GOALS 12. The live run is G12-T2.
 - [ ] **Provisioning — dedicated RDP credential**: create a dedicated local Windows
       account for the app's own RDP use during provisioning (strong random password,
       generated once, stored via Electron's `safeStorage` — not the target user's personal
@@ -274,6 +276,8 @@ flowchart TD
       there via `safeStorage` same as the VNC password). Still open: can't verify real RDP
       auth against this account yet — MsRdpEx is now wired in (see item above), so the
       only remaining gap is a live Pro-edition machine to actually test against.
+      **2026-09-24:** group membership now goes by SID and is read back, and the password
+      no longer travels on the command line — see GOALS 12. The live run is G12-T2.
 - [x] **Implementation — main process sidecar management + IPC**: `rdp-sidecar.js`
       (spawn/pipe-client management, Map-by-machine-id like `file-transfer-session.js`) +
       `rdp-protocol.js` (pure command builders/encoder) + a matching named-pipe server
@@ -1435,6 +1439,39 @@ Suggested: sonnet · medium — small, well-understood changes with clear repros
 - [x] **G11-T2 — Deliver `(manual)`:** open a PR from `claude/vnc-access-flow-testing-c6ec16` to `master` (CI runs lint + tests only). Merging to `master` triggers the dev pre-release build in `.github/workflows/nightly.yml`, so merge only on the user's explicit order; afterwards both PCs move to `master`. Done when: the PR is merged by explicit order and both PCs run the merged commit. **Done 2026-09-24:** PR #1 (lint-test passed) merged by the user as b12cb74 at 01:07Z; the post-merge `nightly.yml` run succeeded. PC A's app now runs from the main checkout on `master` b12cb74 (PID 9700); PC B's checkout is on `master` b12cb74 with a clean tree, and its app (PID 11088) kept running because b12cb74 has the same file contents as the branch it was already running.
 
 **Out of scope, tracked elsewhere:** the global `post-edit-format.js` hook from base_project runs `biome format` with Biome's defaults (tabs, double quotes) on every edited file of this Prettier-based repository, rewriting whole files; that belongs to the base_project repository, not this plan.
+
+---
+
+## GOALS 12 — Elevated provisioning that works on localized Windows and keeps secrets off command lines (fix)
+
+```mermaid
+flowchart TD
+    R[Read PC B's RDP state read-only] --> C[Localized names, open-to-any-network rules, unverifiable elevation, secrets on the command line]
+    C --> F1[SID + own Tailscale-only rule + read-back]
+    C --> F2[Secret handed over through a temp file]
+    F1 --> T[Automated tests]
+    F2 --> T
+    T --> M[Two-PC battery]
+```
+
+Suggested: opus · high — elevated, security-sensitive changes on the user's own machines; only the final check needs UAC and a human.
+
+**Observed facts (2026-09-24):** PC B runs Windows 11 Pro 26200 in pt-BR: RDP off (`fDenyTSConnections=1`, NLA on), `TermService` stopped/Manual, the built-in firewall group is "Área de Trabalho Remota" (`@FirewallAPI.dll,-28752`, Profile Any, all disabled) and `Remote Desktop Users` (S-1-5-32-555) is localized too. The GOALS 2 scripts called `Enable-NetFirewallRule -DisplayGroup "Remote Desktop"` and `Add-LocalGroupMember -Group 'Remote Desktop Users'`, which do not resolve there, while the app would still report success: `Start-Process -Verb RunAs -Wait` does not return the elevated script's exit code, `enableRdpHosting` only read `fDenyTSConnections` back and `createRdpCredential` read nothing back. The built-in rules, even if found, open 3389 on every network. Both the TightVNC password (as a byte list) and the RDP password travelled inside `-EncodedCommand`, i.e. on the command line of the outer and the elevated PowerShell, where same-user processes and command-line audit logs can read them. `TermService` is Manual with no start triggers, yet on PC A (RDP enabled) it started 21 s after boot: Windows starts it at boot while `fDenyTSConnections=0`, so no startup-type change is needed.
+
+### Repro and root cause
+
+- [x] **G12-R1 — Record the target's RDP state without changing it:** Done when: edition, `fDenyTSConnections`, NLA, `TermService`, 3389 listener, the firewall group's real name/profile and the Remote Desktop Users membership are recorded. **Done 2026-09-24** by the PC B session, read-only (facts above).
+- [x] **G12-C1 — Confirm each mechanism from source and state:** Done when: the localized-name failures, the missing read-back, the rule scope and the command-line exposure are each tied to a line of `rdp-provisioning.js`/`host-vnc.js`. **Done 2026-09-24** (facts above; `TermService` boot start checked on PC A).
+
+### Fix
+
+- [x] **G12-F1 — Localized-safe, Tailscale-only RDP hosting with read-back:** enable with `$ErrorActionPreference='Stop'`, start `TermService`, and create/update an app-owned rule `OpenPortal-RDP-Tailscale` (TCP 3389 from 100.64.0.0/10 only) instead of the built-in group; add the dedicated account by SID; report success only when `fDenyTSConnections=0`, the rule is enabled and `TermService` is running, and when the account reads back as a Remote Desktop user. Done when: tests cover each condition and the reads work unelevated. **Done 2026-09-24 (748e52a):** scripts parse; the unelevated reads run on PC A through Node (`0|missing|Running`, membership `0`), as expected before provisioning.
+- [x] **G12-F2 — Secrets through a temporary file:** `runElevatedPowerShell(script, deps, { secret })` writes the secret to a fresh directory in the user's `%TEMP%`, the elevated script starts by reading it into `$secret` and deleting it, and Node deletes the directory again in `finally` (UAC refused). `buildApplyVncPasswordScript()` and `buildCreateCredentialScript(username)` take no password any more. Done when: no password appears in either PowerShell command line or script text, and the TightVNC DES still matches. **Done 2026-09-24:** tests decode the actual `-EncodedCommand` and find neither the password nor its byte list; the DES steps, run by PowerShell on this PC with `$secret='password'`, give TightVNC's known `dbd83cfd727a1458`; an unelevated end-to-end run of the real hand-off read the file, deleted it before exiting and produced the same value.
+
+### Regression test
+
+- [x] **G12-T1 — Automated gates:** Done when: `npm test`, `npm run lint`, renderer build and `git diff --check` pass. **Passed 2026-09-24:** 169 passed / 1 skipped, 0 lint errors (9 old warnings), build OK, diff clean.
+- [ ] **G12-T2 — Two-PC battery `(manual)`:** on PC B, "Habilitar" and "Criar conta" (UAC) each report success, and a read-only check shows `fDenyTSConnections=0`, `OpenPortal-RDP-Tailscale` enabled with RemoteAddress 100.64.0.0/10, the built-in "Área de Trabalho Remota" rules still disabled, `TermService` running and the account in S-1-5-32-555; no `openportal-*` directory left in `%TEMP%`; "Proteger TightVNC" on one PC still confirms the new password; after a reboot of PC B, 3389 listens again. Done when: all of it holds and RDP from PC A reaches the login (continues in G7-T5).
 
 ---
 
