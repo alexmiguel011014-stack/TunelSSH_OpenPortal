@@ -804,13 +804,26 @@ credentials.
 
 ### Reproduction and evidence
 
-- [ ] **G6-R1 — Preserve a redacted, reproducible baseline:** capture one fresh trace from
+- [x] **G6-R1 — Preserve a redacted, reproducible baseline:** capture one fresh trace from
       request approval through process exit with generation ID, timestamps, sidecar PID,
       pipe lifetime, `Connect()` entry/return, all ActiveX events, `Connected` value, form
       and control HWNDs, thread IDs, parent HWND, window styles, and DPI-awareness context.
       Record host/port but never username, password, raw configuration, or credential object.
       Done when: the artifact proves the exact ordering observed above and can be compared
       byte-for-byte by fields (not secrets) with every experiment below.
+      **Done 2026-09-29 (sidecar level, real ActiveX):** the real `OpenPortalRdpSidecar.exe`
+      with MSTSCLib 10.0.26100 was driven against fake TCP targets on `127.0.0.1` (no RDP
+      host, no real credential) in `native-window` and cross-process `embedded` mode. Every
+      status carries lifecycle ID, timestamp, `Connected`, form/control/parent HWNDs, style,
+      thread, DPI context, `SetParent` result and control version, and never a username or
+      password. Ordering: `ControlReady`/`EmbeddingResult` → `CommandReceived` (+16 ms) →
+      `ConnectInvoking` → `ConnectReturned` (+0.7–1.5 s) → `OnConnecting`; then a closed
+      port gives `OnDisconnected` 516 at +17.5 s, a TCP peer that closes gives 2308/extended
+      7 at +0.78 s, and a TCP peer that stays silent gives nothing for 90 s — the original
+      "`OnConnecting` then silence" signature, now bounded by the 45 s authentication
+      deadline. The table is in `docs/ARQUITETURA_CONEXAO.md`; the closing-peer case runs in
+      both modes as the "RDP sidecar with the real ActiveX control" test. The app-level
+      segment (approval, preflight, spawn, pipe) is the existing `[rdp-trace]` log (G6-T4).
 - [ ] **G6-R2 — Establish a no-embedding control experiment `(manual)`:** add a diagnostic
       launch mode that uses the same sidecar binary, pipe protocol, RDP settings, target, and
       credential source but leaves the WinForms sidecar as its own top-level window (`SetParent`
@@ -842,6 +855,10 @@ credentials.
       queued UI-thread handoff only in the experiment, so the message pump can return before
       the control starts networking. Done when: the R2/R3 results either show this sequence
       fixes prompt event delivery or show it does not affect the symptom.
+      **Local evidence 2026-09-29:** with readiness gating, queued UI dispatch and the async
+      pipe, the real control reports `OnConnecting` about 10 ms after `Connect()` returns and
+      a TCP close about 30 ms later, the same in both host modes (G6-R1). Still open: the
+      same check against a real NLA target (G6-R2/R3).
 - [ ] **G6-C2 — Prove or reject hidden modal/security UI:** subscribe to
       `OnAuthenticationWarningDisplayed`, `OnAuthenticationWarningDismissed`, `OnStatusInfo`,
       `OnNetworkStatusChanged`, and connection-bar/dialog events supported by the installed
@@ -850,6 +867,15 @@ credentials.
       visibly to the user. Done when: a certificate, credential, or policy dialog is either
       surfaced and manually resolved or conclusively absent; the implementation must never
       suppress or auto-accept it.
+      **Instrumented 2026-09-29:** `UIParentWindowHandle` is the sidecar form (since G6-F1);
+      `OnAuthenticationWarningDisplayed/Dismissed` and `OnNetworkStatusChanged` are
+      subscribed; a new `probe-windows` command makes the sidecar list up to 8 visible
+      windows it owns or that belong to its process (class, 64-character title, owner flags,
+      nothing else). It is sent on every certificate warning and before every first-event or
+      authentication timeout, and its answer only goes to the local log. Session contention
+      and Winlogon notices (`OnLogonError` -5/-4/3) now pause the deadlines instead of
+      failing (G6-F3). Still open: the live run that shows a dialog surfaced or absent
+      (G6-T3/G7-T5).
 - [ ] **G6-C3 — Prove or reject cross-process parent/DPI incompatibility:** compare the
       top-level and reparented modes using `GetParent`, window styles, `SetParent` return/error,
       process/window DPI-awareness context, and actual first-event timing. Account for the
@@ -857,6 +883,10 @@ credentials.
       placement as proof that the control's networking state is healthy. Done when: the plan
       can name embedding as a confirmed cause, a ruled-out cause, or an environment-specific
       compatibility limitation with reproducible evidence.
+      **Local evidence 2026-09-29:** cross-process `SetParent` returns 0, the form is
+      positioned, and event timing matches the top-level mode (G6-R1), so embedding does not
+      delay event delivery up to the network phase. Still open: the authenticated phase
+      against a real target.
 - [ ] **G6-C4 — Prove or reject destination/account configuration as the cause:** when the
       no-embedding experiment also fails, compare it with the built-in Windows RDP client run
       by the authorized operator using the same target and dedicated account. Check local-vs-
@@ -888,12 +918,23 @@ credentials.
       Evidence (2026-09-17): independent readiness, first-event, authentication, and stop timers
       are cancelled on ownership/stage changes; deterministic tests cover transition, warning
       pause, authenticated cancellation, and stale-generation cleanup.
-- [ ] **G6-F3 — Surface security UI and safe diagnostic detail:** parent RDP dialogs to the
+- [x] **G6-F3 — Surface security UI and safe diagnostic detail:** parent RDP dialogs to the
       sidecar form, forward only sanitized categories (`certificate-warning`, `authentication`,
       `policy`, `network`, `host-control`, `timeout`) to Electron, and keep numeric codes and
       event names in local diagnostic logs. Never serialize password values, raw pipe commands,
       Windows event records, or protected credential data. Done when: the user can act on a
       warning or error without opening developer tools, while app logs remain safe to share.
+      **Done 2026-09-29:** dialogs are parented to the sidecar form. `classifyRdpDisconnect`
+      maps `discReason` plus an informative `ExtendedDisconnectReason` (new pipe field) to
+      `authentication`, `network`, `policy`, `certificate`, `replaced`, `timeout`,
+      `remote-disconnect` or `session`; `classifyRdpLogonError` maps `OnLogonError` to
+      `session-contention`, `logon-warning`, `authentication` or `policy` and never fails
+      the attempt by itself (codes from Microsoft Learn). Each category has its own
+      Portuguese message in the activity log, history and OS notification; numeric codes,
+      event names and probed windows stay in the local `[rdp-trace]` log, and a test proves
+      none of them reaches the renderer. Found on the way: `OnLogonError` -5 (someone logged
+      in on the destination, tonight's PC B case) used to be reported as an authentication
+      failure. Live confirmation is battery cases 3.4 and 3.11 (G6-T3).
 - [ ] **G6-F4 — Harden embedded mode only if the A/B evidence supports it:** if C1/C3 proves a
       stable embedded configuration, apply its minimum changes: correct UI-thread scheduling,
       `UIParentWindowHandle`, complete control readiness, style/error checks around `SetParent`,
@@ -901,7 +942,7 @@ credentials.
       parent HWND destruction. Do not add retries that hide a security or credential failure.
       Done when: repeated embedded valid sessions reach `OnLoginComplete` with screen, mouse,
       keyboard, resize, focus switching, and explicit disconnect all usable.
-- [ ] **G6-F5 — Provide a native-window compatibility mode:** if C3 shows cross-process
+- [x] **G6-F5 — Provide a native-window compatibility mode:** if C3 shows cross-process
       embedding is unreliable on this environment, keep the same NLA-capable sidecar and
       private named-pipe credential path but run it as an owned top-level WinForms window.
       Add an explicit per-machine mode (`embedded`, `native-window`, and an optional
@@ -909,6 +950,15 @@ credentials.
       clients, disabling NLA, plaintext command-line credentials, or automatic certificate
       acceptance. Done when: a failed embedded readiness check can produce one controlled
       native window or a clear error, never a hanging in-app panel or orphan process.
+      **Done 2026-09-29:** per-machine `rdpHostMode` (`embedded`, `native-window`,
+      `auto-fallback`) with the UI labels "Dentro do app", "Janela compatível" and "App +
+      fallback automático"; `native-window` runs the same sidecar and pipe credential path as
+      an owned top-level window; `auto-fallback` opens one native window on a first-event
+      timeout (test "falls back once from embedded mode to a native window"). A failed
+      readiness check in any mode is a clear `host-control`/`timeout` error, and the sidecar
+      is now stopped right away (test "stops a sidecar whose embedding failed…"; before, a
+      refused `SetParent` left the borderless form loose on the desktop). No NLA change, no
+      command-line credentials, no automatic certificate acceptance.
 - [x] **G6-F6 — Define a conservative recovery policy:** classify preflight TCP failure,
       pipe loss, child crash, readiness timeout, security warning, bad credentials, remote
       disconnect, user cancellation, StrictMode cleanup, app reload, and concurrent-machine

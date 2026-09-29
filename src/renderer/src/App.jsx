@@ -164,7 +164,9 @@ export default function App() {
       } else if (status.state === 'error' && m) {
         window.electronAPI?.notify({
           title: 'Falha na conexão',
-          body: `Não foi possível conectar a ${m.name} (${m.host}).`,
+          body: status.message
+            ? `${m.name}: ${status.message}`
+            : `Não foi possível conectar a ${m.name} (${m.host}).`,
         });
       }
     };

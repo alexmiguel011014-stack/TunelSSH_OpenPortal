@@ -232,11 +232,11 @@ O bloco "IPC transport comparison (G7-R4)" de `rdp-sidecar-binary.test.js`
 roda o mesmo probe contra o executável real nos três transportes
 (`RDP_IPC_REPORT=1` imprime a tabela):
 
-| Transporte | Probe sem 2ª escrita | 100 respostas | Ordem | Parada (disconnect → saída) | CPU do processo |
-|---|---|---|---|---|---|
-| duplex síncrono (antigo) | não chegou em 500 ms; só após a próxima escrita do cliente (749 ms) | — | — | sem `DisconnectComplete`; saiu só quando o cliente fechou (2,1 s) | 172 ms |
-| duplex assíncrono (em uso) | 16 ms | 28 ms | preservada | 95 ms, código 0, sem kill | 281 ms |
-| dois pipes | 15 ms | 13 ms | preservada | 92 ms, código 0, sem kill | 172 ms |
+| Transporte                 | Probe sem 2ª escrita                                                | 100 respostas | Ordem      | Parada (disconnect → saída)                                       | CPU do processo |
+| -------------------------- | ------------------------------------------------------------------- | ------------- | ---------- | ----------------------------------------------------------------- | --------------- |
+| duplex síncrono (antigo)   | não chegou em 500 ms; só após a próxima escrita do cliente (749 ms) | —             | —          | sem `DisconnectComplete`; saiu só quando o cliente fechou (2,1 s) | 172 ms          |
+| duplex assíncrono (em uso) | 16 ms                                                               | 28 ms         | preservada | 95 ms, código 0, sem kill                                         | 281 ms          |
+| dois pipes                 | 15 ms                                                               | 13 ms         | preservada | 92 ms, código 0, sem kill                                         | 172 ms          |
 
 No duplex síncrono, no instante do prazo, a thread `ui` estava dentro da
 escrita do estado e a `worker` dentro da leitura do comando — a mesma espera
@@ -356,23 +356,37 @@ encerra o formulário e a sessão em vez de deixar um processo órfão.
 que a sessão está utilizável. O estado visível segue esta tabela; eventos
 repetidos ou pertencentes a uma geração antiga são descartados:
 
-| Origem                                             | Estado da UI                                           | Observação                                                         |
-| -------------------------------------------------- | ------------------------------------------------------ | ------------------------------------------------------------------ |
-| preflight local/TCP falhou                         | `error` / `local-sidecar` ou `network`                 | não cria processo quando executável ou destino não estão prontos   |
-| `ControlReady`/`EmbeddingResult`                   | interno (`control-ready`)                              | requisito obrigatório antes de aceitar `connect`                   |
-| `CommandSent`                                      | `connecting` (`command-written`)                       | aguarda confirmação da sidecar, não evento ActiveX                 |
-| `CommandReceived`                                  | `connecting` (`command-received`)                      | comando está na thread UI; aguarda chamada do controle             |
-| `ConnectInvoking`/`ConnectReturned`                | `connecting`                                           | mede a chamada COM; só no retorno inicia prazo do primeiro evento  |
-| `OnConnecting`                                     | `connecting`                                           | inicia o prazo de transporte/autenticação                           |
-| `OnConnected`                                      | `connecting` (`transport-connected`)                   | confirma transporte, não login concluído                           |
-| aviso de autenticação/certificado                  | `connecting` / `certificate-warning`                   | prazo é pausado; usuário decide na janela RDP                      |
-| `OnLoginComplete`                                  | `connected`                                            | primeiro ponto considerado autenticado e utilizável                |
-| `OnLogonError`                                     | `error` / `authentication`                             | código fica somente no processo principal                          |
-| `OnFatalError`                                     | `error` / `host-control`                               | mensagem sanitizada para o renderer                                |
-| `OnDisconnected` antes/depois do login             | `error` / `session` ou `disconnected` / `remote-*`     | evita falso sucesso seguido de desconexão                          |
-| pipe/processo inesperadamente encerrado            | `error` / `local-sidecar`                              | emitido uma vez, mesmo com vários callbacks locais                 |
-| prazo da etapa expirou                             | `error` / `local-sidecar` ou `timeout`                 | identifica despacho, chamada COM, primeiro evento ou autenticação  |
-| cleanup/supersessão/ação explícita                 | nenhum erro; `disconnected` apenas para ação explícita | não cria histórico falso do probe do StrictMode                    |
+| Origem                                   | Estado da UI                                                | Observação                                                                                                                        |
+| ---------------------------------------- | ----------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| preflight local/TCP falhou               | `error` / `local-sidecar` ou `network`                      | não cria processo quando executável ou destino não estão prontos                                                                  |
+| `ControlReady`/`EmbeddingResult`         | interno (`control-ready`)                                   | requisito obrigatório antes de aceitar `connect`                                                                                  |
+| `CommandSent`                            | `connecting` (`command-written`)                            | aguarda confirmação da sidecar, não evento ActiveX                                                                                |
+| `CommandReceived`                        | `connecting` (`command-received`)                           | comando está na thread UI; aguarda chamada do controle                                                                            |
+| `ConnectInvoking`/`ConnectReturned`      | `connecting`                                                | mede a chamada COM; só no retorno inicia prazo do primeiro evento                                                                 |
+| `OnConnecting`                           | `connecting`                                                | inicia o prazo de transporte/autenticação                                                                                         |
+| `OnConnected`                            | `connecting` (`transport-connected`)                        | confirma transporte, não login concluído                                                                                          |
+| aviso de autenticação/certificado        | `connecting` / `certificate-warning`                        | prazo é pausado; usuário decide na janela RDP                                                                                     |
+| `OnLoginComplete`                        | `connected`                                                 | primeiro ponto considerado autenticado e utilizável                                                                               |
+| `OnLogonError` -5/-4 (disputa de sessão) | `connecting` / `session-contention`                         | prazo é pausado; a pessoa responde na tela da sessão RDP                                                                          |
+| `OnLogonError` 3, 0/1/2, -1/-6/-7        | `connecting` / `logon-warning`, `authentication`, `policy`  | prazo é pausado; a categoria passa para o `OnDisconnected` seguinte                                                               |
+| `OnLogonError` -2 (Winlogon continua)    | interno                                                     | volta a contar o prazo de autenticação                                                                                            |
+| `OnFatalError`                           | `error` / `host-control`                                    | mensagem sanitizada para o renderer                                                                                               |
+| `OnDisconnected` antes/depois do login   | `error` antes, `disconnected` depois; categoria pelo código | `classifyRdpDisconnect`: `ExtendedDisconnectReason` informativo, depois `discReason`, depois a categoria do último `OnLogonError` |
+| `WindowProbe`                            | só log local                                                | lista classe/título das janelas da sidecar num aviso ou num prazo                                                                 |
+| pipe/processo inesperadamente encerrado  | `error` / `local-sidecar`                                   | emitido uma vez, mesmo com vários callbacks locais                                                                                |
+| prazo da etapa expirou                   | `error` / `local-sidecar` ou `timeout`                      | identifica despacho, chamada COM, primeiro evento ou autenticação                                                                 |
+| cleanup/supersessão/ação explícita       | nenhum erro; `disconnected` apenas para ação explícita      | não cria histórico falso do probe do StrictMode                                                                                   |
+
+`OnLogonError` não é sempre falha. Os códigos da Microsoft para ele incluem a
+disputa de sessão (-5: "outro usuário está conectado", o caso de quem entra
+no PC B com a conta dedicada enquanto alguém usa o PC) e avisos do Winlogon.
+Por isso nenhum código de `OnLogonError` encerra a tentativa: o fim vem sempre
+no `OnDisconnected`. Os códigos do `OnDisconnected` e da
+`ExtendedDisconnectReason` viram categorias com mensagem própria: senha ou
+conta recusada (2055 e os `SSL_ERR_*`), rede (516, 264, 2308...), política,
+certificado e sessão assumida por outra conexão (estendido 5). O estendido 7
+não é usado: o controle real manda 2308 + 7 quando o outro lado só fecha o
+TCP. O número fica no log local; o renderer recebe categoria e mensagem.
 
 Os prazos são independentes: 5 s para `control-ready`, 5 s de `CommandSent`
 até `CommandReceived`, 10 s da confirmação do comando até `ConnectReturned`,
@@ -396,18 +410,18 @@ mensagem sanitizadas.
 
 **Recuperação conservadora:**
 
-| Situação | Resultado e limpeza | Repetição automática |
-| --- | --- | --- |
-| executável ausente ou TCP inacessível | erro de preflight, sem sidecar | nenhuma |
-| pipe/processo ou despacho perdido | erro local único; encerra somente a geração dona | nenhuma |
-| prontidão em qualquer modo | erro da etapa e limpeza da sidecar | nenhuma |
-| primeiro evento no modo `auto-fallback`, após `ConnectReturned` | encerra embutido e abre uma janela nativa | uma vez |
-| primeiro evento nos outros modos | erro da etapa e encerramento gracioso | nenhuma |
-| aviso de certificado/autenticação | mostra a janela, pausa prazo e aguarda o usuário | nenhuma |
-| credencial/política rejeitada | erro sanitizado e encerramento | nenhuma |
-| desconexão remota ou cancelamento explícito | estado terminal e limpeza da sidecar | nenhuma |
-| StrictMode, reload ou geração substituída | evento antigo ignorado; só o dono atual permanece | nenhuma |
-| duas máquinas simultâneas | uma entrada, pipe e processo por `machineId` | independente por máquina |
+| Situação                                                        | Resultado e limpeza                               | Repetição automática     |
+| --------------------------------------------------------------- | ------------------------------------------------- | ------------------------ |
+| executável ausente ou TCP inacessível                           | erro de preflight, sem sidecar                    | nenhuma                  |
+| pipe/processo ou despacho perdido                               | erro local único; encerra somente a geração dona  | nenhuma                  |
+| prontidão em qualquer modo                                      | erro da etapa e limpeza da sidecar                | nenhuma                  |
+| primeiro evento no modo `auto-fallback`, após `ConnectReturned` | encerra embutido e abre uma janela nativa         | uma vez                  |
+| primeiro evento nos outros modos                                | erro da etapa e encerramento gracioso             | nenhuma                  |
+| aviso de certificado/autenticação                               | mostra a janela, pausa prazo e aguarda o usuário  | nenhuma                  |
+| credencial/política rejeitada                                   | erro sanitizado e encerramento                    | nenhuma                  |
+| desconexão remota ou cancelamento explícito                     | estado terminal e limpeza da sidecar              | nenhuma                  |
+| StrictMode, reload ou geração substituída                       | evento antigo ignorado; só o dono atual permanece | nenhuma                  |
+| duas máquinas simultâneas                                       | uma entrada, pipe e processo por `machineId`      | independente por máquina |
 
 **Preflight e suporte:** cada tentativa escreve no painel de logs um ID de trace
 abreviado, modo e etapa. O log local completo acrescenta host/porta configurados,
@@ -437,6 +451,24 @@ transição dos prazos, pausa por aviso e fallback único. Os 88 testes passam,
 assim como as compilações Debug/Release e o build do renderer. A sessão RDP
 real com credenciais válidas e entrada de tela ainda exige a validação manual
 da matriz acima (ver GOALS.md).
+
+**Evidência com o ActiveX real (2026-09-29, MSTSCLib 10.0.26100, PC A):** a
+sidecar de verdade, conectando em alvos TCP falsos em `127.0.0.1` (sem destino
+RDP nem credencial real), mostra a mesma ordem nos modos `native-window` e
+`embedded` com `SetParent` entre processos (erro 0, DPI e thread iguais):
+
+| Alvo                  | `ConnectReturned` | `OnConnecting` | Fim                                                   |
+| --------------------- | ----------------- | -------------- | ----------------------------------------------------- |
+| porta fechada         | +1,5 s            | +1,5 s         | `OnDisconnected` 516 em +17,5 s                       |
+| aceita e fecha o TCP  | +0,7 s            | +0,75 s        | `OnDisconnected` 2308, estendido 7, em +0,78 s        |
+| aceita e não responde | +0,7 s            | +0,75 s        | nada em 90 s; o prazo de 45 s de autenticação encerra |
+
+Ou seja: com a prontidão explícita e o pipe assíncrono, o controle entrega os
+eventos na hora, embutido ou não. O "`OnConnecting` e depois silêncio" que
+travava a UI se reproduz com um destino que aceita o TCP e não fala RDP, e o
+prazo de autenticação o limita. O teste "RDP sidecar with the real ActiveX
+control" repete o segundo caso nos dois modos a cada `npm test` no Windows, e
+falha se o `.exe` for mais velho que o `Program.cs`.
 
 ---
 

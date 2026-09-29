@@ -8,7 +8,12 @@ const { spawn } = require('child_process');
 const net = require('net');
 const path = require('path');
 const crypto = require('crypto');
-const { encodeCommand, parseStatusMessage } = require('./rdp-protocol');
+const {
+  classifyRdpDisconnect,
+  classifyRdpLogonError,
+  encodeCommand,
+  parseStatusMessage,
+} = require('./rdp-protocol');
 
 const SIDECAR_EXE = path.join(
   __dirname,
@@ -99,7 +104,13 @@ function createRdpSidecarManager({
 
     const terminalFailure = status.state === 'error' || status.state === 'disconnected';
     if (terminalFailure && entry.terminalFailure) return false;
-    if (status.state === entry.lastState && status.eventName === entry.lastEventName) return false;
+    if (
+      status.state === entry.lastState &&
+      status.eventName === entry.lastEventName &&
+      status.category === entry.lastCategory
+    ) {
+      return false;
+    }
 
     if (status.state === 'connected') {
       entry.connected = true;
@@ -113,6 +124,7 @@ function createRdpSidecarManager({
 
     entry.lastState = status.state;
     entry.lastEventName = status.eventName;
+    entry.lastCategory = status.category;
     entry.onStatus?.({ ...status, lifecycleId: entry.lifecycleId });
     return true;
   }
@@ -140,6 +152,7 @@ function createRdpSidecarManager({
       console.error(
         `[rdp-trace] ${machineId} ${entry.lifecycleId} authentication timeout after ${authenticationTimeoutMs}ms`,
       );
+      probeWindows(machineId, entry);
       failEntry(machineId, entry, 'timeout', 'AuthenticationTimeout');
       stopRdpSidecar(machineId, entry.lifecycleId, 'authentication-timeout');
     }, authenticationTimeoutMs);
@@ -195,9 +208,25 @@ function createRdpSidecarManager({
         if (started) sendRdpCommand(machineId, command, entry.lifecycleId);
         return;
       }
+      probeWindows(machineId, entry);
       failEntry(machineId, entry, 'timeout', 'FirstEventTimeout');
       stopRdpSidecar(machineId, entry.lifecycleId, 'first-event-timeout');
     }, firstEventTimeoutMs);
+  }
+
+  // Antes de desistir por prazo (ou quando o Windows abre um aviso), a
+  // sidecar lista as janelas visíveis dela e as que pertencem a ela. A
+  // resposta só vai para o log: diz se uma espera tinha um diálogo aberto
+  // (G6-C2). O pipe é ordenado, então ela chega antes do DisconnectComplete.
+  function probeWindows(machineId, entry) {
+    if (!entry.pipeClient || !entry.nativeReady) return;
+    try {
+      entry.pipeClient.write(
+        encodeCommand({ cmd: 'probe-windows', lifecycleId: entry.lifecycleId }),
+        () => {},
+      );
+      console.log(`[rdp-trace] ${machineId} ${entry.lifecycleId} command=probe-windows sent`);
+    } catch {}
   }
 
   function handleNativeStatus(machineId, entry, status) {
@@ -243,14 +272,29 @@ function createRdpSidecarManager({
     } else if (status.eventName === 'OnAuthenticationWarningDisplayed') {
       entry.firstNativeEventSeen = true;
       clearConnectionTimers(entry);
+      probeWindows(machineId, entry);
     } else if (status.eventName === 'OnAuthenticationWarningDismissed') {
       scheduleAuthenticationDeadline(machineId, entry);
+    } else if (status.eventName === 'OnLogonError') {
+      const logon = classifyRdpLogonError(status.reasonCode);
+      if (logon?.waitsForUser) clearConnectionTimers(entry);
+      if (logon?.resumes && !entry.connected) scheduleAuthenticationDeadline(machineId, entry);
+      // Depois do login, um OnLogonError tardio só vai para o log: não volta a
+      // sessão para "conectando".
+      if (!logon?.category || entry.connected) return;
+      entry.lastLogonCategory = logon.category;
+      normalized.state = 'warning';
+      normalized.category = logon.category;
     }
-    if (status.eventName === 'OnNetworkStatusChanged') return;
-    if (status.eventName === 'OnLogonError') normalized.category = 'authentication';
-    else if (status.eventName === 'OnFatalError') normalized.category = 'host-control';
+    if (status.eventName === 'OnNetworkStatusChanged' || status.eventName === 'WindowProbe') return;
+    if (status.eventName === 'OnFatalError') normalized.category = 'host-control';
     else if (status.eventName === 'OnDisconnected') {
-      normalized.category = entry.connected ? 'remote-disconnect' : 'session';
+      normalized.category = classifyRdpDisconnect({
+        reasonCode: status.reasonCode,
+        extendedReason: status.extendedReason,
+        connected: entry.connected,
+        lastLogonCategory: entry.lastLogonCategory,
+      });
       if (!entry.connected) normalized.state = 'error';
     }
     emitStatus(machineId, entry, normalized);
@@ -317,6 +361,8 @@ function createRdpSidecarManager({
       stopTimer: null,
       lastState: null,
       lastEventName: null,
+      lastCategory: null,
+      lastLogonCategory: null,
       connectReturned: false,
       firstNativeEventSeen: false,
     };
@@ -402,6 +448,12 @@ function createRdpSidecarManager({
       entry.readyTimer = null;
     }
     const ready = await entry.readyPromise;
+    // O controle recusou a prontidão (SetParent falhou, MSTSCLib ausente...):
+    // o erro já foi para a tela, e a sidecar não pode ficar viva. Sem isso, um
+    // SetParent recusado deixava o form sem borda solto na área de trabalho.
+    if (!ready && sidecars.get(machineId) === entry && !entry.plannedStop) {
+      stopRdpSidecar(machineId, lifecycleId, 'control-not-ready');
+    }
     return ready;
   }
 

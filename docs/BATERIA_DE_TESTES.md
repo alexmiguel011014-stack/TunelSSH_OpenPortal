@@ -52,24 +52,28 @@ outro PC continua entrando pelo túnel.
 
 **Atenção:** o RDP abre uma sessão separada com a conta `openportal-rdp`. Como o
 Windows Pro só permite uma sessão ativa, quem estiver usando o PC B vai para a
-tela de bloqueio; é só entrar de novo depois.
+tela de bloqueio; é só entrar de novo depois. Se houver alguém logado no PC B,
+a própria sessão RDP pergunta se é para entrar mesmo assim: o app mostra
+"Outra pessoa está usando o PC de destino..." no log, espera a resposta sem
+dar tempo esgotado e não registra erro no histórico.
 
 No PC A, em Configurações, crie a máquina do PC B com Host `100.81.199.56`,
 Transporte **RDP (nativo)**, Usuário `openportal-rdp`, a senha copiada no bloco 1
 e porta 3389. Em cada caso, conecte e clique em **Aceitar** no PC B.
 
-| # | Como | Esperado |
-|---|---|---|
-| 3.1 | Exibição **Janela compatível** | Janela separada com a área de trabalho, mouse e teclado funcionando. Desconectar fecha tudo. |
-| 3.2 | Exibição **Dentro do app** | A sessão aparece dentro da janela do OpenPortal. Mouse e teclado funcionam. |
-| 3.3 | Exibição **App + fallback automático** | Igual a 3.2. Se o modo embutido falhar, abre **uma** janela compatível. |
-| 3.4 | Senha RDP errada | Erro de autenticação claro, sem ficar tentando de novo. |
-| 3.5 | Porta RDP 3390 (destino que não responde) | Erro de rede antes de abrir o componente RDP. Depois volte para 3389. |
-| 3.6 | Clicar em Desconectar enquanto aparece "Conectando" | Para na hora, sem erro falso e sem janela sobrando. |
-| 3.7 | Ctrl+R na janela do app durante a conexão | Nenhuma janela RDP "órfã" fica aberta. |
-| 3.8 | Aviso de certificado na primeira conexão, se aparecer | A conexão espera você decidir e não dá tempo esgotado enquanto o aviso está aberto. |
-| 3.9 | Trocar a máquina de volta para **VNC** e conectar | O VNC funciona normalmente. |
-| 3.10 | (Opcional) Escala da tela do PC A em 125% ou 150% | A sessão embutida ocupa a área certa. |
+| #    | Como                                                       | Esperado                                                                                      |
+| ---- | ---------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| 3.1  | Exibição **Janela compatível**                             | Janela separada com a área de trabalho, mouse e teclado funcionando. Desconectar fecha tudo.  |
+| 3.2  | Exibição **Dentro do app**                                 | A sessão aparece dentro da janela do OpenPortal. Mouse e teclado funcionam.                   |
+| 3.3  | Exibição **App + fallback automático**                     | Igual a 3.2. Se o modo embutido falhar, abre **uma** janela compatível.                       |
+| 3.4  | Senha RDP errada                                           | "O PC de destino recusou a conta RDP..." no log e na notificação, sem ficar tentando de novo. |
+| 3.5  | Porta RDP 3390 (destino que não responde)                  | Erro de rede antes de abrir o componente RDP. Depois volte para 3389.                         |
+| 3.6  | Clicar em Desconectar enquanto aparece "Conectando"        | Para na hora, sem erro falso e sem janela sobrando.                                           |
+| 3.7  | Ctrl+R na janela do app durante a conexão                  | Nenhuma janela RDP "órfã" fica aberta.                                                        |
+| 3.8  | Aviso de certificado na primeira conexão, se aparecer      | A conexão espera você decidir e não dá tempo esgotado enquanto o aviso está aberto.           |
+| 3.9  | Trocar a máquina de volta para **VNC** e conectar          | O VNC funciona normalmente.                                                                   |
+| 3.10 | (Opcional) Escala da tela do PC A em 125% ou 150%          | A sessão embutida ocupa a área certa.                                                         |
+| 3.11 | Com a sessão RDP aberta, alguém entra no PC B pelo teclado | A sessão cai com "...outra conexão assumiu o PC de destino...", sem janela RDP sobrando.      |
 
 ## 4. VNC: servidor sem senha e troca de senha salva (G8-R1, G8-F2, G8-T5)
 

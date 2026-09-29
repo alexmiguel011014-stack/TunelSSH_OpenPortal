@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { existsSync } from 'node:fs';
+import { existsSync, statSync } from 'node:fs';
 import net from 'node:net';
 import path from 'node:path';
 import { execFile, spawn } from 'node:child_process';
@@ -9,6 +9,19 @@ import { afterAll, describe, expect, it } from 'vitest';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../..');
 const sidecarExe = path.join(root, 'sidecar', 'bin', 'Debug', 'OpenPortalRdpSidecar.exe');
 const canRun = process.platform === 'win32' && existsSync(sidecarExe);
+
+// Um .exe mais velho que o Program.cs roda o protocolo antigo e faz os
+// testes abaixo falharem sem dizer por quê (aconteceu no PC B em 2026-09-29).
+describe.skipIf(!canRun)('RDP sidecar binary freshness', () => {
+  it('was built after the last change to Program.cs', () => {
+    const built = statSync(sidecarExe).mtimeMs;
+    const source = statSync(path.join(root, 'sidecar', 'Program.cs')).mtimeMs;
+    expect(
+      built >= source,
+      'sidecar/bin/Debug está desatualizado: recompile com MSBuild (ver docs/ARQUITETURA_CONEXAO.md)',
+    ).toBe(true);
+  });
+});
 
 function connectWithRetry(pipePath, deadline = Date.now() + 5_000) {
   return new Promise((resolve, reject) => {
@@ -102,7 +115,11 @@ function cpuMilliseconds(pid) {
   return new Promise((resolve) => {
     execFile(
       'powershell',
-      ['-NoProfile', '-Command', `[int](Get-Process -Id ${pid}).TotalProcessorTime.TotalMilliseconds`],
+      [
+        '-NoProfile',
+        '-Command',
+        `[int](Get-Process -Id ${pid}).TotalProcessorTime.TotalMilliseconds`,
+      ],
       { windowsHide: true, timeout: 10_000 },
       (error, stdout) => resolve(error ? null : Math.round(Number(stdout.trim()))),
     );
@@ -348,4 +365,113 @@ describe.skipIf(!canRun)('RDP sidecar binary IPC', () => {
       if (child.exitCode === null) child.kill();
     }
   });
+});
+
+// G6-R1/C1/C3: o ActiveX MSTSCLib de verdade, sem destino RDP nem credencial
+// real. O alvo é um TCP local que aceita e fecha, então o controle passa por
+// Connect(), OnConnecting e OnDisconnected em menos de um segundo. Roda nos
+// dois modos: janela própria e embutido numa janela de outro processo
+// (SetParent entre processos, como no Electron).
+function startClosingTarget() {
+  return new Promise((resolve) => {
+    const server = net.createServer((socket) => socket.destroy());
+    server.listen(0, '127.0.0.1', () => resolve(server));
+  });
+}
+
+function startParentWindow() {
+  return new Promise((resolve, reject) => {
+    const ps = spawn('powershell.exe', [
+      '-NoProfile',
+      '-Command',
+      "Add-Type -AssemblyName System.Windows.Forms; $f = New-Object Windows.Forms.Form; $f.Text = 'openportal-test-parent'; $f.Show(); [Console]::Out.WriteLine($f.Handle.ToInt64()); [Console]::Out.Flush(); [Windows.Forms.Application]::Run($f)",
+    ]);
+    ps.stdout.once('data', (data) => resolve({ hwnd: data.toString().trim(), process: ps }));
+    ps.once('error', reject);
+  });
+}
+
+describe.skipIf(!canRun)('RDP sidecar with the real ActiveX control', () => {
+  it.each(['native-window', 'embedded'])(
+    'delivers the native events promptly in %s mode',
+    async (hostMode) => {
+      const target = await startClosingTarget();
+      const parent = hostMode === 'embedded' ? await startParentWindow() : null;
+      const pipeName = `OpenPortalRdpSidecar-test-${randomUUID()}`;
+      const lifecycleId = `test-${randomUUID()}`;
+      const child = spawn(sidecarExe, [
+        pipeName,
+        parent ? parent.hwnd : '0',
+        '0',
+        '0',
+        '640',
+        '480',
+        hostMode,
+        lifecycleId,
+        String(process.pid),
+      ]);
+      const socket = await connectWithRetry(`\\\\.\\pipe\\${pipeName}`);
+      const statuses = statusLines(socket);
+
+      try {
+        const ready = await statuses.waitFor((status) => status.state === 'ready', 10_000);
+        if (hostMode === 'embedded') {
+          expect(ready).toMatchObject({ eventName: 'EmbeddingResult', setParentError: 0 });
+        }
+        const disconnected = statuses.waitFor(
+          (status) => status.eventName === 'OnDisconnected',
+          10_000,
+        );
+        socket.write(
+          `${JSON.stringify({
+            cmd: 'connect',
+            host: '127.0.0.1',
+            port: target.address().port,
+            username: 'test-user',
+            password: 'not-a-secret',
+            lifecycleId,
+          })}\n`,
+        );
+        await expect(disconnected).resolves.toMatchObject({ reasonCode: 2308, extendedReason: 7 });
+        const order = statuses.messages
+          .map(({ eventName }) => eventName)
+          .filter((name) =>
+            [
+              'CommandReceived',
+              'ConnectInvoking',
+              'ConnectReturned',
+              'OnConnecting',
+              'OnDisconnected',
+            ].includes(name),
+          );
+        expect(order).toEqual([
+          'CommandReceived',
+          'ConnectInvoking',
+          'ConnectReturned',
+          'OnConnecting',
+          'OnDisconnected',
+        ]);
+        expect(statuses.messages.every(({ password, username }) => !password && !username)).toBe(
+          true,
+        );
+
+        const probe = statuses.waitFor((status) => status.eventName === 'WindowProbe', 2_000);
+        socket.write(`${JSON.stringify({ cmd: 'probe-windows', lifecycleId })}\n`);
+        await expect(probe).resolves.toMatchObject({ windows: expect.any(Array) });
+
+        const done = statuses.waitFor((status) => status.eventName === 'DisconnectComplete', 2_000);
+        socket.write(`${JSON.stringify({ cmd: 'disconnect', lifecycleId })}\n`);
+        await done;
+        const exited = waitForExit(child, 3_000);
+        socket.end();
+        await expect(exited).resolves.toMatchObject({ code: 0 });
+      } finally {
+        socket.destroy();
+        if (child.exitCode === null) child.kill();
+        parent?.process.kill();
+        target.close();
+      }
+    },
+    20_000,
+  );
 });

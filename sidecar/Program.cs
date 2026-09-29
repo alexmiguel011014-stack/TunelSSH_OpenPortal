@@ -65,6 +65,28 @@ namespace OpenPortalRdpSidecar
         [DllImport("user32.dll")]
         static extern bool IsWindow(IntPtr hWnd);
 
+        internal delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
+
+        [DllImport("user32.dll")]
+        internal static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
+
+        [DllImport("user32.dll")]
+        internal static extern bool IsWindowVisible(IntPtr hWnd);
+
+        [DllImport("user32.dll")]
+        internal static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
+
+        [DllImport("user32.dll")]
+        internal static extern IntPtr GetWindow(IntPtr hWnd, uint uCmd);
+
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+        internal static extern int GetClassName(IntPtr hWnd, StringBuilder lpClassName, int nMaxCount);
+
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+        internal static extern int GetWindowText(IntPtr hWnd, StringBuilder lpString, int nMaxCount);
+
+        internal const uint GW_OWNER = 4;
+
         // G7-R4: marcadores de início/fim das operações do pipe no stderr,
         // ligados só quando o modo ipc-test recebe um transporte explícito.
         static bool s_traceIpc;
@@ -485,6 +507,10 @@ namespace OpenPortalRdpSidecar
                         }
                         break;
 
+                    case "probe-windows":
+                        form.ReportWindowProbe();
+                        break;
+
                     case "visibility":
                         // A janela não é filha do DOM — o React só consegue
                         // escondê-la/mostrá-la explicitamente por aqui (ver
@@ -595,6 +621,7 @@ namespace OpenPortalRdpSidecar
         public string eventName { get; set; }
         public string category { get; set; }
         public int? reasonCode { get; set; }
+        public int? extendedReason { get; set; }
         public string lifecycleId { get; set; }
         public string hostMode { get; set; }
         public string timestamp { get; set; }
@@ -610,6 +637,17 @@ namespace OpenPortalRdpSidecar
         public int? setParentError { get; set; }
         public bool? positioned { get; set; }
         public int? sequence { get; set; }
+        public System.Collections.Generic.List<ProbedWindow> windows { get; set; }
+    }
+
+    // Uma janela visível da sidecar (ou que pertence a ela) no WindowProbe:
+    // classe, título curto e dono. Nada do conteúdo da janela.
+    class ProbedWindow
+    {
+        public string className { get; set; }
+        public string title { get; set; }
+        public bool owned { get; set; }
+        public bool sameProcess { get; set; }
     }
 
     class SidecarForm : Form
@@ -690,7 +728,14 @@ namespace OpenPortalRdpSidecar
                 _rdp.OnDisconnected += (s, e) =>
                 {
                     SetStatus(string.Format("Desconectado (motivo {0})", e.discReason));
-                    ReportStatus("disconnected", "terminal", "OnDisconnected", null, e.discReason);
+                    ReportStatus(
+                        "disconnected",
+                        "terminal",
+                        "OnDisconnected",
+                        null,
+                        e.discReason,
+                        extendedReason: ExtendedReasonValue()
+                    );
                 };
                 _rdp.OnFatalError += (s, e) =>
                 {
@@ -699,8 +744,11 @@ namespace OpenPortalRdpSidecar
                 };
                 _rdp.OnLogonError += (s, e) =>
                 {
-                    SetStatus(string.Format("Erro de login (código {0})", e.lError));
-                    ReportStatus("error", "terminal", "OnLogonError", "authentication", e.lError);
+                    // Nem todo OnLogonError é falha: a disputa de sessão
+                    // (alguém logado no destino) e avisos do Winlogon chegam
+                    // por aqui, e a própria sessão mostra o diálogo. Quem
+                    // classifica é rdp-protocol.js (classifyRdpLogonError).
+                    ReportStatus("warning", "logon-event", "OnLogonError", null, e.lError);
                 };
                 _rdp.OnAuthenticationWarningDisplayed += (s, e) =>
                 {
@@ -876,6 +924,51 @@ namespace OpenPortalRdpSidecar
             }
         }
 
+        int? ExtendedReasonValue()
+        {
+            try
+            {
+                return _rdp == null ? (int?)null : (int)_rdp.ExtendedDisconnectReason;
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        // G6-C2: janelas visíveis deste processo ou cujo dono é este form
+        // (diálogos de certificado e de credencial), para o log dizer se uma
+        // espera tinha um diálogo aberto. No máximo 8, só classe e título.
+        public void ReportWindowProbe()
+        {
+            var windows = new System.Collections.Generic.List<ProbedWindow>();
+            uint ownPid = (uint)Process.GetCurrentProcess().Id;
+            IntPtr formHandle = Handle;
+            Program.EnumWindows((hwnd, _) =>
+            {
+                if (windows.Count >= 8) return false;
+                if (hwnd == formHandle || !Program.IsWindowVisible(hwnd)) return true;
+                uint windowPid;
+                Program.GetWindowThreadProcessId(hwnd, out windowPid);
+                bool owned = Program.GetWindow(hwnd, Program.GW_OWNER) == formHandle;
+                bool sameProcess = windowPid == ownPid;
+                if (!owned && !sameProcess) return true;
+                var className = new StringBuilder(65);
+                var title = new StringBuilder(65);
+                Program.GetClassName(hwnd, className, className.Capacity);
+                Program.GetWindowText(hwnd, title, title.Capacity);
+                windows.Add(new ProbedWindow
+                {
+                    className = className.ToString(),
+                    title = title.ToString(),
+                    owned = owned,
+                    sameProcess = sameProcess,
+                });
+                return true;
+            }, IntPtr.Zero);
+            ReportStatus(_state, _stage, "WindowProbe", _category, _reasonCode, windows: windows);
+        }
+
         long DpiContextValue()
         {
             try
@@ -894,7 +987,9 @@ namespace OpenPortalRdpSidecar
             string eventName,
             string category = null,
             int? reasonCode = null,
-            int? sequence = null
+            int? sequence = null,
+            int? extendedReason = null,
+            System.Collections.Generic.List<ProbedWindow> windows = null
         )
         {
             _state = state;
@@ -912,6 +1007,7 @@ namespace OpenPortalRdpSidecar
                     eventName = eventName,
                     category = category,
                     reasonCode = reasonCode,
+                    extendedReason = extendedReason,
                     lifecycleId = _lifecycleId,
                     hostMode = _hostMode,
                     timestamp = DateTime.UtcNow.ToString("o"),
@@ -927,6 +1023,7 @@ namespace OpenPortalRdpSidecar
                     setParentError = _setParentError,
                     positioned = _positioned,
                     sequence = sequence,
+                    windows = windows,
                 };
                 Volatile.Write(ref _lastStatus, message);
                 Volatile.Read(ref _reportStatus)?.Invoke(message);

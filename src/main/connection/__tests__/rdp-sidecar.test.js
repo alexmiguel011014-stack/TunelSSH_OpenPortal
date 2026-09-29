@@ -93,6 +93,47 @@ describe('RDP sidecar lifecycle ownership', () => {
     });
   });
 
+  it('stops a sidecar whose embedding failed instead of leaving its window behind', async () => {
+    vi.useFakeTimers();
+    const socket = new FakeSocket(false);
+    const proc = new FakeProcess(42);
+    let spawned = 0;
+    const statuses = [];
+    const manager = createRdpSidecarManager({
+      spawnProcess: () => {
+        spawned += 1;
+        return proc;
+      },
+      connectPipe: async () => socket,
+      randomUUID: () => 'pipe',
+    });
+
+    const starting = manager.startRdpSidecar(
+      'pc-1',
+      { ...startOptions('current'), mode: 'auto-fallback' },
+      (status) => statuses.push(status),
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    socket.emit(
+      'data',
+      nativeStatus({
+        state: 'error',
+        stage: 'terminal',
+        eventName: 'EmbeddingResult',
+        category: 'host-control',
+        reasonCode: 1400,
+      }),
+    );
+
+    expect(await starting).toBe(false);
+    expect(statuses.at(-1)).toMatchObject({ state: 'error', category: 'host-control' });
+    expect(socket.writes.map((line) => JSON.parse(line).cmd)).toEqual(['disconnect']);
+    expect(manager.isRdpSidecarRunning('pc-1')).toBe(false);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(proc.killed).toBe(true);
+    expect(spawned).toBe(1);
+  });
+
   it('does not switch host mode when the control never acknowledges readiness', async () => {
     vi.useFakeTimers();
     let spawned = 0;
@@ -403,10 +444,7 @@ describe('RDP handshake watchdog and terminal states', () => {
       'data',
       Buffer.from('{"type":"status","state":"connected","eventName":"OnLoginComplete"}\n'),
     );
-    socket.emit(
-      'data',
-      Buffer.from('{"type":"status","state":"error","eventName":"OnLogonError","reasonCode":1}\n'),
-    );
+    socket.emit('data', nativeStatus({ state: 'error', eventName: 'OnFatalError', reasonCode: 1 }));
     socket.emit(
       'data',
       Buffer.from(
@@ -420,9 +458,9 @@ describe('RDP handshake watchdog and terminal states', () => {
       'CommandReceived',
       'ConnectReturned',
       'OnLoginComplete',
-      'OnLogonError',
+      'OnFatalError',
     ]);
-    expect(statuses.at(-1)).toMatchObject({ category: 'authentication', reasonCode: 1 });
+    expect(statuses.at(-1)).toMatchObject({ category: 'host-control', reasonCode: 1 });
   });
 
   it('moves from the first-event deadline to the authentication deadline', async () => {
@@ -797,5 +835,174 @@ describe('RDP native-host contract', () => {
     expect(otherStatuses).toEqual([]);
     expect(other.writes).toEqual([]);
     expect(manager.isRdpSidecarRunning('pc-2')).toBe(true);
+  });
+});
+
+// G6-F3: OnLogonError e OnDisconnected viram categorias que a pessoa entende,
+// e a disputa de sessão (alguém logado no destino) não vira falha.
+describe('RDP logon and disconnect classification', () => {
+  async function connectedManager(options = {}) {
+    const socket = new FakeSocket();
+    const statuses = [];
+    const manager = createRdpSidecarManager({
+      spawnProcess: () => new FakeProcess(70),
+      connectPipe: async () => socket,
+      randomUUID: () => 'pipe',
+      firstEventTimeoutMs: 100,
+      authenticationTimeoutMs: 200,
+      ...options,
+    });
+    await manager.startRdpSidecar('pc-1', startOptions('current'), (status) =>
+      statuses.push(status),
+    );
+    manager.sendRdpCommand('pc-1', { cmd: 'connect' }, 'current');
+    for (const eventName of ['CommandReceived', 'ConnectReturned', 'OnConnecting']) {
+      socket.emit('data', nativeStatus({ state: 'connecting', eventName }));
+    }
+    return { socket, statuses, manager };
+  }
+
+  it('waits on session contention and still reaches a clean login', async () => {
+    vi.useFakeTimers();
+    const { socket, statuses } = await connectedManager();
+
+    socket.emit(
+      'data',
+      nativeStatus({ state: 'warning', eventName: 'OnLogonError', reasonCode: -5 }),
+    );
+    expect(statuses.at(-1)).toMatchObject({ state: 'warning', category: 'session-contention' });
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(statuses.some(({ state }) => state === 'error')).toBe(false);
+
+    socket.emit(
+      'data',
+      nativeStatus({ state: 'warning', eventName: 'OnLogonError', reasonCode: -2 }),
+    );
+    socket.emit('data', nativeStatus({ state: 'connected', eventName: 'OnLoginComplete' }));
+
+    expect(statuses.map(({ state }) => state)).not.toContain('error');
+    expect(statuses.at(-1)).toMatchObject({ state: 'connected', eventName: 'OnLoginComplete' });
+  });
+
+  it('re-arms the authentication deadline when Winlogon continues after contention', async () => {
+    vi.useFakeTimers();
+    const { socket, statuses } = await connectedManager();
+
+    socket.emit(
+      'data',
+      nativeStatus({ state: 'warning', eventName: 'OnLogonError', reasonCode: -5 }),
+    );
+    socket.emit(
+      'data',
+      nativeStatus({ state: 'warning', eventName: 'OnLogonError', reasonCode: -2 }),
+    );
+    await vi.advanceTimersByTimeAsync(200);
+
+    expect(statuses.at(-1)).toMatchObject({
+      category: 'timeout',
+      eventName: 'AuthenticationTimeout',
+    });
+  });
+
+  it('reports a rejected NLA password as one authentication failure', async () => {
+    vi.useFakeTimers();
+    const { socket, statuses } = await connectedManager();
+
+    socket.emit(
+      'data',
+      nativeStatus({ state: 'disconnected', eventName: 'OnDisconnected', reasonCode: 2055 }),
+    );
+    socket.emit(
+      'data',
+      nativeStatus({ state: 'disconnected', eventName: 'OnDisconnected', reasonCode: 2308 }),
+    );
+
+    const failures = statuses.filter(({ state }) => state === 'error');
+    expect(failures).toHaveLength(1);
+    expect(failures[0]).toMatchObject({ category: 'authentication', reasonCode: 2055 });
+  });
+
+  it('keeps the logon category when the refused contention ends in a plain disconnect', async () => {
+    vi.useFakeTimers();
+    const { socket, statuses } = await connectedManager();
+
+    socket.emit(
+      'data',
+      nativeStatus({ state: 'warning', eventName: 'OnLogonError', reasonCode: -5 }),
+    );
+    socket.emit(
+      'data',
+      nativeStatus({
+        state: 'disconnected',
+        eventName: 'OnDisconnected',
+        reasonCode: 3,
+        extendedReason: 0,
+      }),
+    );
+
+    expect(statuses.at(-1)).toMatchObject({ state: 'error', category: 'session-contention' });
+  });
+
+  it('names a session taken over by another connection', async () => {
+    vi.useFakeTimers();
+    const { socket, statuses } = await connectedManager();
+
+    socket.emit('data', nativeStatus({ state: 'connected', eventName: 'OnLoginComplete' }));
+    socket.emit(
+      'data',
+      nativeStatus({
+        state: 'disconnected',
+        eventName: 'OnDisconnected',
+        reasonCode: 3,
+        extendedReason: 5,
+      }),
+    );
+
+    expect(statuses.at(-1)).toMatchObject({ state: 'disconnected', category: 'replaced' });
+  });
+
+  it('ignores a logon event after login instead of going back to connecting', async () => {
+    vi.useFakeTimers();
+    const { socket, statuses } = await connectedManager();
+
+    socket.emit('data', nativeStatus({ state: 'connected', eventName: 'OnLoginComplete' }));
+    socket.emit(
+      'data',
+      nativeStatus({ state: 'warning', eventName: 'OnLogonError', reasonCode: 3 }),
+    );
+
+    expect(statuses.at(-1)).toMatchObject({ state: 'connected' });
+  });
+
+  it('asks for a window probe before giving up on a silent control', async () => {
+    vi.useFakeTimers();
+    const socket = new FakeSocket();
+    const statuses = [];
+    const manager = createRdpSidecarManager({
+      spawnProcess: () => new FakeProcess(71),
+      connectPipe: async () => socket,
+      randomUUID: () => 'pipe',
+      firstEventTimeoutMs: 100,
+    });
+    await manager.startRdpSidecar('pc-1', startOptions('current'), (status) =>
+      statuses.push(status),
+    );
+    manager.sendRdpCommand('pc-1', { cmd: 'connect' }, 'current');
+    socket.emit('data', nativeStatus({ state: 'connecting', eventName: 'CommandReceived' }));
+    socket.emit('data', nativeStatus({ state: 'connecting', eventName: 'ConnectReturned' }));
+    await vi.advanceTimersByTimeAsync(100);
+
+    const commands = socket.writes.map((line) => JSON.parse(line).cmd);
+    expect(commands.slice(-2)).toEqual(['probe-windows', 'disconnect']);
+    socket.emit(
+      'data',
+      nativeStatus({
+        state: 'connecting',
+        eventName: 'WindowProbe',
+        windows: [{ className: '#32770', title: 'Aviso', owned: true, sameProcess: true }],
+      }),
+    );
+    expect(statuses.map(({ eventName }) => eventName)).not.toContain('WindowProbe');
+    expect(statuses.at(-1)).toMatchObject({ category: 'timeout', eventName: 'FirstEventTimeout' });
   });
 });
