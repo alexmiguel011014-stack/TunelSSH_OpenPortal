@@ -95,7 +95,7 @@ none`), matching how browsers keep background tabs alive. Done when: switching f
       (connected/connecting/disconnected) independent of which one is focused; clicking a
       connected-but-unfocused machine switches focus instead of reconnecting. Add a way to
       disconnect one specific machine without affecting the others.
-- [ ] **Verification — proxy.js**: no server-side code change expected (each
+- [x] **Verification — proxy.js**: no server-side code change expected (each
       `wss.on('connection', ...)` bridge is already independent), but confirm this by
       actually running two concurrent WS→TCP bridges to two different Tailscale hosts and
       watching `src/main/connection/proxy.js`'s logs for both — this is a `(manual)` check,
@@ -109,6 +109,11 @@ none`), matching how browsers keep background tabs alive. Done when: switching f
       connection-independent, not that it works across a real Tailscale link to two
       distinct physical machines — that's a network-reachability question, not a
       code-correctness one, and still needs the real 2-machine test.
+      **Done 2026-09-29 (two real hosts):** PC A held a VNC session to PC B (tunnel 22:12:41Z)
+      and, at the same time, a direct session to itself (100.66.218.65, 22:14:52Z); the proxy
+      logged one bridge per host, switching focus did not reconnect either, and disconnecting
+      PC B left the PC A session running. Found on the way and fixed: open direct (IP) sessions
+      were missing from the sidebar, so there was no way back to one after focusing another.
 - [x] **Tests**: unit test the new connection-state transitions in isolation (connect A;
       connect B without disconnecting A; confirm both present; disconnect A; confirm B
       unaffected) — pure state logic, testable with Vitest the same way
