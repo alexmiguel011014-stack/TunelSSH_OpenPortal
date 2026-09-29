@@ -942,7 +942,7 @@ describe('RDP logon and disconnect classification', () => {
       }),
     );
 
-    expect(statuses.at(-1)).toMatchObject({ state: 'error', category: 'session-contention' });
+    expect(statuses.at(-1)).toMatchObject({ state: 'error', category: 'contention-ended' });
   });
 
   it('names a session taken over by another connection', async () => {
@@ -1037,5 +1037,37 @@ describe('resolveSidecarExe', () => {
     expect(build.extraResources).toContainEqual(
       expect.objectContaining({ from: 'sidecar/bin/Release', to: 'sidecar' }),
     );
+  });
+});
+
+// Caso 3.7 da bateria: recarregar a tela deixava a sidecar órfã.
+describe('stopAllRdpSidecars', () => {
+  it('stops every machine gracefully when the renderer goes away', async () => {
+    vi.useFakeTimers();
+    const sockets = { 'pc-1': new FakeSocket(), 'pc-2': new FakeSocket() };
+    const procs = [];
+    let next = 'pc-1';
+    const manager = createRdpSidecarManager({
+      spawnProcess: () => {
+        const proc = new FakeProcess(80 + procs.length);
+        procs.push(proc);
+        return proc;
+      },
+      connectPipe: async () => sockets[next],
+      randomUUID: () => 'pipe',
+    });
+    await manager.startRdpSidecar('pc-1', startOptions('one'), () => {});
+    next = 'pc-2';
+    await manager.startRdpSidecar('pc-2', startOptions('two'), () => {});
+
+    manager.stopAllRdpSidecars('renderer-navigation');
+
+    for (const socket of Object.values(sockets)) {
+      expect(socket.writes.map((line) => JSON.parse(line).cmd)).toContain('disconnect');
+    }
+    expect(manager.isRdpSidecarRunning('pc-1')).toBe(false);
+    expect(manager.isRdpSidecarRunning('pc-2')).toBe(false);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(procs.every((proc) => proc.killed)).toBe(true);
   });
 });

@@ -29,6 +29,7 @@ const {
   startRdpSidecar,
   sendRdpCommand,
   stopRdpSidecar,
+  stopAllRdpSidecars,
   SIDECAR_EXE,
 } = require('../connection/rdp-sidecar');
 const {
@@ -85,6 +86,19 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function registerIpcHandlers(mainWindow, { accessGate } = {}) {
   const pendingRdpStarts = new Map();
+
+  // Recarregar a tela não roda o cleanup do React: sem isto a janela RDP
+  // ficava órfã, conectando sozinha (bateria de 2026-09-29, caso 3.7).
+  const stopRdpForRenderer = (reason) => {
+    pendingRdpStarts.clear();
+    stopAllRdpSidecars(reason);
+  };
+  mainWindow.webContents.on('did-start-navigation', (event, _url, isInPlace, isMainFrame) => {
+    const mainFrame = event?.isMainFrame ?? isMainFrame;
+    const sameDocument = event?.isSameDocument ?? isInPlace;
+    if (mainFrame && !sameDocument) stopRdpForRenderer('renderer-navigation');
+  });
+  mainWindow.webContents.on('render-process-gone', () => stopRdpForRenderer('renderer-gone'));
   ipcMain.handle('config:get', () => {
     return readConfig();
   });

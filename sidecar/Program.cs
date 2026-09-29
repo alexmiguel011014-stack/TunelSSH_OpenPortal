@@ -113,7 +113,10 @@ namespace OpenPortalRdpSidecar
         const int WS_CAPTION = 0x00C00000;
         const int WS_MINIMIZE = 0x20000000;
         internal const uint SWP_NOZORDER = 0x0004;
+        internal static readonly IntPtr HWND_TOP = IntPtr.Zero;
         internal const uint SWP_NOACTIVATE = 0x0010;
+        internal const uint SWP_NOSIZE = 0x0001;
+        internal const uint SWP_NOMOVE = 0x0002;
         const int SW_HIDE = 0;
         const int SW_SHOWNORMAL = 1;
 
@@ -132,15 +135,18 @@ namespace OpenPortalRdpSidecar
             // form.Location não serve mais uma vez WS_CHILD: WinForms ainda
             // pensa em coordenadas de tela, mas o Windows já espera
             // coordenadas relativas ao pai — SetWindowPos direto é o que
-            // funciona sem ambiguidade.
+            // funciona sem ambiguidade. HWND_TOP (sem SWP_NOZORDER) põe o
+            // form acima das janelas filhas do Chromium: na bateria de
+            // 2026-09-29 ele ficou atrás delas, e a sessão (inclusive a
+            // pergunta "outro usuário") não aparecia.
             bool positioned = SetWindowPos(
                 form.Handle,
-                IntPtr.Zero,
+                HWND_TOP,
                 x,
                 y,
                 w,
                 h,
-                SWP_NOZORDER | SWP_NOACTIVATE
+                SWP_NOACTIVATE
             );
             form.RecordEmbeddingResult(setParentError, positioned);
         }
@@ -517,6 +523,10 @@ namespace OpenPortalRdpSidecar
                         // rdp-protocol.js, buildVisibilityCommand).
                         bool visible = cmd.ContainsKey("visible") && Convert.ToBoolean(cmd["visible"]);
                         ShowWindow(form.Handle, visible ? SW_SHOWNORMAL : SW_HIDE);
+                        if (visible)
+                        {
+                            SetWindowPos(form.Handle, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+                        }
                         break;
 
                     case "disconnect":
@@ -703,9 +713,10 @@ namespace OpenPortalRdpSidecar
             {
                 _rdp = new AxMsRdpClient11NotSafeForScripting();
                 ((ISupportInitialize)_rdp).BeginInit();
-                // Adicionado depois do label: no WinForms, controles
-                // adicionados por último ficam por cima no z-order, então o
-                // controle RDP cobre o label assim que fica visível.
+                // Adicionado depois do label, o que no WinForms o deixa ABAIXO
+                // no z-order (índice 1): quando o label está visível, ele cobre
+                // o controle. Por isso SetStatus(null) assim que a sessão tem o
+                // que mostrar (OnConnected).
                 Controls.Add(_rdp);
                 ((ISupportInitialize)_rdp).EndInit();
                 _rdp.Dock = DockStyle.Fill;
@@ -717,7 +728,11 @@ namespace OpenPortalRdpSidecar
                 };
                 _rdp.OnConnected += (s, e) =>
                 {
-                    SetStatus("Autenticando...");
+                    // O label fica por cima do controle (foi adicionado antes,
+                    // então tem índice 0 no z-order). Com o transporte pronto, a
+                    // própria sessão desenha o login do Windows, inclusive a
+                    // pergunta "outro usuário está conectado"; o label a escondia.
+                    SetStatus(null);
                     ReportStatus("connecting", "transport-connected", "OnConnected");
                 };
                 _rdp.OnLoginComplete += (s, e) =>
@@ -762,7 +777,7 @@ namespace OpenPortalRdpSidecar
                 };
                 _rdp.OnAuthenticationWarningDismissed += (s, e) =>
                 {
-                    SetStatus("Autenticando...");
+                    SetStatus(ConnectedValue() == 1 ? null : "Autenticando...");
                     ReportStatus(
                         "connecting",
                         "authenticating",
@@ -854,14 +869,16 @@ namespace OpenPortalRdpSidecar
         public void ResizeHost(int x, int y, int w, int h)
         {
             if (_hostMode != "embedded") return;
+            // O Chromium pode recolocar as janelas filhas dele por cima ao
+            // redimensionar; HWND_TOP mantém a sessão visível.
             Program.SetWindowPos(
                 Handle,
-                IntPtr.Zero,
+                Program.HWND_TOP,
                 x,
                 y,
                 w,
                 h,
-                Program.SWP_NOZORDER | Program.SWP_NOACTIVATE
+                Program.SWP_NOACTIVATE
             );
         }
 
@@ -1049,6 +1066,12 @@ namespace OpenPortalRdpSidecar
                 ReportStatus("error", "terminal", "ConnectBeforeReady", "host-control");
                 return;
             }
+            if (string.IsNullOrEmpty(username) || string.IsNullOrEmpty(password))
+            {
+                SetStatus("Usuário ou senha RDP não configurados no OpenPortal.");
+                ReportStatus("error", "terminal", "CredentialsMissing", "authentication");
+                return;
+            }
             SetStatus("Conectando a " + host + "...");
             try
             {
@@ -1079,6 +1102,16 @@ namespace OpenPortalRdpSidecar
                 // escolhida em vez das libs JS abandonadas (ver GOALS.md).
                 var adv7 = (IMsRdpClientAdvancedSettings7)_rdp.AdvancedSettings7;
                 adv7.EnableCredSspSupport = true;
+
+                // As credenciais vêm só do OpenPortal. Sem isto, o controle abre
+                // "Digite suas credenciais" do Windows com a conta de quem está
+                // logado neste PC, e o CredSSP entregaria essa senha ao destino.
+                // Com o prompt proibido, senha errada vira OnDisconnected 2055.
+                var credentialUi = (IMsRdpClientNonScriptable5)_rdp.GetOcx();
+                credentialUi.AllowPromptingForCredentials = false;
+                credentialUi.PromptForCredentials = false;
+                credentialUi.PromptForCredsOnClient = false;
+                credentialUi.AllowCredentialSaving = false;
 
                 ReportStatus("connecting", "connect-invoking", "ConnectInvoking");
                 _rdp.Connect();

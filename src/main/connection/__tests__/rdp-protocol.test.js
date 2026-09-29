@@ -242,6 +242,7 @@ describe('toRendererRdpStatus', () => {
       'replaced',
       'network',
       'sidecar-missing',
+      'contention-ended',
     ];
     const messages = categories.map(
       (category) => toRendererRdpStatus({ state: 'error', category }, 'pc-1').message,

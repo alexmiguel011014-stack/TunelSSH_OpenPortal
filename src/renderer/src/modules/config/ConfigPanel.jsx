@@ -247,6 +247,11 @@ export default function ConfigPanel() {
       if (!name) errorsFor.push('Informe um nome');
       if (m.host && !isValidHost(m.host)) errorsFor.push('IP/host inválido');
       if (m.port < 1 || m.port > MAX_PORT) errorsFor.push(`Porta entre 1 e ${MAX_PORT}`);
+      // Sem usuário, o Windows pediria a conta de quem está logado neste PC.
+      if (m.transport === 'rdp' && !(m.rdpUsername || '').trim()) {
+        errorsFor.push('Informe o usuário RDP (a conta dedicada, ex.: openportal-rdp)');
+      }
+      if (m.transport === 'rdp' && !m.rdpPassword) errorsFor.push('Informe a senha RDP');
       if (errorsFor.length) errs[i] = errorsFor;
     });
     return errs;

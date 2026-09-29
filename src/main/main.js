@@ -56,6 +56,13 @@ const UPDATE_CHECK_INTERVAL_MS = parseInt(
 );
 const ALLOW_PRERELEASE = process.env.OPENPORTAL_ALLOW_PRERELEASE !== 'false';
 
+// O RDP "Dentro do app" encaixa a janela nativa da sidecar como filha da
+// janela principal. Com DirectComposition, o Chromium desenha a página numa
+// camada acima de todas as janelas filhas, e a sessão ficava invisível mesmo no
+// topo da ordem (bateria de 2026-09-29). Sem ela, a filha aparece. Precisa ser
+// antes do app ficar pronto.
+if (process.platform === 'win32') app.commandLine.appendSwitch('disable-direct-composition');
+
 // Outra instância deste app já está aberta: ela recebe 'second-instance' e vem
 // para a frente. Esta sai sem abrir janela nem portas — antes o whenReady
 // abaixo rodava mesmo assim e batia EADDRINUSE nas 18900/18902 antes de fechar.

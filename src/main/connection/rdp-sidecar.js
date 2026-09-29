@@ -548,7 +548,19 @@ function createRdpSidecarManager({
     return sidecars.has(machineId);
   }
 
-  return { startRdpSidecar, sendRdpCommand, stopRdpSidecar, isRdpSidecarRunning };
+  // A tela recarregou (Ctrl+R, HMR) ou caiu: nenhum RdpViewer vai mais pedir
+  // stop, então quem encerra as sidecars é o processo principal.
+  function stopAllRdpSidecars(reason) {
+    for (const machineId of [...sidecars.keys()]) stopRdpSidecar(machineId, null, reason);
+  }
+
+  return {
+    startRdpSidecar,
+    sendRdpCommand,
+    stopRdpSidecar,
+    stopAllRdpSidecars,
+    isRdpSidecarRunning,
+  };
 }
 
 const defaultManager = createRdpSidecarManager();

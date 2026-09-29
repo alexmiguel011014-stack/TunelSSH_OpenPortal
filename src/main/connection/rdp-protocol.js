@@ -140,6 +140,9 @@ function classifyRdpDisconnect({ reasonCode, extendedReason, connected, lastLogo
     extendedDisconnectCategory(extendedReason) ?? DISCONNECT_REASON_CATEGORIES.get(reasonCode);
   if (category) return category;
   if (connected) return 'remote-disconnect';
+  // A disputa de sessão terminou sem login: ninguém confirmou na tela da
+  // sessão, ou quem está no destino recusou.
+  if (lastLogonCategory === 'session-contention') return 'contention-ended';
   return lastLogonCategory ?? 'session';
 }
 
@@ -180,6 +183,8 @@ function toRendererRdpStatus(status, machineId) {
     'session-contention':
       'Outra pessoa está usando o PC de destino. Responda na tela da sessão RDP se quer entrar mesmo assim.',
     'logon-warning': 'O Windows do PC de destino mostrou um aviso na tela da sessão RDP.',
+    'contention-ended':
+      'A sessão RDP terminou antes do login: ninguém confirmou a entrada na tela da sessão, ou quem está no PC de destino recusou. Tente de novo e responda Sim na janela RDP.',
     replaced:
       'A sessão RDP foi encerrada porque outra conexão assumiu o PC de destino (alguém entrou nele).',
     network:
