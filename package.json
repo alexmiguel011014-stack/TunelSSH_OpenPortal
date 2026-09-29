@@ -56,6 +56,16 @@
       "dist/renderer/**/*",
       "resources/*.html"
     ],
+    "extraResources": [
+      {
+        "from": "sidecar/bin/Release",
+        "to": "sidecar",
+        "filter": [
+          "**/*",
+          "!*.pdb"
+        ]
+      }
+    ],
     "win": {
       "target": [
         {

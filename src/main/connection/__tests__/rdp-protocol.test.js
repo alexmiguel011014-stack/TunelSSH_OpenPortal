@@ -241,6 +241,7 @@ describe('toRendererRdpStatus', () => {
       'logon-warning',
       'replaced',
       'network',
+      'sidecar-missing',
     ];
     const messages = categories.map(
       (category) => toRendererRdpStatus({ state: 'error', category }, 'pc-1').message,

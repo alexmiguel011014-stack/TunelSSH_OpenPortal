@@ -188,6 +188,8 @@ function toRendererRdpStatus(status, machineId) {
     'remote-disconnect': 'A sessão RDP foi encerrada pelo destino.',
     session: 'A sessão RDP foi encerrada antes do login.',
     'local-sidecar': 'A comunicação local com o RDP foi interrompida.',
+    'sidecar-missing':
+      'O componente RDP deste app não foi encontrado. Reinstale o OpenPortal Remote (em desenvolvimento, compile a sidecar).',
     timeout: 'Uma etapa da conexão RDP excedeu o tempo seguro de espera.',
   };
   return {

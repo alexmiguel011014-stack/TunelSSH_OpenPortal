@@ -62,6 +62,17 @@ jobs:
       - name: Build renderer
         run: npm run build
 
+      # A sidecar RDP (C#/.NET 4.8) vai no instalador por extraResources
+      # (package.json). Sem este passo o app instalado não teria RDP.
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Build RDP sidecar (Release)
+        shell: pwsh
+        run: |
+          msbuild sidecar/OpenPortalRdpSidecar.csproj -restore -p:Configuration=Release -v:m -nologo
+          if (-not (Test-Path sidecar/bin/Release/OpenPortalRdpSidecar.exe)) { throw 'A sidecar RDP nao foi compilada' }
+
       - name: Generate self-signed code-signing cert
         shell: pwsh
         run: |

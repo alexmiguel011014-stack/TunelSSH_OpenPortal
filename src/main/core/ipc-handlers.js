@@ -162,7 +162,7 @@ function registerIpcHandlers(mainWindow, { accessGate } = {}) {
             state: 'error',
             lifecycleId,
             eventName: sidecarAvailable ? 'TcpPreflightFailed' : 'SidecarMissing',
-            category: sidecarAvailable ? 'network' : 'local-sidecar',
+            category: sidecarAvailable ? 'network' : 'sidecar-missing',
             stage: 'preflight',
             hostMode: mode,
           },

@@ -1,8 +1,10 @@
 import { EventEmitter } from 'node:events';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import sidecarModule from '../rdp-sidecar.js';
 
-const { createRdpSidecarManager } = sidecarModule;
+const { createRdpSidecarManager, resolveSidecarExe } = sidecarModule;
 
 class FakeProcess extends EventEmitter {
   constructor(pid) {
@@ -1004,5 +1006,36 @@ describe('RDP logon and disconnect classification', () => {
     );
     expect(statuses.map(({ eventName }) => eventName)).not.toContain('WindowProbe');
     expect(statuses.at(-1)).toMatchObject({ category: 'timeout', eventName: 'FirstEventTimeout' });
+  });
+});
+
+// GOALS 13: o instalador leva a sidecar em resources/sidecar (package.json,
+// build.extraResources) e o app instalado a procura lá.
+describe('resolveSidecarExe', () => {
+  it('uses the installed resources folder when running from app.asar', () => {
+    const resourcesPath = path.join('C:', 'Program Files', 'OpenPortal Remote', 'resources');
+    const moduleDir = path.join(resourcesPath, 'app.asar', 'src', 'main', 'connection');
+
+    expect(resolveSidecarExe({ moduleDir, resourcesPath })).toBe(
+      path.join(resourcesPath, 'sidecar', 'OpenPortalRdpSidecar.exe'),
+    );
+  });
+
+  it('uses the Debug build inside the project during development', () => {
+    const moduleDir = path.join('D:', 'proj', 'src', 'main', 'connection');
+
+    expect(resolveSidecarExe({ moduleDir, resourcesPath: 'unused' })).toBe(
+      path.join('D:', 'proj', 'sidecar', 'bin', 'Debug', 'OpenPortalRdpSidecar.exe'),
+    );
+  });
+
+  it('matches the folder the installer copies the Release build into', () => {
+    const { build } = JSON.parse(
+      readFileSync(new URL('../../../../package.json', import.meta.url), 'utf8'),
+    );
+
+    expect(build.extraResources).toContainEqual(
+      expect.objectContaining({ from: 'sidecar/bin/Release', to: 'sidecar' }),
+    );
   });
 });

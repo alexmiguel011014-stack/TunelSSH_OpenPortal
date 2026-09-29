@@ -15,16 +15,26 @@ const {
   parseStatusMessage,
 } = require('./rdp-protocol');
 
-const SIDECAR_EXE = path.join(
-  __dirname,
-  '..',
-  '..',
-  '..',
-  'sidecar',
-  'bin',
-  'Debug',
-  'OpenPortalRdpSidecar.exe',
-);
+// No app instalado o código roda de dentro do app.asar e a sidecar vem do
+// extraResources (package.json, build.extraResources) em resources/sidecar.
+// Em desenvolvimento, é o build Debug do MSBuild dentro do projeto.
+function resolveSidecarExe({ moduleDir = __dirname, resourcesPath = process.resourcesPath } = {}) {
+  if (moduleDir.split(/[\\/]/).includes('app.asar')) {
+    return path.join(resourcesPath, 'sidecar', 'OpenPortalRdpSidecar.exe');
+  }
+  return path.join(
+    moduleDir,
+    '..',
+    '..',
+    '..',
+    'sidecar',
+    'bin',
+    'Debug',
+    'OpenPortalRdpSidecar.exe',
+  );
+}
+
+const SIDECAR_EXE = resolveSidecarExe();
 
 const CONTROL_READY_TIMEOUT_MS = 5_000;
 const COMMAND_DISPATCH_TIMEOUT_MS = 5_000;
@@ -546,6 +556,7 @@ const defaultManager = createRdpSidecarManager();
 module.exports = {
   ...defaultManager,
   createRdpSidecarManager,
+  resolveSidecarExe,
   SIDECAR_EXE,
   CONTROL_READY_TIMEOUT_MS,
   COMMAND_DISPATCH_TIMEOUT_MS,

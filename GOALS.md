@@ -1525,6 +1525,43 @@ Suggested: opus · high — elevated, security-sensitive changes on the user's o
 
 ---
 
+## GOALS 13 — Ship the RDP sidecar inside the installer (fix)
+
+```mermaid
+flowchart TD
+    R[Installed app looks for the sidecar inside app.asar] --> F1[Resolve the path per mode]
+    R --> F2[Installer copies the Release build to resources/sidecar]
+    R --> F4[Name a missing sidecar]
+    F2 --> F3[Nightly job builds the sidecar before packaging]
+    F1 --> T1[Tests and a local unpacked build]
+    F2 --> T1
+    F4 --> T1
+    F3 --> T2[Next master build, installed app]
+    T1 --> T2
+```
+
+Suggested: sonnet · medium — packaging and CI configuration checked locally; the only step that publishes anything waits for the user's merge order.
+
+**Observed facts (2026-09-29):** the RDP transport (GOALS 2, 5–7) only ever ran from a development checkout. `build.files` packs `src/main`, `dist/renderer` and `resources/*.html`; the sidecar's `bin` output is gitignored and never packed; `SIDECAR_EXE` was `__dirname/../../../sidecar/bin/Debug/OpenPortalRdpSidecar.exe`, which in an installed app points inside `resources/app.asar`; and the nightly job never runs MSBuild. So an installed app shows the RDP options, the preflight finds no sidecar, and RDP never starts. Release v1.0.6 predates RDP; the `dev-latest` 1.0.7-dev installer (from the PR #1 merge) has this gap. A local `electron-builder --dir` from a worktree whose `node_modules` is a junction leaves `electron-updater`'s own dependencies out of `app.asar` (`npm ls` sees the junction as a link), so such a build is only good for checking file layout, never as a release artifact; the CI job uses a clean `npm ci`.
+
+### Repro
+
+- [x] **G13-R1 — Confirm the gap from config and code:** Done when: the packing list, the runtime path and the CI steps are each shown to leave the sidecar out of an installed app. **Done 2026-09-29:** see Observed facts; the preflight in `ipc-handlers.js` reports `SidecarMissing` when `fs.existsSync(SIDECAR_EXE)` is false.
+
+### Fix
+
+- [x] **G13-F1 — Resolve the sidecar path per mode:** Done when: code running from `app.asar` uses `process.resourcesPath/sidecar/OpenPortalRdpSidecar.exe` and a development checkout keeps `sidecar/bin/Debug`. **Done 2026-09-29:** `resolveSidecarExe({ moduleDir, resourcesPath })` in `rdp-sidecar.js`, tested for both cases.
+- [x] **G13-F2 — Pack the Release build:** Done when: the installer copies `sidecar/bin/Release` (exe, `AxInterop`/`Interop.MSTSCLib`, `Devolutions.MsRdpEx`, `runtimes/*/native/MsRdpEx.dll`, no `.pdb`) to `resources/sidecar`, and a test ties that folder to the resolver. **Done 2026-09-29:** `build.extraResources` in `package.json`; the test "matches the folder the installer copies the Release build into" reads it.
+- [ ] **G13-F3 — Build the sidecar in the nightly job:** Done when: the Windows build job runs `microsoft/setup-msbuild` and `msbuild sidecar/OpenPortalRdpSidecar.csproj -restore -p:Configuration=Release` before `electron-builder`, and fails if the exe is missing. **Implemented 2026-09-29** in `.github/workflows/nightly.yml`. **Still open:** it only runs on the next push to `master` (the build job skips pull requests, and a manual dispatch would publish `dev-latest`), so it is verified in G13-T2.
+- [x] **G13-F4 — Name a missing sidecar:** Done when: a missing executable reads as "component not installed", not as a lost local channel. **Done 2026-09-29:** the preflight sends category `sidecar-missing` with "O componente RDP deste app não foi encontrado. Reinstale o OpenPortal Remote…"; covered by the per-category message test.
+
+### Regression test
+
+- [x] **G13-T1 — Gates and a local unpacked build:** Done when: `npm test`, `npm run lint`, the renderer build and `git diff --check` pass, and a local `electron-builder --dir` has a working sidecar under `resources/sidecar`. **Passed 2026-09-29:** 200 passed / 1 skipped, 0 lint errors (9 old warnings), renderer build OK, diff clean; `electron-builder --dir --win --x64 -c.electronDist=node_modules/electron/dist` (no download) produced `resources/sidecar` with the exe, the three DLLs and `runtimes/`, and that packed exe ran the real ActiveX path against a local closing TCP target (`ControlReady` → `ConnectReturned` +0.8 s → `OnConnecting` → `OnDisconnected` 2308, exit code 0 after `disconnect`).
+- [ ] **G13-T2 — Installer check `(manual)`:** only after the user orders the merge to `master`: the nightly run's "Build RDP sidecar (Release)" step passes, the `dev-latest` installer puts `resources\sidecar\OpenPortalRdpSidecar.exe` on disk, and an installed app logs `sidecar=true` in the RDP preflight and passes battery case 3.1. Done when: all three hold on one PC.
+
+---
+
 ## Cross-goal ordering
 
 GOALS 1 and GOALS 2 (transport: multi-session VNC, then optional RDP) are independent of
@@ -1554,4 +1591,4 @@ provisioned by the fixed scripts before any real RDP login is tried. The two-PC 
 for every remaining manual item is in `docs/BATERIA_DE_TESTES.md`. Known limitation, not
 yet planned: RDP reaches 3389 directly, so approval is not the only way in for RDP
 (Windows authentication and the Tailscale-only rule are); tunnelling RDP through 18902
-like VNC would need its own GOALS.
+like VNC would need its own GOALS. **GOALS 13 closes before any release that advertises RDP** (v1.0.7 or later): until G13-T2 passes, an installed app has the RDP options but no sidecar.
