@@ -242,7 +242,7 @@ flowchart TD
       wiring end-to-end; it does **not** prove a real authenticated session, which needs
       an actual Pro-edition machine with RDP hosting enabled (see manual verification
       item below).
-- [ ] **Provisioning — enable RDP hosting `(manual, one-time per machine)`**: add an
+- [x] **Provisioning — enable RDP hosting `(manual, one-time per machine)`**: add an
       "Enable Remote Desktop hosting" action to the target-side app (the same "OpenPortal
       Remote" instance that already runs on each of the 10 PCs), triggered from its own
       settings UI, running elevated (UAC prompt expected — cannot be silent):
@@ -262,7 +262,12 @@ flowchart TD
   prompt, neither available in this session. **2026-09-24:** the script above would not
   have worked on PC B (pt-BR Windows) and opened 3389 to any network; replaced by a
   Tailscale-only rule with a read-back check — see GOALS 12. The live run is G12-T2.
-- [ ] **Provisioning — dedicated RDP credential**: create a dedicated local Windows
+      **Done 2026-09-29 (battery, G12-T2):** "Habilitar" on PC B (Windows 11 Pro pt-BR) with
+      UAC reported "habilitado e confirmado"; read-only check: fDenyTSConnections=0,
+      TermService running, one rule OpenPortal-RDP-Tailscale (TCP 3389 from 100.64.0.0/10,
+      Profile Any), the built-in "Área de Trabalho Remota" rules still disabled; 3389
+      reachable from PC A over Tailscale.
+- [x] **Provisioning — dedicated RDP credential**: create a dedicated local Windows
       account for the app's own RDP use during provisioning (strong random password,
       generated once, stored via Electron's `safeStorage` — not the target user's personal
       Windows login). Recommended over reusing the logged-in user's own password so the admin
@@ -278,6 +283,10 @@ flowchart TD
       only remaining gap is a live Pro-edition machine to actually test against.
       **2026-09-24:** group membership now goes by SID and is read back, and the password
       no longer travels on the command line — see GOALS 12. The live run is G12-T2.
+      **Done 2026-09-29:** "Criar conta" created openportal-rdp as the only member of
+      S-1-5-32-555, and PC A logged in with only that account (NLA) in cases 3.1/3.2.
+      Follow-up fixed the same day: the script also sets "password required" (net user
+      /passwordreq:yes); PasswordNeverExpires was already set.
 - [x] **Implementation — main process sidecar management + IPC**: `rdp-sidecar.js`
       (spawn/pipe-client management, Map-by-machine-id like `file-transfer-session.js`) +
       `rdp-protocol.js` (pure command builders/encoder) + a matching named-pipe server
@@ -635,11 +644,16 @@ with a useful category instead of remaining indefinitely in `connecting`.
       ordered trace proves which generation issued the observed `process.kill()` and whether
       the surviving generation receives `OnConnecting`, `OnConnected`, `OnLoginComplete`,
       `OnLogonError`, `OnFatalError`, or `OnDisconnected`.
-- [ ] **G5-R2 — Establish the failure boundary:** repeat the trace with (a) valid dedicated
+- [x] **G5-R2 — Establish the failure boundary:** repeat the trace with (a) valid dedicated
       RDP credentials, (b) deliberately invalid credentials, and (c) a cancelled attempt.
       Compare the expected status event sequence and the process/pipe lifetime for each. Done
       when: valid login, authentication failure, network/session failure, and intentional
       cancellation are distinguishable without inspecting a debugger or a Windows Event Log.
+      **Done 2026-09-29 (PC A → PC B, NLA on):** valid → OnConnecting, OnConnected,
+      OnLoginComplete; invalid → OnDisconnected 2055 → `authentication` in 1.4 s, no retry;
+      cancelled while connecting → intentional `disconnected`, DisconnectComplete, exit 0;
+      closed port → preflight `network` with no sidecar. All read from the `[rdp-trace]`
+      log.
 
 ### Root cause
 
@@ -682,7 +696,7 @@ with a useful category instead of remaining indefinitely in `connecting`.
       current status or create false disconnected history entries. Done when: renderer history
       records one final result per real attempt and never records the StrictMode probe as a
       user-visible RDP disconnect.
-- [ ] **G5-F3 — Bound a missing-terminal-event attempt:** after the root-cause trace establishes
+- [x] **G5-F3 — Bound a missing-terminal-event attempt:** after the root-cause trace establishes
       a safe threshold, add a cancellable handshake watchdog owned by the active generation.
       It must clear on every terminal event, request a graceful RDP disconnect before process
       teardown, and report a specific timeout category if the control emits nothing. Done
@@ -696,6 +710,10 @@ with a useful category instead of remaining indefinitely in `connecting`.
       terminal states" tests and the G6-T1 graceful-stop tests. **Still open:** the second
       half of Done when — a healthy NLA-on login that completes without any deadline firing
       needs a real RDP host (G7-T5/G5-T4).
+      **Healthy login confirmed 2026-09-29:** NLA-on logins at 20:47:33, 20:49:50 and
+      21:00:33Z reached OnLoginComplete with no deadline firing, including a
+      session-contention prompt answered after ~30 s (deadlines paused by `OnLogonError`
+      -5).
 - [x] **G5-F4 — Preserve native cleanup and diagnostics:** update `Program.cs` so the sidecar
       reports `OnConnecting`, the chosen authenticated-success event, `OnLogonError`,
       `OnFatalError`, and `OnDisconnected` reason data consistently, without exposing
@@ -718,13 +736,18 @@ with a useful category instead of remaining indefinitely in `connecting`.
 - [x] **G5-T3 — Run the project gates:** build the sidecar with the existing Visual Studio
       Developer Command Prompt/MSBuild path, then run `npm test` and `npm run lint`. Done when:
       all commands exit successfully and the tests include the new stale-generation cases.
-- [ ] **G5-T4 — Manual end-to-end proof `(manual)`:** with NLA still enabled on PC main, test a
+- [x] **G5-T4 — Manual end-to-end proof `(manual)`:** with NLA still enabled on PC main, test a
       valid credential connection, invalid credential connection, timeout/unreachable path,
       explicit disconnect, and a React StrictMode development remount. For each, capture the
       visible state, one sanitized log/result, and the remaining sidecar PID count. Done when:
       valid credentials reach the documented success state with screen/input usable; all
       failures resolve to an explicit error; explicit disconnect leaves no orphan sidecar; and
       the same configured machine still works through VNC after switching transport back.
+      **Done 2026-09-29:** valid (mouse and keyboard usable in native-window mode), invalid
+      (2055 → clear error), unreachable (port 3390 → preflight network error), explicit
+      disconnect (exit 0), StrictMode remount in the dev app (start → cleanup → start leaves
+      one owner), and the same PC B then worked over VNC (case 3.9). Zero sidecars after
+      every case.
 - [x] **G5-T5 — Document the lifecycle contract:** update
       `docs/ARQUITETURA_CONEXAO.md` with sidecar generation ownership, the state table,
       terminal-reason privacy rule, watchdog behavior, and the manual validation matrix. Done
@@ -824,14 +847,18 @@ credentials.
       deadline. The table is in `docs/ARQUITETURA_CONEXAO.md`; the closing-peer case runs in
       both modes as the "RDP sidecar with the real ActiveX control" test. The app-level
       segment (approval, preflight, spawn, pipe) is the existing `[rdp-trace]` log (G6-T4).
-- [ ] **G6-R2 — Establish a no-embedding control experiment `(manual)`:** add a diagnostic
+- [x] **G6-R2 — Establish a no-embedding control experiment `(manual)`:** add a diagnostic
       launch mode that uses the same sidecar binary, pipe protocol, RDP settings, target, and
       credential source but leaves the WinForms sidecar as its own top-level window (`SetParent`
       omitted). Run it against PC main with a valid dedicated account. Done when: it records
       the complete event sequence and visibly distinguishes a usable login, a credential
       failure, a certificate/security dialog, and the same silent stall; this is the primary
       A/B discriminator, not a fallback assumed to work.
-- [ ] **G6-R3 — Establish an embedded-host matrix `(manual)`:** repeat the same valid attempt
+      **Done 2026-09-29:** native-window against PC B with the dedicated account recorded
+      the full sequence and told apart a usable login (3.1), a credential failure (3.4,
+      2055), a certificate dialog (OnAuthenticationWarningDisplayed 19:30:08Z, resolved by
+      the user) and, locally, the silent stall (G6-R1).
+- [x] **G6-R3 — Establish an embedded-host matrix `(manual)`:** repeat the same valid attempt
       for four controlled configurations: current synchronous dispatch, queued UI dispatch,
       explicit control-handle readiness, and all three together; run each with and without
       cross-process `SetParent` where the harness permits. Change one factor per run and
@@ -842,7 +869,12 @@ credentials.
       readiness gating, the real control reports `OnConnecting` promptly in embedded mode
       with cross-process `SetParent` (G6-R1). The old synchronous configuration is no longer
       built, so what is left of this matrix is the real-target run in G6-T3/G7-T5.
-- [ ] **G6-R4 — Establish target and authentication boundaries `(manual)`:** with a real
+      **Done 2026-09-29 (real target):** embedded mode delivers OnConnecting/OnConnected as
+      promptly as native-window; the boundary is embedding itself: with DirectComposition
+      on, the embedded session was invisible under Chromium's layer (fixed with
+      `disable-direct-composition` plus HWND_TOP); with it off the session is visible but
+      gets no mouse or keyboard (G6-F4).
+- [x] **G6-R4 — Establish target and authentication boundaries `(manual)`:** with a real
       target owner present, run valid dedicated credentials, intentionally invalid credentials,
       explicit cancellation, an unavailable host/closed RDP listener, and a certificate or
       authentication warning when available. Verify on PC main that RDP hosting is enabled,
@@ -850,10 +882,13 @@ credentials.
       allowed to log on through Remote Desktop Services. Done when: every case maps to a
       distinct safe category without consulting a debugger; any Windows security/event-log
       review remains local to the operator and is not copied into app telemetry.
+      **Done 2026-09-29:** valid, invalid, explicit cancellation, closed listener (3390) and
+      certificate warning each ended in a distinct safe category; PC B read-only: RDP
+      enabled, TermService running, NLA on, account in Remote Desktop Users.
 
 ### Root cause decision gates
 
-- [ ] **G6-C1 — Prove or reject an ActiveX readiness/message-pump defect:** instrument the
+- [x] **G6-C1 — Prove or reject an ActiveX readiness/message-pump defect:** instrument the
       sidecar to prove `AxHost.BeginInit`/`EndInit`, `CreateControl`, child HWND creation,
       `Shown`, `HandleCreated`, and the first UI-loop turn all complete before `Connect` is
       invoked. Replace the pipe thread's synchronous `form.Invoke` command execution with a
@@ -864,7 +899,11 @@ credentials.
       pipe, the real control reports `OnConnecting` about 10 ms after `Connect()` returns and
       a TCP close about 30 ms later, the same in both host modes (G6-R1). Still open: the
       same check against a real NLA target (G6-R2/R3).
-- [ ] **G6-C2 — Prove or reject hidden modal/security UI:** subscribe to
+      **Decided 2026-09-29:** against the real NLA target, queued dispatch, readiness gating
+      and the async pipe deliver events promptly in both modes (OnConnecting ≈ +0.8 s,
+      OnConnected ≈ +1.2 s). The original stall was the IPC transport (G7), not ActiveX
+      readiness.
+- [x] **G6-C2 — Prove or reject hidden modal/security UI:** subscribe to
       `OnAuthenticationWarningDisplayed`, `OnAuthenticationWarningDismissed`, `OnStatusInfo`,
       `OnNetworkStatusChanged`, and connection-bar/dialog events supported by the installed
       control. Set `UIParentWindowHandle` to the sidecar form HWND before connecting, enumerate
@@ -881,7 +920,16 @@ credentials.
       and Winlogon notices (`OnLogonError` -5/-4/3) now pause the deadlines instead of
       failing (G6-F3). Still open: the live run that shows a dialog surfaced or absent
       (G6-T3/G7-T5).
-- [ ] **G6-C3 — Prove or reject cross-process parent/DPI incompatibility:** compare the
+      **Decided 2026-09-29:** the certificate dialog surfaced and the user resolved it. The
+      Windows credential prompt also surfaced, offering PC A's personal Microsoft account
+      because the machine had no RDP username; it is now forbidden
+      (`AllowPromptingForCredentials=false`, and a missing username or password is refused
+      before Connect). Two hidden-UI defects were found and fixed: the sidecar's
+      "Autenticando..." label covered the remote "Outro usuário" prompt, and
+      DirectComposition hid the embedded session. Limitation: WindowProbe did not list the
+      certificate dialog, so it proves presence only for visible windows of the sidecar
+      process or owned by its form.
+- [x] **G6-C3 — Prove or reject cross-process parent/DPI incompatibility:** compare the
       top-level and reparented modes using `GetParent`, window styles, `SetParent` return/error,
       process/window DPI-awareness context, and actual first-event timing. Account for the
       documented cross-process DPI reset and do not treat the current successful visual
@@ -892,13 +940,18 @@ credentials.
       positioned, and event timing matches the top-level mode (G6-R1), so embedding does not
       delay event delivery up to the network phase. Still open: the authenticated phase
       against a real target.
-- [ ] **G6-C4 — Prove or reject destination/account configuration as the cause:** when the
+      **Decided 2026-09-29:** embedding is a confirmed cause of invisibility
+      (DirectComposition, fixed) and of missing input (open, G6-F4); native-window has
+      neither problem.
+- [x] **G6-C4 — Prove or reject destination/account configuration as the cause:** when the
       no-embedding experiment also fails, compare it with the built-in Windows RDP client run
       by the authorized operator using the same target and dedicated account. Check local-vs-
       domain username form, account membership, denied-logon policy, NLA/CredSSP compatibility,
       firewall/service state, and certificate warning. Done when: the defect is assigned to
       target/account configuration only if the independent client reproduces it; otherwise it
       remains an application-hosting defect.
+      **Decided 2026-09-29:** ruled out: the same target and dedicated account log in and
+      are usable in native-window mode, so the embedded failures are app-hosting defects.
 
 ### Implementation plan after the decision gates
 
@@ -947,6 +1000,9 @@ credentials.
       parent HWND destruction. Do not add retries that hide a security or credential failure.
       Done when: repeated embedded valid sessions reach `OnLoginComplete` with screen, mouse,
       keyboard, resize, focus switching, and explicit disconnect all usable.
+      **Status 2026-09-29:** visibility fixed (DirectComposition off, HWND_TOP on reparent,
+      resize and show); mouse and keyboard still do not reach the embedded control. Until
+      fixed, native-window is the default and the embedded modes are labelled experimental.
 - [x] **G6-F5 — Provide a native-window compatibility mode:** if C3 shows cross-process
       embedding is unreliable on this environment, keep the same NLA-capable sidecar and
       private named-pipe credential path but run it as an owned top-level WinForms window.
@@ -1022,6 +1078,11 @@ credentials.
       count, and whether the file-transfer approval socket behaved normally. Done when: valid
       sessions are input-usable; every negative case finishes predictably; and no orphaned
       sidecar, hidden modal, stale status, or broken VNC session remains.
+      **Partial 2026-09-29:** passed valid login (native), invalid password, target
+      unreachable, certificate warning, target-initiated disconnect (a console logon →
+      `replaced`), Electron reload (after the stop-all fix), explicit disconnect and the
+      RDP→VNC switch, with no orphan sidecar or stale status. Not yet: cancelled dialog, two
+      simultaneous RDP machines, 125/150% scale, embedded input.
 - [x] **G6-T4 — Add operator preflight and support diagnostics:** before spawning a connection,
       report safe local checks (configured host/port, TCP reachability, sidecar executable,
       selected mode, installed control/version) and give a copyable redacted trace ID. Document
@@ -1273,6 +1334,10 @@ never enter logs, argv, test fixtures, or fallback telemetry.
       Electron reload, auto-fallback, and display-scale changes. Done when: valid login is
       input-usable; every negative case is correctly categorized; and no timeout starts before
       its native acknowledgement or leaves an orphan/hidden modal.
+      **Partial 2026-09-29:** native-window passed end to end (input usable); embedded shows
+      the session without input; invalid credentials, unavailable target, cancellation,
+      security warning, explicit stop and reload were categorized correctly. Not yet:
+      auto-fallback and display scale.
 - [x] **G7-T6 — Update the operator contract and evidence ledger:** document the selected pipe
       topology, acknowledgement/state table, safe trace fields, self-test command, timeout
       ownership, shutdown order, and the boundary between IPC, ActiveX hosting, network, and
@@ -1352,7 +1417,7 @@ Suggested: gpt-6-astra · xhigh — this crosses the Electron/React/noVNC bounda
 
 ### Reproduce and define the interaction contract
 
-- [ ] **G8-R1 — Record the current two-PC journey with redacted evidence:** on PC A, start from both (a) a bare PC B Tailscale IP and (b) a saved PC B entry; separately capture access rejected, access approved with no password configured, password-required, wrong credentials, correct credentials, and a real network loss. Done when: every result identifies the request/approval, TCP/VNC reachability, or VNC-authentication boundary without revealing a password. **Evidence 2026-09-23 (PC A → PC B, redacted logs):** rejected (20:00:57Z, "Acesso recusado"), password-required after approval (20:04:28Z, dialog), wrong credentials (20:04:33Z "Authentication failed", dialog, no retry), correct credentials (23:24Z, app-managed password), real network loss (GOALS 9 case 7). Both a bare IP ("Conexão Direta") and the saved "PC Remoto 2" were used. **Still open:** "access approved with no password configured" — both TightVNC servers always had a password.
+- [ ] **G8-R1 — Record the current two-PC journey with redacted evidence:** on PC A, start from both (a) a bare PC B Tailscale IP and (b) a saved PC B entry; separately capture access rejected, access approved with no password configured, password-required, wrong credentials, correct credentials, and a real network loss. Done when: every result identifies the request/approval, TCP/VNC reachability, or VNC-authentication boundary without revealing a password. **Evidence 2026-09-23 (PC A → PC B, redacted logs):** rejected (20:00:57Z, "Acesso recusado"), password-required after approval (20:04:28Z, dialog), wrong credentials (20:04:33Z "Authentication failed", dialog, no retry), correct credentials (23:24Z, app-managed password), real network loss (GOALS 9 case 7). Both a bare IP ("Conexão Direta") and the saved "PC Remoto 2" were used. **Still open:** "access approved with no password configured" — both TightVNC servers always had a password. **2026-09-29:** the live password-less case was skipped by the user: the service's own authentication switch needs its admin configuration and a restart (the "Offline Configuration" the user opened edits only the application-mode settings). Behaviour covered by the vncSession/vncProtocol tests.
 - [x] **G8-R2 — Specify and validate input ownership before UI changes:** the quick-connect field accepts only a bare Tailscale IP and always uses port 5900; saved-machine fields describe a reusable PC; TightVNC's host password remains configured on that host; and an optional locally saved credential belongs only to the selected saved PC. Done when: no quick-connect label, hint, placeholder, or validation asks the user to combine IP, port, approval data, and password.
 - [x] **G8-R3 — Define a redacted state vocabulary:** distinguish `requesting-access`, `access-denied`, `access-unreachable`, `opening-vnc`, `credentials-required`, `authentication-failed`, `connected`, and `connection-lost`. Done when: status, activity, notification, and retry policy use structured outcomes rather than ambiguous free-form VNC text.
 
@@ -1365,7 +1430,7 @@ Suggested: gpt-6-astra · xhigh — this crosses the Electron/React/noVNC bounda
 ### Fix the request, password, and retry experience
 
 - [x] **G8-F1 — Make the request phase self-explanatory:** present direct connection as a request to a PC, with an IP-only input, visible automatic VNC-port behavior, and a primary action such as “Request access.” Show pending state until PC B accepts or rejects and stop with a precise access result. Done when: PC B's IP has one unambiguous next action and cannot be confused with VNC credentials or saved configuration.
-- [ ] **G8-F2 — Prompt for VNC credentials at the correct time:** only after access approval and an active `credentialsrequired` event, show a password dialog naming the PC/IP and saying it is the TightVNC password, not the approval request. Offer cancel and submit; quick connection keeps it in memory only by default. Done when: a password-less server prompts never, a password-required server prompts exactly once, and cancel ends only that attempt. **Evidence 2026-09-23:** the dialog appeared exactly once after approval on a password-required server (20:04:28Z) and Cancel ended only that attempt (20:04:46Z, the saved-PC session kept running). **Still open:** the password-less server case (never prompts) was not exercised.
+- [ ] **G8-F2 — Prompt for VNC credentials at the correct time:** only after access approval and an active `credentialsrequired` event, show a password dialog naming the PC/IP and saying it is the TightVNC password, not the approval request. Offer cancel and submit; quick connection keeps it in memory only by default. Done when: a password-less server prompts never, a password-required server prompts exactly once, and cancel ends only that attempt. **Evidence 2026-09-23:** the dialog appeared exactly once after approval on a password-required server (20:04:28Z) and Cancel ended only that attempt (20:04:46Z, the saved-PC session kept running). **Still open:** the password-less server case (never prompts) was not exercised. **2026-09-29:** live password-less case skipped (see G8-R1); on the password-required server the app answered `credentials-required` itself with the app-managed password and never prompted.
 - [x] **G8-F3 — Give saved profiles a safe credential option:** rename the configuration field to optional saved VNC credential, explain it is used only after approval and a genuine server request, and use encrypted local storage only after explicit opt-in. Permit clearing/replacing without exposing the current value; on rejection offer a new value rather than retrying. Done when: settings never claim to configure the remote host and no credential is copied into an ordinary UI state or connection record.
 - [x] **G8-F4 — Remove URL credentials and legacy rejection coupling:** remove password and `wasRejected` behavior from the noVNC URL and use the scoped one-time message contract; remove or refactor legacy state so approval and authentication cannot influence each other. Done when: viewer URLs/logs contain only non-secret metadata while a valid credential reaches only the expected noVNC instance.
 - [x] **G8-F5 — Classify failures before retrying:** retain bounded reconnect solely for a confirmed transient transport loss, reset it on a real connection, and never auto-retry access denial, credential request, authentication failure, cancel, or explicit disconnect. Done when: a wrong password yields one actionable failure with no retry storm and real connection loss retains manual/retry behavior.
@@ -1377,7 +1442,7 @@ Suggested: gpt-6-astra · xhigh — this crosses the Electron/React/noVNC bounda
 - [x] **G8-T2 — Test the parent/iframe credential contract without secrets:** cover iframe-ready, credentials-required, submit, cancel, duplicate message, stale attempt, unexpected message source, and disconnect with synthetic values. Done when: only the matching live session receives a credential, it is not in a URL/status payload, and cancel/error clears the pending request. **Partial 2026-09-24:** `vncProtocol.test.js` covers stale attempt and unexpected source, plus refusal-vs-wrong-password classification. **Still open:** iframe-ready, submit, cancel, duplicate message and disconnect cases. **Done 2026-09-24:** the iframe's handling moved from `vnc.html` to `applyParentMessage`/`credentialsRequested`/`sessionEnded` in `vnc-protocol.js`; `vncProtocol.test.js` now covers a password sent before noVNC asks (dropped — the "iframe ready, nothing requested yet" case), submit once, duplicate ignored, empty password ignored, cancel ends the attempt and refuses later passwords, disconnect closes once, an error clears the pending request, and no close effect carries the password (synthetic values only). Checked in the real noVNC runtime too: the worktree's `vnc.html` served on a spare port and pointed at this PC's own TightVNC reached "Aguardando a senha", ignored a stale-attempt cancel and an empty password, posted exactly one `disconnected` ("Senha VNC não informada") on cancel and nothing for repeated cancel/disconnect, with no console error and no password ever sent.
 - [x] **G8-T3 — Preserve configuration and transport regressions:** cover encrypted optional saved credentials, clearing/replacing one, no persistence for quick connection, VNC default transport, RDP isolation, and concurrent machines. Done when: existing profiles stay readable, missing passwords stay valid, and RDP/file-transfer paths are unchanged. **Partial 2026-09-24:** `machine-credentials.test.js` covers the encrypted optional saved credential and clearing it. **Still open:** replacing one, quick connection never persisting, VNC default transport, RDP isolation and concurrent machines. **Done 2026-09-24:** replacing was already covered ("can replace or clear a credential without retaining plaintext"); new `shouldPersistVncCredential` (extracted from `RemoteViewer.jsx`) never persists for a `quick-` connection; a new `machine-credentials.test.js` case keeps `transport: 'rdp'`, the RDP user and `rdpPasswordEnc` untouched when the VNC credential is replaced or cleared; VNC as default transport (`resolveTransport`) and concurrent machines (`connectionState.test.js`, `proxy.test.js`, the RDP manager's two-machine test) were already covered.
 - [x] **G8-T4 — Run non-manual project gates:** run focused tests, `npm test`, `npm run lint`, renderer build, and `git diff --check`; inspect generated viewer URLs and redacted logs. Done when: all gates pass and no fixture, assertion, or artifact stores a real password. **Passed 2026-09-24:** `npm test` 135 passed/4 skipped, `npm run lint` 0 errors (9 old warnings, clean now that G11-F1 scoped it), renderer build OK, `git diff --check` clean; viewer URLs carry only host/port/proxy/attempt (`buildVncViewerUrl`); a scan of PC A's real `electron-out.log`/`electron-err.log` found no password, `vncPassword`, `sessionPassword` or tunnel token.
-- [ ] **G8-T5 — Complete two-PC manual acceptance `(manual)`:** with PC A client and PC B host, test direct-IP and saved-profile flows for rejection, no password required, correct/wrong password, cancelled dialog, saved-password replacement, and network interruption. Done when: each screen states the correct layer and next action, successful VNC is input-usable, wrong credentials do not retry, and the password is absent from the URL, activity view, and logs inspected by the operator. **Mostly covered 2026-09-23 on PC A → PC B** (direct IP and saved profile): rejection, password-required, wrong password without retry and without "Connection lost unexpectedly", cancelled dialog, saved password removal, network interruption; no password in inspected logs. **Still open:** a server with no password, and replacing a saved password.
+- [ ] **G8-T5 — Complete two-PC manual acceptance `(manual)`:** with PC A client and PC B host, test direct-IP and saved-profile flows for rejection, no password required, correct/wrong password, cancelled dialog, saved-password replacement, and network interruption. Done when: each screen states the correct layer and next action, successful VNC is input-usable, wrong credentials do not retry, and the password is absent from the URL, activity view, and logs inspected by the operator. **Mostly covered 2026-09-23 on PC A → PC B** (direct IP and saved profile): rejection, password-required, wrong password without retry and without "Connection lost unexpectedly", cancelled dialog, saved password removal, network interruption; no password in inspected logs. **Still open:** a server with no password, and replacing a saved password. **2026-09-29:** saved-password replacement and the live password-less case were skipped by the user; see G8-R1.
 
 **Done when (fix-level):** someone on PC A enters only PC B's Tailscale IP, requests access, receives a distinct VNC password dialog only if PC B's server asks, and understands every failure without accidental credential storage or exposure. The same holds for a saved profile, with any saved credential explicitly opt-in and encrypted locally.
 
@@ -1526,7 +1591,7 @@ Suggested: opus · high — elevated, security-sensitive changes on the user's o
 ### Regression test
 
 - [x] **G12-T1 — Automated gates:** Done when: `npm test`, `npm run lint`, renderer build and `git diff --check` pass. **Passed 2026-09-24:** 169 passed / 1 skipped, 0 lint errors (9 old warnings), build OK, diff clean.
-- [ ] **G12-T2 — Two-PC battery `(manual)`:** on PC B, "Habilitar" and "Criar conta" (UAC) each report success, and a read-only check shows `fDenyTSConnections=0`, `OpenPortal-RDP-Tailscale` enabled with RemoteAddress 100.64.0.0/10, the built-in "Área de Trabalho Remota" rules still disabled, `TermService` running and the account in S-1-5-32-555; no `openportal-*` directory left in `%TEMP%`; "Proteger TightVNC" on one PC still confirms the new password; after a reboot of PC B, 3389 listens again. Done when: all of it holds and RDP from PC A reaches the login (continues in G7-T5).
+- [ ] **G12-T2 — Two-PC battery `(manual)`:** on PC B, "Habilitar" and "Criar conta" (UAC) each report success, and a read-only check shows `fDenyTSConnections=0`, `OpenPortal-RDP-Tailscale` enabled with RemoteAddress 100.64.0.0/10, the built-in "Área de Trabalho Remota" rules still disabled, `TermService` running and the account in S-1-5-32-555; no `openportal-*` directory left in `%TEMP%`; "Proteger TightVNC" on one PC still confirms the new password; after a reboot of PC B, 3389 listens again. Done when: all of it holds and RDP from PC A reaches the login (continues in G7-T5). **Result 2026-09-29:** everything passed except the reboot check: "Habilitar" and "Criar conta" reported success, the read-only check matched, no `openportal-*` left in %TEMP%, and "Proteger TightVNC" on PC B logged "senha nova confirmada e só conexões locais". Still to run: reboot PC B and confirm 3389 listens again.
 
 ---
 
