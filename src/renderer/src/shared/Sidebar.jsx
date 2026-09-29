@@ -14,6 +14,7 @@ import {
 import { MachineContext } from '../App';
 import StatusBadge from './StatusBadge';
 import { isPrivateNetworkHost } from './lib/net';
+import { listQuickSessions } from './lib/connectionState';
 
 function NavButton({ active, onClick, icon, children, title }) {
   return (
@@ -183,6 +184,44 @@ export default function Sidebar() {
             </div>
           );
         })}
+
+        {listQuickSessions(machines, connectedMachines).length > 0 && (
+          <p className="text-[11px] font-medium text-text-faint uppercase tracking-wide px-2 mt-3 mb-2">
+            Conexões diretas
+          </p>
+        )}
+        {listQuickSessions(machines, connectedMachines).map((session) => (
+          <div key={session.id} className="relative mb-0.5 group">
+            <button
+              onClick={() => {
+                setShowConfig(false);
+                setShowFiles(false);
+                setShowActivity(false);
+                setFocusedMachineId(session.id);
+              }}
+              className={`w-full text-left px-3 py-2.5 rounded-lg border-none cursor-pointer ${
+                session.id === focusedMachineId
+                  ? 'bg-surface-2 text-text-primary'
+                  : 'text-text-secondary hover:bg-surface-2'
+              } bg-transparent transition-colors`}
+            >
+              <div className="flex items-center justify-between">
+                <div className="min-w-0">
+                  <div className="text-sm font-medium truncate">{session.name}</div>
+                  <div className="text-xs opacity-70 truncate mt-0.5 font-mono">{session.host}</div>
+                </div>
+                <StatusBadge state={statuses[session.id] || 'disconnected'} />
+              </div>
+            </button>
+            <button
+              onClick={() => handleDisconnect(session.id, session.name)}
+              className="hidden group-hover:block absolute top-1 right-1 bg-transparent border-none text-text-faint hover:text-warning cursor-pointer p-1 rounded transition-colors"
+              title="Desconectar"
+            >
+              <PowerOff size={12} />
+            </button>
+          </div>
+        ))}
 
         {machines.length < maxMachines && (
           <button

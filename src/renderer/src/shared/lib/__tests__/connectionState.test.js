@@ -4,6 +4,7 @@ import {
   disconnectMachineEntry,
   isConnectionHistoryEvent,
   groupConnectionHistory,
+  listQuickSessions,
   pickFocusAfterDisconnect,
   resolveTransport,
 } from '../connectionState.js';
@@ -80,6 +81,21 @@ describe('resolveTransport', () => {
 
   it('treats any other value as vnc', () => {
     expect(resolveTransport({ id: 'pc-a', transport: 'bogus' })).toBe('vnc');
+  });
+});
+
+describe('listQuickSessions', () => {
+  it('lists open sessions that are not saved PCs', () => {
+    const machines = [{ id: 'pc-1' }, { id: 'pc-2' }];
+    const connected = {
+      'pc-2': { machine: { id: 'pc-2', name: 'PC B', host: '100.81.199.56' } },
+      'quick-1': { machine: { id: 'quick-1', name: 'Conexão Direta', host: '100.66.218.65' } },
+    };
+
+    expect(listQuickSessions(machines, connected)).toEqual([
+      { id: 'quick-1', name: 'Conexão Direta', host: '100.66.218.65' },
+    ]);
+    expect(listQuickSessions(machines, {})).toEqual([]);
   });
 });
 

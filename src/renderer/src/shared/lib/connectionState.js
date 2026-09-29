@@ -42,6 +42,16 @@ export function isConnectionHistoryEvent(status) {
   return !status?.intentional && ['connected', 'error', 'disconnected'].includes(status?.state);
 }
 
+// Conexões abertas que não são PCs salvos (conexão direta por IP). Sem
+// aparecer na barra lateral, não havia como voltar a uma delas depois de
+// focar outra sessão (bateria de 2026-09-29, bloco 5).
+export function listQuickSessions(machines, connectedMachines) {
+  const saved = new Set(machines.map((m) => m.id));
+  return Object.entries(connectedMachines || {})
+    .filter(([id]) => !saved.has(id))
+    .map(([id, entry]) => ({ id, name: entry.machine?.name, host: entry.machine?.host }));
+}
+
 // Mescla entradas consecutivas do mesmo PC (name+host) numa linha com
 // contador, mais recente primeiro. A linha mostra o resultado MAIS RECENTE:
 // antes ficava com o da entrada mais antiga do grupo ("Aguardando
