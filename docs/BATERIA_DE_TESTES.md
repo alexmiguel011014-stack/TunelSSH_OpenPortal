@@ -20,6 +20,11 @@ caminho certo. Nenhum log guarda senha.
   aberto de novo.
 - Abra o app pelo `ABRIR_APP.bat` da pasta que está no commit em teste. Ele
   fecha cópias antigas antes de abrir. Depois de atualizar o código, abra de novo.
+  No PC A, é o da pasta
+  `D:\ProjetosPessoais\TunelSSH\.claude\worktrees\vnc-access-flow-testing-c6ec16`: a pasta
+  principal `D:\ProjetosPessoais\TunelSSH` está no `master`, sem as correções. Se o
+  `sidecar/Program.cs` mudou desde a última compilação, recompile a sidecar Debug
+  antes (o teste "RDP sidecar binary freshness" avisa).
 - **Minimize a janela do OpenPortal, não feche.** Fechar encerra o app, e o PC
   some para quem tenta conectar. Se o app sair sozinho, o log diz se foi a
   janela sendo fechada, o Windows encerrando a sessão, uma queda da tela ou um

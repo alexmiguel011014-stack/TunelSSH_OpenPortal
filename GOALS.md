@@ -837,6 +837,11 @@ credentials.
       cross-process `SetParent` where the harness permits. Change one factor per run and
       capture the R1 fields. Done when: the evidence identifies the first factor that restores
       prompt `OnConnecting` or proves that embedding itself is the incompatibility boundary.
+      **Local evidence 2026-09-29:** the factor G7 isolated was the synchronous duplex pipe
+      (G7-R4: no reply until the next write). With the async pipe, queued dispatch and
+      readiness gating, the real control reports `OnConnecting` promptly in embedded mode
+      with cross-process `SetParent` (G6-R1). The old synchronous configuration is no longer
+      built, so what is left of this matrix is the real-target run in G6-T3/G7-T5.
 - [ ] **G6-R4 — Establish target and authentication boundaries `(manual)`:** with a real
       target owner present, run valid dedicated credentials, intentionally invalid credentials,
       explicit cancellation, an unavailable host/closed RDP listener, and a certificate or
