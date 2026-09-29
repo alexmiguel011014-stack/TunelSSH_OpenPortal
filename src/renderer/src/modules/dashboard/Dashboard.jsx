@@ -7,6 +7,7 @@ import {
   formatIpInput,
   normalizeQuickVncHost,
 } from '../../shared/lib/vncSession';
+import { groupConnectionHistory } from '../../shared/lib/connectionState';
 import LocalAccessCard from './LocalAccessCard';
 
 const sectionTitle = 'text-xs font-semibold mb-3 uppercase tracking-wide text-text-muted';
@@ -46,26 +47,6 @@ function Feedback({ feedback }) {
       {feedback.text}
     </div>
   );
-}
-
-// Mescla entradas consecutivas do mesmo PC (name+host) em uma só linha com
-// contador — evita poluir a lista quando uma conexão aprova/desconecta em
-// sequência rápida (ex.: retentativas), o que geraria várias linhas por
-// tentativa.
-function groupHistory(history) {
-  const reversed = history.slice().reverse();
-  const groups = [];
-  for (const entry of reversed) {
-    const last = groups[groups.length - 1];
-    if (last && last.name === entry.name && last.host === entry.host) {
-      last.count += 1;
-      last.state = entry.state;
-      last.message = entry.message;
-    } else {
-      groups.push({ ...entry, count: 1 });
-    }
-  }
-  return groups;
 }
 
 export default function Dashboard() {
@@ -246,7 +227,7 @@ export default function Dashboard() {
             <div className="text-text-faint text-xs">Nenhuma conexão registrada ainda.</div>
           ) : (
             <div className="max-h-56 overflow-auto">
-              {groupHistory(connHistory).map((c) => (
+              {groupConnectionHistory(connHistory).map((c) => (
                 <div
                   key={c.id}
                   className="flex items-center gap-2 text-xs py-1.5 border-b border-line-subtle last:border-0"

@@ -38,6 +38,13 @@ describe('buildCreateCredentialScript', () => {
     expect(script).not.toContain("'Remote Desktop Users'");
   });
 
+  it('makes the password non-expiring and required', () => {
+    const script = buildCreateCredentialScript('openportal-rdp');
+    expect(script).toContain('-PasswordNeverExpires');
+    expect(script).toContain("& net.exe user 'openportal-rdp' /passwordreq:yes");
+    expect(script).toContain("if ($LASTEXITCODE -ne 0) { throw 'passwordreq' }");
+  });
+
   it('escapes single quotes in the username to avoid breaking out of the PowerShell string', () => {
     const script = buildCreateCredentialScript("o'brien");
     expect(script).toContain("o''brien");

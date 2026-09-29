@@ -164,12 +164,13 @@ function classifyRdpLogonError(code) {
   return null;
 }
 
-// Modo de hospedagem pedido pela máquina (GOALS 6): embutido é o padrão, e
-// um valor desconhecido cai nele em vez de virar um modo que não existe.
+// Modo de hospedagem pedido pela máquina (GOALS 6). O padrão é a janela
+// compatível: na bateria de 2026-09-29 o modo embutido mostrou a sessão, mas
+// sem mouse e teclado. Valor desconhecido cai no padrão.
 function resolveRdpHostMode(machine) {
   return ['embedded', 'native-window', 'auto-fallback'].includes(machine?.rdpHostMode)
     ? machine.rdpHostMode
-    : 'embedded';
+    : 'native-window';
 }
 
 function toRendererRdpStatus(status, machineId) {

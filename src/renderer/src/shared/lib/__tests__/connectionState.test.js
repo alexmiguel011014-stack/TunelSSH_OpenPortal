@@ -3,6 +3,7 @@ import {
   connectMachineEntry,
   disconnectMachineEntry,
   isConnectionHistoryEvent,
+  groupConnectionHistory,
   pickFocusAfterDisconnect,
   resolveTransport,
 } from '../connectionState.js';
@@ -79,5 +80,24 @@ describe('resolveTransport', () => {
 
   it('treats any other value as vnc', () => {
     expect(resolveTransport({ id: 'pc-a', transport: 'bogus' })).toBe('vnc');
+  });
+});
+
+describe('groupConnectionHistory', () => {
+  it('shows the newest result of a run of entries for the same PC', () => {
+    const pcB = { name: 'PC B', host: '100.81.199.56' };
+    const history = [
+      { ...pcB, id: '1', time: '10:00', state: 'info', message: 'Aguardando aprovação' },
+      { ...pcB, id: '2', time: '10:01', state: 'connect', message: 'connected' },
+      { name: 'PC A', host: '100.66.218.65', id: '3', time: '10:02', state: 'error', message: 'x' },
+      { ...pcB, id: '4', time: '10:03', state: 'info', message: 'Aguardando aprovação' },
+      { ...pcB, id: '5', time: '10:04', state: 'disconnected', message: 'disconnected' },
+    ];
+
+    expect(groupConnectionHistory(history)).toEqual([
+      { ...history[4], count: 2 },
+      { ...history[2], count: 1 },
+      { ...history[1], count: 2 },
+    ]);
   });
 });

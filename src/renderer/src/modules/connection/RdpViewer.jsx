@@ -22,12 +22,13 @@ export default function RdpViewer({ machine, isVisible }) {
     disconnected: { color: 'bg-text-muted', label: 'Desconectado' },
   };
   const health = healthMap[vncState] || healthMap.disconnected;
+  const hostMode = machine.rdpHostMode || 'native-window';
   const hostModeLabel =
-    machine.rdpHostMode === 'native-window'
-      ? 'RDP em janela compatível'
-      : machine.rdpHostMode === 'auto-fallback'
+    hostMode === 'embedded'
+      ? 'RDP dentro do app'
+      : hostMode === 'auto-fallback'
         ? 'RDP no app + fallback'
-        : 'RDP dentro do app';
+        : 'RDP em janela compatível';
 
   // Pixels físicos: SetWindowPos (Win32) não conhece pixels lógicos do DOM —
   // numa tela com escala 125%/150% os dois divergem.
@@ -133,7 +134,7 @@ export default function RdpViewer({ machine, isVisible }) {
         <div className="flex flex-col items-center gap-2 text-text-muted pointer-events-none">
           <MonitorSmartphone size={28} />
           <span className="text-xs">
-            {machine.rdpHostMode === 'native-window'
+            {hostMode === 'native-window'
               ? 'A sessão será exibida em uma janela separada'
               : `Sessão RDP nativa — ${machine.name}`}
           </span>

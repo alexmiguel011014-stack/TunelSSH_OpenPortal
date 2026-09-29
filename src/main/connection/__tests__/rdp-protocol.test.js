@@ -358,12 +358,12 @@ describe('classifyRdpLogonError', () => {
 });
 
 describe('resolveRdpHostMode', () => {
-  it('keeps the three supported modes and falls back to embedded', () => {
+  it('keeps the three supported modes and falls back to the native window', () => {
     expect(resolveRdpHostMode({ rdpHostMode: 'native-window' })).toBe('native-window');
     expect(resolveRdpHostMode({ rdpHostMode: 'auto-fallback' })).toBe('auto-fallback');
     expect(resolveRdpHostMode({ rdpHostMode: 'embedded' })).toBe('embedded');
-    expect(resolveRdpHostMode({})).toBe('embedded');
-    expect(resolveRdpHostMode({ rdpHostMode: 'fullscreen' })).toBe('embedded');
-    expect(resolveRdpHostMode(null)).toBe('embedded');
+    expect(resolveRdpHostMode({})).toBe('native-window');
+    expect(resolveRdpHostMode({ rdpHostMode: 'fullscreen' })).toBe('native-window');
+    expect(resolveRdpHostMode(null)).toBe('native-window');
   });
 });

@@ -49,6 +49,10 @@ function buildCreateCredentialScript(username) {
     '$sec = ConvertTo-SecureString $secret -AsPlainText -Force',
     `New-LocalUser -Name '${user}' -Password $sec -PasswordNeverExpires -AccountNeverExpires`,
     `Add-LocalGroupMember -SID '${REMOTE_DESKTOP_USERS_SID}' -Member '${user}'`,
+    // New-LocalUser deixa a conta com "senha não obrigatória" (PasswordRequired
+    // False, visto no PC B em 2026-09-29): um admin poderia zerar a senha depois.
+    `& net.exe user '${user}' /passwordreq:yes | Out-Null`,
+    "if ($LASTEXITCODE -ne 0) { throw 'passwordreq' }",
   ].join('; ');
 }
 

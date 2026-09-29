@@ -742,7 +742,9 @@ namespace OpenPortalRdpSidecar
                 };
                 _rdp.OnDisconnected += (s, e) =>
                 {
-                    SetStatus(string.Format("Desconectado (motivo {0})", e.discReason));
+                    // O motivo numérico vai só para o log; a mensagem para a
+                    // pessoa aparece no OpenPortal (rdp-protocol.js).
+                    SetStatus("Sessão RDP encerrada. O motivo aparece no OpenPortal.");
                     ReportStatus(
                         "disconnected",
                         "terminal",
@@ -754,7 +756,7 @@ namespace OpenPortalRdpSidecar
                 };
                 _rdp.OnFatalError += (s, e) =>
                 {
-                    SetStatus(string.Format("Erro fatal (código {0})", e.errorCode));
+                    SetStatus("O componente RDP falhou. O motivo aparece no OpenPortal.");
                     ReportStatus("error", "terminal", "OnFatalError", "host-control", e.errorCode);
                 };
                 _rdp.OnLogonError += (s, e) =>

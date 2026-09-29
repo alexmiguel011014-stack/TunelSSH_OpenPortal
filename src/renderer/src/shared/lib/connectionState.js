@@ -41,3 +41,17 @@ export function resolveTransport(machine) {
 export function isConnectionHistoryEvent(status) {
   return !status?.intentional && ['connected', 'error', 'disconnected'].includes(status?.state);
 }
+
+// Mescla entradas consecutivas do mesmo PC (name+host) numa linha com
+// contador, mais recente primeiro. A linha mostra o resultado MAIS RECENTE:
+// antes ficava com o da entrada mais antiga do grupo ("Aguardando
+// aprovação...", visto na bateria de 2026-09-29).
+export function groupConnectionHistory(history) {
+  const groups = [];
+  for (const entry of history.slice().reverse()) {
+    const last = groups[groups.length - 1];
+    if (last && last.name === entry.name && last.host === entry.host) last.count += 1;
+    else groups.push({ ...entry, count: 1 });
+  }
+  return groups;
+}
