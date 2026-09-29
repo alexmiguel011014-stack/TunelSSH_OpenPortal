@@ -107,4 +107,11 @@ function disconnect(sessionId) {
   }
 }
 
-module.exports = { connect, getClient, getVncTunnelToken, disconnect };
+// A tela recarregou ou caiu: ninguém vai mais pedir ft:disconnect. Sem
+// isto a sessão aprovada seguia viva e a próxima conexão ao mesmo PC entrava
+// sem nova aprovação (bateria de 2026-09-29, caso 3.9 depois do 3.7).
+function disconnectAll() {
+  for (const sessionId of [...sessions.keys()]) disconnect(sessionId);
+}
+
+module.exports = { connect, getClient, getVncTunnelToken, disconnect, disconnectAll };
