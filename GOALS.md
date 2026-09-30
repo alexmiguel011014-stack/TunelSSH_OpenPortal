@@ -592,6 +592,12 @@ flowchart TD
       live on the professor's side with correct identity/duration/file-count — then
       separately enable the Telegram opt-in and confirm the same event also produces a
       Telegram message.
+      **Push verified 2026-09-30:** with `reportTo` on PC B (the host) set to the shared
+      Tailscale login, PC A connected over VNC, sent one file and disconnected; PC A's Activity
+      panel showed "DESKTOP-O18JVRU · 31s · 1 arquivo(s)" with the identity, right after the
+      disconnect. **Still open:** the Telegram opt-in (needs the user's bot token). Found: the
+      setting only works on the host, and on 2026-09-29 it was first entered on the viewer; the
+      Activity panel text should say so.
 - [x] **Docs**: update `docs/ARQUITETURA_CONEXAO.md` with the push architecture and
       `reportTo` config, plus a short setup guide (can live there or in a new
       `docs/TELEGRAM_SETUP.md`) for the optional Telegram bot — creating it via @BotFather,
