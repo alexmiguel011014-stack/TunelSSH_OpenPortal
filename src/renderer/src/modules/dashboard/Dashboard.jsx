@@ -79,7 +79,7 @@ export default function Dashboard() {
       addLog(error, 'warn');
       setQuickFeedback({
         kind: 'error',
-        text: `${error}. Ex.: 100.101.102.103 (a senha de acesso vai no campo de baixo).`,
+        text: `${error}. Use o IP do PC no Tailscale, no formato 100.x.x.x (a senha de acesso vai no campo de baixo).`,
       });
       return;
     }

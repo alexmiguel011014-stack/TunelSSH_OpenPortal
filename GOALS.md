@@ -1697,7 +1697,7 @@ disconnect another user's session.
 - [ ] **G14-T1 — Live check `(manual)`:** on one PC with the new build: X → Cancelar keeps the
       app and its sessions; X → Fechar closes it, no `OpenPortalRdpSidecar` is left running and
       the other PC's view shows the disconnect; a Windows restart with the app open is not
-      blocked by the prompt. Done when: all three hold. **Partial 2026-09-30 (installed build on PC A):** X showed "Fechar o OpenPortal?" and Fechar closed the app (21:18:37Z) with no sidecar left. Still to check: Cancelar keeps the sessions, the other PC sees the disconnect, and a Windows restart is not blocked.
+      blocked by the prompt. Done when: all three hold. **Partial 2026-09-30 (installed build on PC A):** X showed "Fechar o OpenPortal?" and Fechar closed the app (21:18:37Z) with no sidecar left. Still to check: Cancelar keeps the sessions, the other PC sees the disconnect, and a Windows restart is not blocked. The user skipped these for now (2026-09-30).
 
 ---
 
@@ -1749,7 +1749,7 @@ slots).
       2026-09-30** in `src/main/updater/auto-updater.js`.
 - [x] **G15-F4 — Package without tests or real IPs:** Done when: `build.files` excludes
       `src/main/**/__tests__/**` and no real Tailscale IP of PC A or PC B is in `app.asar`.
-      **Done 2026-09-30:** exclusion added; the hint's example is `100.101.102.103`; a local
+      **Done 2026-09-30:** exclusion added; the quick-connect hint shows the format `100.x.x.x` instead of an address; a local
       `electron-builder --win dir` package had 0 test files and 0 occurrences of either IP.
 - [ ] **G15-F5 — Keep dev and installed data apart `(manual)`:** decide whether the dev checkout
       moves to its own data folder (for example `%APPDATA%\openportal-remote-dev`) so test PCs,
