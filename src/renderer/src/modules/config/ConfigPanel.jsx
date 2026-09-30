@@ -22,6 +22,16 @@ export default function ConfigPanel() {
     useContext(MachineContext);
 
   const [draft, setDraft] = useState(() => machines.map((m) => ({ ...m })));
+  // Um PC adicionado pela barra lateral com esta tela aberta entra no
+  // rascunho; antes o Salvar o apagava (bateria de 2026-09-29).
+  useEffect(() => {
+    setDraft((prev) => {
+      const known = new Set(prev.map((m) => m.id));
+      const added = machines.filter((m) => !known.has(m.id));
+      return added.length ? [...prev, ...added.map((m) => ({ ...m }))] : prev;
+    });
+  }, [machines]);
+  const savedHosts = new Map(machines.map((m) => [m.id, m]));
   const [saved, setSaved] = useState(false);
   const [errors, setErrors] = useState({});
   const [vncPasswordUpdates, setVncPasswordUpdates] = useState({});
@@ -247,6 +257,11 @@ export default function ConfigPanel() {
       if (!name) errorsFor.push('Informe um nome');
       if (m.host && !isValidHost(m.host)) errorsFor.push('IP/host inválido');
       if (m.port < 1 || m.port > MAX_PORT) errorsFor.push(`Porta entre 1 e ${MAX_PORT}`);
+      // Sem usuário, o Windows pediria a conta de quem está logado neste PC.
+      if (m.transport === 'rdp' && !(m.rdpUsername || '').trim()) {
+        errorsFor.push('Informe o usuário RDP (a conta dedicada, ex.: openportal-rdp)');
+      }
+      if (m.transport === 'rdp' && !m.rdpPassword) errorsFor.push('Informe a senha RDP');
       if (errorsFor.length) errs[i] = errorsFor;
     });
     return errs;
@@ -362,6 +377,17 @@ export default function ConfigPanel() {
           </div>
         </div>
 
+        <p className="mb-3 text-xs text-text-faint">
+          Cada cartão é um PC salvo: mudar o nome ou o IP altera esse PC. Para cadastrar outro, use{' '}
+          <button
+            type="button"
+            onClick={handleAddLocal}
+            className="text-accent hover:underline bg-transparent border-0 p-0 cursor-pointer"
+          >
+            + Adicionar PC
+          </button>
+          .
+        </p>
         <div className="space-y-4">
           {draft.map((machine, index) => (
             <div
@@ -381,6 +407,13 @@ export default function ConfigPanel() {
                   </button>
                 )}
               </div>
+              {savedHosts.get(machine.id)?.host &&
+                machine.host !== savedHosts.get(machine.id).host && (
+                  <p className="mb-3 text-xs text-warning">
+                    Você está alterando o PC &quot;{savedHosts.get(machine.id).name}&quot; (
+                    {savedHosts.get(machine.id).host}). Para cadastrar outro PC, use + Adicionar PC.
+                  </p>
+                )}
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                 <div>
                   <label className="block text-xs text-text-faint mb-1">Nome</label>
@@ -511,13 +544,13 @@ export default function ConfigPanel() {
                   <div>
                     <label className="block text-xs text-text-faint mb-1">Exibição RDP</label>
                     <select
-                      value={machine.rdpHostMode || 'embedded'}
+                      value={machine.rdpHostMode || 'native-window'}
                       onChange={(e) => updateField(index, 'rdpHostMode', e.target.value)}
                       className="w-full bg-inset border border-line rounded-lg px-3 py-2 text-sm text-text-primary focus:outline-none focus:border-accent transition-colors"
                     >
-                      <option value="embedded">Dentro do app</option>
                       <option value="native-window">Janela compatível</option>
-                      <option value="auto-fallback">App + fallback automático</option>
+                      <option value="embedded">Dentro do app (experimental)</option>
+                      <option value="auto-fallback">App + fallback (experimental)</option>
                     </select>
                   </div>
                   <p className="sm:col-span-4 text-xs text-text-faint">
@@ -618,7 +651,7 @@ export default function ConfigPanel() {
               <div>
                 <p className="text-sm text-text-primary">Habilitar Remote Desktop nesta máquina</p>
                 <p className="text-xs text-text-faint mt-0.5">
-                  Liga o serviço de RDP do Windows e a regra de firewall correspondente.
+                  Liga o RDP do Windows e libera a porta 3389 só para PCs do Tailscale.
                 </p>
               </div>
               <button

@@ -29,12 +29,15 @@ const {
   startRdpSidecar,
   sendRdpCommand,
   stopRdpSidecar,
+  stopAllRdpSidecars,
   SIDECAR_EXE,
 } = require('../connection/rdp-sidecar');
+const fileTransferSession = require('../file-transfer/file-transfer-session');
 const {
   buildConnectCommand,
   buildResizeCommand,
   buildVisibilityCommand,
+  resolveRdpHostMode,
   toRendererRdpStatus,
 } = require('../connection/rdp-protocol');
 const {
@@ -84,6 +87,21 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function registerIpcHandlers(mainWindow, { accessGate } = {}) {
   const pendingRdpStarts = new Map();
+
+  // Recarregar a tela não roda o cleanup do React: sem isto a janela RDP
+  // ficava órfã, conectando sozinha, e a sessão aprovada continuava aberta
+  // para a próxima conexão entrar sem aprovação (bateria de 2026-09-29).
+  const stopRdpForRenderer = (reason) => {
+    pendingRdpStarts.clear();
+    stopAllRdpSidecars(reason);
+    fileTransferSession.disconnectAll();
+  };
+  mainWindow.webContents.on('did-start-navigation', (event, _url, isInPlace, isMainFrame) => {
+    const mainFrame = event?.isMainFrame ?? isMainFrame;
+    const sameDocument = event?.isSameDocument ?? isInPlace;
+    if (mainFrame && !sameDocument) stopRdpForRenderer('renderer-navigation');
+  });
+  mainWindow.webContents.on('render-process-gone', () => stopRdpForRenderer('renderer-gone'));
   ipcMain.handle('config:get', () => {
     return readConfig();
   });
@@ -142,9 +160,7 @@ function registerIpcHandlers(mainWindow, { accessGate } = {}) {
 
   ipcMain.handle('rdp:start', async (_, { machine, rect, lifecycleId }) => {
     pendingRdpStarts.set(machine.id, lifecycleId);
-    const mode = ['embedded', 'native-window', 'auto-fallback'].includes(machine.rdpHostMode)
-      ? machine.rdpHostMode
-      : 'embedded';
+    const mode = resolveRdpHostMode(machine);
     const port = machine.rdpPort || 3389;
     const sidecarAvailable = fs.existsSync(SIDECAR_EXE);
     const tcpReachable = await testTcpReachability(machine.host, port);
@@ -163,7 +179,7 @@ function registerIpcHandlers(mainWindow, { accessGate } = {}) {
             state: 'error',
             lifecycleId,
             eventName: sidecarAvailable ? 'TcpPreflightFailed' : 'SidecarMissing',
-            category: sidecarAvailable ? 'network' : 'local-sidecar',
+            category: sidecarAvailable ? 'network' : 'sidecar-missing',
             stage: 'preflight',
             hostMode: mode,
           },

@@ -3,11 +3,77 @@ import {
   buildVncViewerUrl,
   formatAccessPassword,
   formatIpInput,
+  isCredentialRequest,
+  isFromActiveViewer,
   isRetryableVncState,
+  nextCredentialSource,
   normalizeQuickVncHost,
   shouldExplainMissingTunnel,
+  shouldPersistVncCredential,
   shouldUseSavedVncCredential,
 } from '../vncSession.js';
+
+describe('VNC credential policy (GOALS 8)', () => {
+  it('answers with a password only when the server asked for one', () => {
+    expect(isCredentialRequest({ type: 'vnc-status', state: 'credentials-required' })).toBe(true);
+    for (const data of [
+      { type: 'vnc-ready' },
+      { type: 'vnc-resolution', width: 800, height: 600 },
+      { type: 'vnc-status', state: 'connected' },
+      { type: 'vnc-status', state: 'authentication-failed' },
+      { type: 'vnc-status', state: 'server-refused' },
+      { type: 'vnc-status', state: 'connection-lost' },
+      { type: 'vnc-reconnect-request' },
+      null,
+    ]) {
+      expect(isCredentialRequest(data)).toBe(false);
+    }
+  });
+
+  it('ignores messages from another window or from a stale attempt', () => {
+    const viewer = {};
+    const message = (source, attemptId) => ({
+      source,
+      data: { type: 'vnc-status', state: 'credentials-required', attemptId },
+    });
+    expect(isFromActiveViewer(message(viewer, 'vnc-pc-2'), viewer, 'vnc-pc-2')).toBe(true);
+    expect(isFromActiveViewer(message(viewer, 'vnc-pc-1'), viewer, 'vnc-pc-2')).toBe(false);
+    expect(isFromActiveViewer(message({}, 'vnc-pc-2'), viewer, 'vnc-pc-2')).toBe(false);
+    expect(isFromActiveViewer(message(undefined, 'vnc-pc-2'), undefined, 'vnc-pc-2')).toBe(false);
+    expect(isFromActiveViewer({ source: viewer, data: null }, viewer, 'vnc-pc-2')).toBe(false);
+  });
+
+  it('uses a just-typed password, then the approval grant once, then the saved one once, then asks', () => {
+    const base = {
+      pendingCredential: '',
+      grant: '',
+      grantTried: false,
+      grantRejected: false,
+      hasSavedCredential: false,
+      savedCredentialTried: false,
+    };
+    expect(nextCredentialSource({ ...base, pendingCredential: 'typed', grant: 'g' })).toBe(
+      'pending',
+    );
+    expect(nextCredentialSource({ ...base, grant: 'g', hasSavedCredential: true })).toBe('grant');
+    expect(nextCredentialSource({ ...base, grant: 'g', grantTried: true })).toBe('ask');
+    expect(
+      nextCredentialSource({ ...base, grant: 'g', grantRejected: true, hasSavedCredential: true }),
+    ).toBe('saved');
+    expect(
+      nextCredentialSource({ ...base, hasSavedCredential: true, savedCredentialTried: true }),
+    ).toBe('ask');
+    expect(nextCredentialSource(base)).toBe('ask');
+  });
+
+  it('never persists a password typed for a quick connection', () => {
+    expect(shouldPersistVncCredential({ machineId: 'pc-b', saveRequested: true })).toBe(true);
+    expect(shouldPersistVncCredential({ machineId: 'pc-b', saveRequested: false })).toBe(false);
+    expect(
+      shouldPersistVncCredential({ machineId: 'quick-1790211236916', saveRequested: true }),
+    ).toBe(false);
+  });
+});
 
 describe('shouldExplainMissingTunnel', () => {
   it('explains once when a session without tunnel never opened', () => {

@@ -71,3 +71,39 @@ export function isRetryableVncState(state) {
 export function shouldUseSavedVncCredential({ hasSavedCredential, savedCredentialTried }) {
   return Boolean(hasSavedCredential) && !savedCredentialTried;
 }
+
+// Só vale mensagem do iframe desta tentativa: outra janela ou um iframe de
+// tentativa anterior (reconexão) são ignorados.
+export function isFromActiveViewer(event, viewerWindow, attemptId) {
+  return (
+    Boolean(viewerWindow) && event?.source === viewerWindow && event?.data?.attemptId === attemptId
+  );
+}
+
+// A única mensagem que faz o app responder com uma senha: o servidor VNC pediu.
+export function isCredentialRequest(data) {
+  return data?.type === 'vnc-status' && data.state === 'credentials-required';
+}
+
+// De onde vem a resposta a um pedido de senha, nesta ordem: a senha que o
+// usuário acabou de digitar numa nova tentativa, a senha entregue pela
+// aprovação (uma vez, e nunca de novo se o servidor já a recusou), a salva
+// (uma vez) e, por fim, perguntar.
+export function nextCredentialSource({
+  pendingCredential,
+  grant,
+  grantTried,
+  grantRejected,
+  hasSavedCredential,
+  savedCredentialTried,
+}) {
+  if (pendingCredential) return 'pending';
+  if (grant && !grantTried && !grantRejected) return 'grant';
+  if (shouldUseSavedVncCredential({ hasSavedCredential, savedCredentialTried })) return 'saved';
+  return 'ask';
+}
+
+// Conexão rápida (IP direto) nunca grava senha: não existe perfil onde guardar.
+export function shouldPersistVncCredential({ machineId, saveRequested }) {
+  return Boolean(saveRequested) && !String(machineId || '').startsWith('quick-');
+}

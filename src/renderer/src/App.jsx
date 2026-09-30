@@ -10,6 +10,7 @@ import Dashboard from './modules/dashboard/Dashboard';
 import {
   connectMachineEntry,
   disconnectMachineEntry,
+  isConnectionHistoryEvent,
   pickFocusAfterDisconnect,
   resolveTransport,
 } from './shared/lib/connectionState';
@@ -147,13 +148,7 @@ export default function App() {
         connectedMachines[status.machineId]?.machine ||
         machines.find((x) => x.id === status.machineId);
       const stateLabel = status.state === 'connected' ? 'connect' : status.state;
-      if (
-        m &&
-        !status.intentional &&
-        (status.state === 'connected' ||
-          status.state === 'error' ||
-          status.state === 'disconnected')
-      ) {
+      if (m && isConnectionHistoryEvent(status)) {
         recordConn({
           name: m.name,
           host: m.host,
@@ -169,7 +164,9 @@ export default function App() {
       } else if (status.state === 'error' && m) {
         window.electronAPI?.notify({
           title: 'Falha na conexão',
-          body: `Não foi possível conectar a ${m.name} (${m.host}).`,
+          body: status.message
+            ? `${m.name}: ${status.message}`
+            : `Não foi possível conectar a ${m.name} (${m.host}).`,
         });
       }
     };

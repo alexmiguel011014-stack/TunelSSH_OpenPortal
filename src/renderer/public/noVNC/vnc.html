@@ -61,7 +61,15 @@
 
   <script type="module">
     import RFB from './novnc.js';
-    import { isAuthenticationFailure, isExpectedParentMessage, isServerRefusal } from './vnc-protocol.js';
+    import {
+      INITIAL_VIEWER_SESSION,
+      applyParentMessage,
+      credentialsRequested,
+      isAuthenticationFailure,
+      isExpectedParentMessage,
+      isServerRefusal,
+      sessionEnded,
+    } from './vnc-protocol.js';
 
     const params = new URLSearchParams(window.location.search);
     const host = params.get('host');
@@ -78,7 +86,7 @@
     let rfb = null;
     let fbWidth = 0;
     let fbHeight = 0;
-    let waitingForCredentials = false;
+    let session = INITIAL_VIEWER_SESSION;
     let terminalReported = false;
 
     function postToParent(payload) {
@@ -170,6 +178,7 @@
         });
 
         rfb.addEventListener('disconnect', (e) => {
+          session = sessionEnded(session);
           const clean = e.detail ? e.detail.clean : 'unknown';
           if (!terminalReported && clean === false) {
             errorMsg.textContent = 'Conexão VNC perdida';
@@ -182,12 +191,13 @@
         });
 
         rfb.addEventListener('credentialsrequired', () => {
-          waitingForCredentials = true;
+          session = credentialsRequested(session);
           connectingText.textContent = 'Aguardando a senha do servidor VNC...';
           reportStatus('credentials-required', 'Senha VNC necessária');
         });
 
         rfb.addEventListener('error', (e) => {
+          session = sessionEnded(session);
           const msg = e.detail?.message || e.detail || 'Unknown error';
           const authenticationFailed = isAuthenticationFailure(msg);
           errorMsg.textContent = authenticationFailed ? 'Senha VNC não aceita' : 'Conexão VNC perdida';
@@ -200,6 +210,7 @@
         });
 
         rfb.addEventListener('securityfailure', (e) => {
+          session = sessionEnded(session);
           const reason = e.detail?.reason || '';
           connectingOverlay.classList.add('hidden');
           errorOverlay.classList.add('visible');
@@ -239,19 +250,15 @@
           rfb.setCompressionLevel(e.data.level);
         }
       }
-      if (e.data?.type === 'vnc-disconnect') {
-        reportTerminal('disconnected', 'Sessão VNC encerrada pelo usuário');
+      const { session: next, effect } = applyParentMessage(session, e.data);
+      session = next;
+      if (effect?.type === 'close') {
+        reportTerminal('disconnected', effect.message);
         if (rfb) { try { rfb.disconnect(); } catch (err) {} rfb = null; }
       }
-      if (e.data?.type === 'vnc-cancel-credentials' && waitingForCredentials) {
-        waitingForCredentials = false;
-        reportTerminal('disconnected', 'Senha VNC não informada');
-        if (rfb) { try { rfb.disconnect(); } catch (err) {} rfb = null; }
-      }
-      if (e.data?.type === 'vnc-credentials' && waitingForCredentials && rfb && e.data.password) {
-        waitingForCredentials = false;
+      if (effect?.type === 'send-credentials' && rfb) {
         connectingText.textContent = `Conectando a ${host}:${port}...`;
-        rfb.sendCredentials({ password: e.data.password });
+        rfb.sendCredentials({ password: effect.password });
       }
     });
 

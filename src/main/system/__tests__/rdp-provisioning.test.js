@@ -1,33 +1,52 @@
+import { existsSync, readFileSync } from 'node:fs';
 import { describe, it, expect } from 'vitest';
 import {
   buildEnableHostingScript,
   buildCreateCredentialScript,
   runElevatedPowerShell,
+  parseHostingState,
   verifyRdpHostingEnabled,
   enableRdpHosting,
+  createRdpCredential,
   generatePassword,
 } from '../rdp-provisioning.js';
 
 describe('buildEnableHostingScript', () => {
-  it('sets fDenyTSConnections to 0 and enables the firewall group', () => {
+  it('turns RDP on and opens 3389 only to the Tailscale range', () => {
     const script = buildEnableHostingScript();
+    expect(script).toContain("$ErrorActionPreference = 'Stop'");
     expect(script).toContain("Name 'fDenyTSConnections' -Value 0");
-    expect(script).toContain('Enable-NetFirewallRule -DisplayGroup "Remote Desktop"');
+    expect(script).toContain('Start-Service -Name TermService');
+    expect(script).toContain("New-NetFirewallRule -Name 'OpenPortal-RDP-Tailscale'");
+    expect(script).toContain("-LocalPort 3389 -RemoteAddress '100.64.0.0/10'");
+  });
+
+  it("does not touch Windows' Remote Desktop group, which is open to any network and localized", () => {
+    const script = buildEnableHostingScript();
+    expect(script).not.toContain('Enable-NetFirewallRule');
+    expect(script).not.toContain('DisplayGroup');
   });
 });
 
 describe('buildCreateCredentialScript', () => {
-  it('creates the user and adds it to Remote Desktop Users', () => {
-    const script = buildCreateCredentialScript('openportal-rdp', 'S3cret!');
+  it('creates the user and adds it to Remote Desktop Users by SID', () => {
+    const script = buildCreateCredentialScript('openportal-rdp');
+    expect(script).toContain("$ErrorActionPreference = 'Stop'");
+    expect(script).toContain('ConvertTo-SecureString $secret -AsPlainText -Force');
     expect(script).toContain("New-LocalUser -Name 'openportal-rdp'");
-    expect(script).toContain(
-      "Add-LocalGroupMember -Group 'Remote Desktop Users' -Member 'openportal-rdp'",
-    );
-    expect(script).toContain('S3cret!');
+    expect(script).toContain("Add-LocalGroupMember -SID 'S-1-5-32-555' -Member 'openportal-rdp'");
+    expect(script).not.toContain("'Remote Desktop Users'");
+  });
+
+  it('makes the password non-expiring and required', () => {
+    const script = buildCreateCredentialScript('openportal-rdp');
+    expect(script).toContain('-PasswordNeverExpires');
+    expect(script).toContain("& net.exe user 'openportal-rdp' /passwordreq:yes");
+    expect(script).toContain("if ($LASTEXITCODE -ne 0) { throw 'passwordreq' }");
   });
 
   it('escapes single quotes in the username to avoid breaking out of the PowerShell string', () => {
-    const script = buildCreateCredentialScript("o'brien", 'pw');
+    const script = buildCreateCredentialScript("o'brien");
     expect(script).toContain("o''brien");
   });
 });
@@ -65,25 +84,68 @@ describe('runElevatedPowerShell', () => {
     const spawn = makeFakeSpawn({ exitCode: 1 });
     await expect(runElevatedPowerShell('Get-Date', { spawn })).rejects.toThrow();
   });
+
+  it('hands a secret over through a temporary file, never the command line, and removes it', async () => {
+    const seen = [];
+    const spawn = (cmd, args) => {
+      const encoded = /'-EncodedCommand','([^']+)'/.exec(args[2])[1];
+      const script = Buffer.from(encoded, 'base64').toString('utf16le');
+      const file = /ReadAllText\('([^']+)'\)/.exec(script)[1];
+      seen.push({ commandLine: args.join(' '), script, file, content: readFileSync(file, 'utf8') });
+      return makeFakeSpawn({ exitCode: 1 })(cmd, args);
+    };
+
+    await expect(
+      runElevatedPowerShell(
+        'Write-Output $secret.Length',
+        { spawn },
+        { secret: 'sentinel-secret' },
+      ),
+    ).rejects.toThrow();
+
+    const [{ commandLine, script, file, content }] = seen;
+    expect(content).toBe('sentinel-secret');
+    expect(commandLine).not.toContain('sentinel-secret');
+    expect(script).not.toContain('sentinel-secret');
+    expect(script).toContain(`Remove-Item -LiteralPath '${file}' -Force`);
+    expect(existsSync(file)).toBe(false);
+  });
 });
 
 describe('verifyRdpHostingEnabled', () => {
-  it('returns true when the registry value reads back as 0', async () => {
-    const spawn = makeFakeSpawn({ stdout: '0\r\n' });
+  it('needs RDP allowed, the Tailscale-only rule enabled and the service running', async () => {
+    expect(parseHostingState('0|True|Running\r\n')).toBe(true);
+    expect(parseHostingState('1|True|Running')).toBe(false);
+    expect(parseHostingState('0|missing|Running')).toBe(false);
+    expect(parseHostingState('0|False|Running')).toBe(false);
+    expect(parseHostingState('0|True|Stopped')).toBe(false);
+    expect(parseHostingState('')).toBe(false);
+    const spawn = makeFakeSpawn({ stdout: '0|True|Running\r\n' });
     await expect(verifyRdpHostingEnabled({ spawn })).resolves.toBe(true);
-  });
-
-  it('returns false for any other value', async () => {
-    const spawn = makeFakeSpawn({ stdout: '1\r\n' });
-    await expect(verifyRdpHostingEnabled({ spawn })).resolves.toBe(false);
   });
 });
 
 describe('enableRdpHosting', () => {
-  it('runs the elevated script then verifies the registry value', async () => {
-    const spawn = makeFakeSpawn({ exitCode: 0, stdout: '0' });
+  it('runs the elevated script then reads the state back', async () => {
+    const spawn = makeFakeSpawn({ exitCode: 0, stdout: '0|True|Running' });
     await expect(enableRdpHosting({ spawn })).resolves.toBe(true);
     expect(spawn.calls.length).toBe(2);
+  });
+
+  it('reports failure when the elevated script left the firewall rule missing', async () => {
+    const spawn = makeFakeSpawn({ exitCode: 0, stdout: '0|missing|Running' });
+    await expect(enableRdpHosting({ spawn })).resolves.toBe(false);
+  });
+});
+
+describe('createRdpCredential', () => {
+  it('succeeds only when the account reads back as a Remote Desktop user', async () => {
+    await expect(
+      createRdpCredential('openportal-rdp', 'pw', { spawn: makeFakeSpawn({ stdout: '1' }) }),
+    ).resolves.toBeUndefined();
+    await expect(
+      createRdpCredential('openportal-rdp', 'pw', { spawn: makeFakeSpawn({ stdout: '0' }) }),
+    ).rejects.toThrow('grupo de Área de Trabalho Remota');
   });
 });
 

@@ -7,7 +7,8 @@ function buildAppMenu(getMainWindow) {
     {
       label: 'File',
       submenu: [
-        { role: 'quit', label: 'Sair' }
+        // Pela janela, para passar pela mesma confirmação do X.
+        { label: 'Sair', click: () => getMainWindow()?.close() }
       ]
     },
     {

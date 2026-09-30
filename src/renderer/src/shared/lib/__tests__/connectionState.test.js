@@ -2,6 +2,9 @@ import { describe, it, expect } from 'vitest';
 import {
   connectMachineEntry,
   disconnectMachineEntry,
+  isConnectionHistoryEvent,
+  groupConnectionHistory,
+  listQuickSessions,
   pickFocusAfterDisconnect,
   resolveTransport,
 } from '../connectionState.js';
@@ -54,6 +57,19 @@ describe('pickFocusAfterDisconnect', () => {
   });
 });
 
+describe('isConnectionHistoryEvent', () => {
+  it('records real results only, never an explicit user disconnect', () => {
+    expect(isConnectionHistoryEvent({ state: 'connected' })).toBe(true);
+    expect(isConnectionHistoryEvent({ state: 'error' })).toBe(true);
+    expect(isConnectionHistoryEvent({ state: 'disconnected' })).toBe(true);
+    expect(
+      isConnectionHistoryEvent({ state: 'disconnected', intentional: true, eventName: 'UserStop' }),
+    ).toBe(false);
+    expect(isConnectionHistoryEvent({ state: 'connecting' })).toBe(false);
+    expect(isConnectionHistoryEvent(null)).toBe(false);
+  });
+});
+
 describe('resolveTransport', () => {
   it('defaults to vnc when transport is unset (pre-GOALS-2 machines)', () => {
     expect(resolveTransport({ id: 'pc-a' })).toBe('vnc');
@@ -65,5 +81,39 @@ describe('resolveTransport', () => {
 
   it('treats any other value as vnc', () => {
     expect(resolveTransport({ id: 'pc-a', transport: 'bogus' })).toBe('vnc');
+  });
+});
+
+describe('listQuickSessions', () => {
+  it('lists open sessions that are not saved PCs', () => {
+    const machines = [{ id: 'pc-1' }, { id: 'pc-2' }];
+    const connected = {
+      'pc-2': { machine: { id: 'pc-2', name: 'PC B', host: '100.81.199.56' } },
+      'quick-1': { machine: { id: 'quick-1', name: 'Conexão Direta', host: '100.66.218.65' } },
+    };
+
+    expect(listQuickSessions(machines, connected)).toEqual([
+      { id: 'quick-1', name: 'Conexão Direta', host: '100.66.218.65' },
+    ]);
+    expect(listQuickSessions(machines, {})).toEqual([]);
+  });
+});
+
+describe('groupConnectionHistory', () => {
+  it('shows the newest result of a run of entries for the same PC', () => {
+    const pcB = { name: 'PC B', host: '100.81.199.56' };
+    const history = [
+      { ...pcB, id: '1', time: '10:00', state: 'info', message: 'Aguardando aprovação' },
+      { ...pcB, id: '2', time: '10:01', state: 'connect', message: 'connected' },
+      { name: 'PC A', host: '100.66.218.65', id: '3', time: '10:02', state: 'error', message: 'x' },
+      { ...pcB, id: '4', time: '10:03', state: 'info', message: 'Aguardando aprovação' },
+      { ...pcB, id: '5', time: '10:04', state: 'disconnected', message: 'disconnected' },
+    ];
+
+    expect(groupConnectionHistory(history)).toEqual([
+      { ...history[4], count: 2 },
+      { ...history[2], count: 1 },
+      { ...history[1], count: 2 },
+    ]);
   });
 });

@@ -1,8 +1,10 @@
 import { EventEmitter } from 'node:events';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import sidecarModule from '../rdp-sidecar.js';
 
-const { createRdpSidecarManager } = sidecarModule;
+const { createRdpSidecarManager, resolveSidecarExe } = sidecarModule;
 
 class FakeProcess extends EventEmitter {
   constructor(pid) {
@@ -91,6 +93,47 @@ describe('RDP sidecar lifecycle ownership', () => {
       category: 'local-sidecar',
       eventName: 'PipeConnectFailed',
     });
+  });
+
+  it('stops a sidecar whose embedding failed instead of leaving its window behind', async () => {
+    vi.useFakeTimers();
+    const socket = new FakeSocket(false);
+    const proc = new FakeProcess(42);
+    let spawned = 0;
+    const statuses = [];
+    const manager = createRdpSidecarManager({
+      spawnProcess: () => {
+        spawned += 1;
+        return proc;
+      },
+      connectPipe: async () => socket,
+      randomUUID: () => 'pipe',
+    });
+
+    const starting = manager.startRdpSidecar(
+      'pc-1',
+      { ...startOptions('current'), mode: 'auto-fallback' },
+      (status) => statuses.push(status),
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    socket.emit(
+      'data',
+      nativeStatus({
+        state: 'error',
+        stage: 'terminal',
+        eventName: 'EmbeddingResult',
+        category: 'host-control',
+        reasonCode: 1400,
+      }),
+    );
+
+    expect(await starting).toBe(false);
+    expect(statuses.at(-1)).toMatchObject({ state: 'error', category: 'host-control' });
+    expect(socket.writes.map((line) => JSON.parse(line).cmd)).toEqual(['disconnect']);
+    expect(manager.isRdpSidecarRunning('pc-1')).toBe(false);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(proc.killed).toBe(true);
+    expect(spawned).toBe(1);
   });
 
   it('does not switch host mode when the control never acknowledges readiness', async () => {
@@ -403,10 +446,7 @@ describe('RDP handshake watchdog and terminal states', () => {
       'data',
       Buffer.from('{"type":"status","state":"connected","eventName":"OnLoginComplete"}\n'),
     );
-    socket.emit(
-      'data',
-      Buffer.from('{"type":"status","state":"error","eventName":"OnLogonError","reasonCode":1}\n'),
-    );
+    socket.emit('data', nativeStatus({ state: 'error', eventName: 'OnFatalError', reasonCode: 1 }));
     socket.emit(
       'data',
       Buffer.from(
@@ -420,9 +460,9 @@ describe('RDP handshake watchdog and terminal states', () => {
       'CommandReceived',
       'ConnectReturned',
       'OnLoginComplete',
-      'OnLogonError',
+      'OnFatalError',
     ]);
-    expect(statuses.at(-1)).toMatchObject({ category: 'authentication', reasonCode: 1 });
+    expect(statuses.at(-1)).toMatchObject({ category: 'host-control', reasonCode: 1 });
   });
 
   it('moves from the first-event deadline to the authentication deadline', async () => {
@@ -574,5 +614,460 @@ describe('RDP handshake watchdog and terminal states', () => {
     expect(spawnedArgs[0][6]).toBe('embedded');
     expect(spawnedArgs[1][6]).toBe('native-window');
     expect(manager.isRdpSidecarRunning('pc-1')).toBe(true);
+  });
+});
+
+function nativeStatus(fields) {
+  return Buffer.from(`${JSON.stringify({ type: 'status', ...fields })}\n`);
+}
+
+// GOALS 6: o contrato do lado nativo sem destino RDP nem senha reais.
+describe('RDP native-host contract', () => {
+  it('refuses a connect command before the control acknowledges readiness', async () => {
+    vi.useFakeTimers();
+    const socket = new FakeSocket(false);
+    const statuses = [];
+    const manager = createRdpSidecarManager({
+      spawnProcess: () => new FakeProcess(90),
+      connectPipe: async () => socket,
+      randomUUID: () => 'pipe',
+    });
+    const starting = manager.startRdpSidecar('pc-1', startOptions('current'), (status) =>
+      statuses.push(status),
+    );
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(manager.sendRdpCommand('pc-1', { cmd: 'connect' }, 'current')).toBe(false);
+    expect(socket.writes).toEqual([]);
+    expect(statuses).toEqual([]);
+
+    socket.emit('data', nativeStatus({ state: 'ready', eventName: 'ControlReady' }));
+    expect(await starting).toBe(true);
+    expect(manager.sendRdpCommand('pc-1', { cmd: 'connect' }, 'current')).toBe(true);
+  });
+
+  it("ignores an old generation's deadline after a replacement starts", async () => {
+    vi.useFakeTimers();
+    const oldSocket = new FakeSocket();
+    const newSocket = new FakeSocket();
+    const sockets = [oldSocket, newSocket];
+    const oldProcess = new FakeProcess(91);
+    const newProcess = new FakeProcess(92);
+    const processes = [oldProcess, newProcess];
+    const oldStatuses = [];
+    const newStatuses = [];
+    const manager = createRdpSidecarManager({
+      spawnProcess: () => processes.shift(),
+      connectPipe: async () => sockets.shift(),
+      randomUUID: () => 'pipe',
+      commandDispatchTimeoutMs: 100,
+    });
+    await manager.startRdpSidecar('pc-1', startOptions('old'), (status) =>
+      oldStatuses.push(status),
+    );
+    manager.sendRdpCommand('pc-1', { cmd: 'connect' }, 'old');
+    await manager.startRdpSidecar('pc-1', startOptions('new'), (status) =>
+      newStatuses.push(status),
+    );
+
+    await vi.advanceTimersByTimeAsync(1000);
+
+    expect(oldStatuses.map(({ eventName }) => eventName)).toEqual(['CommandSent']);
+    expect(newStatuses).toEqual([]);
+    expect(newSocket.writes).toEqual([]);
+    expect(newProcess.killed).toBe(false);
+    expect(oldProcess.killed).toBe(true);
+    expect(manager.isRdpSidecarRunning('pc-1')).toBe(true);
+  });
+
+  it('reports one terminal result when native failure, pipe end and process exit race', async () => {
+    const socket = new FakeSocket();
+    const process = new FakeProcess(93);
+    const statuses = [];
+    const manager = createRdpSidecarManager({
+      spawnProcess: () => process,
+      connectPipe: async () => socket,
+      randomUUID: () => 'pipe',
+    });
+    await manager.startRdpSidecar('pc-1', startOptions('current'), (status) =>
+      statuses.push(status),
+    );
+    manager.sendRdpCommand('pc-1', { cmd: 'connect' }, 'current');
+
+    socket.emit('data', nativeStatus({ state: 'error', eventName: 'OnFatalError', reasonCode: 5 }));
+    socket.emit('end');
+    socket.emit('close', false);
+    process.emit('exit', 3, null);
+
+    expect(statuses.filter(({ state }) => state === 'error' || state === 'disconnected')).toEqual([
+      expect.objectContaining({ eventName: 'OnFatalError', category: 'host-control' }),
+    ]);
+  });
+
+  it('asks for a graceful disconnect and kills only after the grace period', async () => {
+    vi.useFakeTimers();
+    const socket = new FakeSocket();
+    const process = new FakeProcess(94);
+    const manager = createRdpSidecarManager({
+      spawnProcess: () => process,
+      connectPipe: async () => socket,
+      randomUUID: () => 'pipe',
+      stopGraceMs: 200,
+    });
+    await manager.startRdpSidecar('pc-1', startOptions('current'));
+
+    manager.stopRdpSidecar('pc-1', 'current', 'user-stop');
+    expect(socket.writes.at(-1)).toBe('{"cmd":"disconnect","lifecycleId":"current"}\n');
+    await vi.advanceTimersByTimeAsync(199);
+    expect(socket.ended).toBe(false);
+    expect(process.killed).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(socket.ended).toBe(true);
+    expect(process.killed).toBe(true);
+  });
+
+  it('closes the channel as soon as the sidecar confirms the disconnect', async () => {
+    vi.useFakeTimers();
+    const socket = new FakeSocket();
+    const process = new FakeProcess(95);
+    const manager = createRdpSidecarManager({
+      spawnProcess: () => process,
+      connectPipe: async () => socket,
+      randomUUID: () => 'pipe',
+      stopGraceMs: 200,
+    });
+    await manager.startRdpSidecar('pc-1', startOptions('current'));
+
+    manager.stopRdpSidecar('pc-1', 'current', 'user-stop');
+    socket.emit('data', nativeStatus({ state: 'disconnected', eventName: 'DisconnectComplete' }));
+
+    expect(socket.ended).toBe(true);
+    expect(process.killed).toBe(false);
+  });
+
+  it('drops a native status stamped with another generation', async () => {
+    const socket = new FakeSocket();
+    const statuses = [];
+    const manager = createRdpSidecarManager({
+      spawnProcess: () => new FakeProcess(96),
+      connectPipe: async () => socket,
+      randomUUID: () => 'pipe',
+    });
+    await manager.startRdpSidecar('pc-1', startOptions('current'), (status) =>
+      statuses.push(status),
+    );
+
+    socket.emit(
+      'data',
+      nativeStatus({ state: 'error', eventName: 'OnFatalError', lifecycleId: 'previous' }),
+    );
+    socket.emit(
+      'data',
+      nativeStatus({ state: 'connected', eventName: 'OnLoginComplete', lifecycleId: 'previous' }),
+    );
+    expect(statuses).toEqual([]);
+
+    socket.emit(
+      'data',
+      nativeStatus({ state: 'connected', eventName: 'OnLoginComplete', lifecycleId: 'current' }),
+    );
+    expect(statuses).toEqual([
+      expect.objectContaining({ state: 'connected', lifecycleId: 'current' }),
+    ]);
+  });
+
+  it('routes visibility changes only to the owning generation', async () => {
+    const socket = new FakeSocket();
+    const manager = createRdpSidecarManager({
+      spawnProcess: () => new FakeProcess(97),
+      connectPipe: async () => socket,
+      randomUUID: () => 'pipe',
+    });
+    await manager.startRdpSidecar('pc-1', startOptions('current'));
+
+    expect(manager.sendRdpCommand('pc-1', { cmd: 'visibility', visible: false }, 'stale')).toBe(
+      false,
+    );
+    expect(manager.sendRdpCommand('pc-1', { cmd: 'visibility', visible: false }, 'current')).toBe(
+      true,
+    );
+    expect(socket.writes).toEqual([
+      '{"cmd":"visibility","visible":false,"lifecycleId":"current"}\n',
+    ]);
+  });
+
+  it("falls back on one machine without touching another machine's session", async () => {
+    vi.useFakeTimers();
+    const first = new FakeSocket();
+    const other = new FakeSocket();
+    const replacement = new FakeSocket();
+    const sockets = [first, other, replacement];
+    const spawned = [];
+    const firstStatuses = [];
+    const otherStatuses = [];
+    const manager = createRdpSidecarManager({
+      spawnProcess: (_exe, args) => {
+        spawned.push(args);
+        return new FakeProcess(100 + spawned.length);
+      },
+      connectPipe: async () => sockets.shift(),
+      randomUUID: () => `pipe-${spawned.length}`,
+      firstEventTimeoutMs: 100,
+    });
+    await manager.startRdpSidecar(
+      'pc-1',
+      { ...startOptions('first'), mode: 'auto-fallback' },
+      (status) => firstStatuses.push(status),
+    );
+    await manager.startRdpSidecar('pc-2', startOptions('other'), (status) =>
+      otherStatuses.push(status),
+    );
+    manager.sendRdpCommand('pc-1', { cmd: 'connect', host: 'safe-host' }, 'first');
+    first.emit('data', nativeStatus({ state: 'connecting', eventName: 'CommandReceived' }));
+    first.emit('data', nativeStatus({ state: 'connecting', eventName: 'ConnectReturned' }));
+
+    await vi.advanceTimersByTimeAsync(100);
+    await vi.waitFor(() => expect(replacement.writes).toHaveLength(1));
+
+    expect(spawned).toHaveLength(3);
+    expect(spawned[2][6]).toBe('native-window');
+    expect(replacement.writes[0]).toContain('"host":"safe-host"');
+    expect(firstStatuses.map(({ eventName }) => eventName)).toContain('NativeFallbackStarting');
+    expect(otherStatuses).toEqual([]);
+    expect(other.writes).toEqual([]);
+    expect(manager.isRdpSidecarRunning('pc-2')).toBe(true);
+  });
+});
+
+// G6-F3: OnLogonError e OnDisconnected viram categorias que a pessoa entende,
+// e a disputa de sessão (alguém logado no destino) não vira falha.
+describe('RDP logon and disconnect classification', () => {
+  async function connectedManager(options = {}) {
+    const socket = new FakeSocket();
+    const statuses = [];
+    const manager = createRdpSidecarManager({
+      spawnProcess: () => new FakeProcess(70),
+      connectPipe: async () => socket,
+      randomUUID: () => 'pipe',
+      firstEventTimeoutMs: 100,
+      authenticationTimeoutMs: 200,
+      ...options,
+    });
+    await manager.startRdpSidecar('pc-1', startOptions('current'), (status) =>
+      statuses.push(status),
+    );
+    manager.sendRdpCommand('pc-1', { cmd: 'connect' }, 'current');
+    for (const eventName of ['CommandReceived', 'ConnectReturned', 'OnConnecting']) {
+      socket.emit('data', nativeStatus({ state: 'connecting', eventName }));
+    }
+    return { socket, statuses, manager };
+  }
+
+  it('waits on session contention and still reaches a clean login', async () => {
+    vi.useFakeTimers();
+    const { socket, statuses } = await connectedManager();
+
+    socket.emit(
+      'data',
+      nativeStatus({ state: 'warning', eventName: 'OnLogonError', reasonCode: -5 }),
+    );
+    expect(statuses.at(-1)).toMatchObject({ state: 'warning', category: 'session-contention' });
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(statuses.some(({ state }) => state === 'error')).toBe(false);
+
+    socket.emit(
+      'data',
+      nativeStatus({ state: 'warning', eventName: 'OnLogonError', reasonCode: -2 }),
+    );
+    socket.emit('data', nativeStatus({ state: 'connected', eventName: 'OnLoginComplete' }));
+
+    expect(statuses.map(({ state }) => state)).not.toContain('error');
+    expect(statuses.at(-1)).toMatchObject({ state: 'connected', eventName: 'OnLoginComplete' });
+  });
+
+  it('re-arms the authentication deadline when Winlogon continues after contention', async () => {
+    vi.useFakeTimers();
+    const { socket, statuses } = await connectedManager();
+
+    socket.emit(
+      'data',
+      nativeStatus({ state: 'warning', eventName: 'OnLogonError', reasonCode: -5 }),
+    );
+    socket.emit(
+      'data',
+      nativeStatus({ state: 'warning', eventName: 'OnLogonError', reasonCode: -2 }),
+    );
+    await vi.advanceTimersByTimeAsync(200);
+
+    expect(statuses.at(-1)).toMatchObject({
+      category: 'timeout',
+      eventName: 'AuthenticationTimeout',
+    });
+  });
+
+  it('reports a rejected NLA password as one authentication failure', async () => {
+    vi.useFakeTimers();
+    const { socket, statuses } = await connectedManager();
+
+    socket.emit(
+      'data',
+      nativeStatus({ state: 'disconnected', eventName: 'OnDisconnected', reasonCode: 2055 }),
+    );
+    socket.emit(
+      'data',
+      nativeStatus({ state: 'disconnected', eventName: 'OnDisconnected', reasonCode: 2308 }),
+    );
+
+    const failures = statuses.filter(({ state }) => state === 'error');
+    expect(failures).toHaveLength(1);
+    expect(failures[0]).toMatchObject({ category: 'authentication', reasonCode: 2055 });
+  });
+
+  it('keeps the logon category when the refused contention ends in a plain disconnect', async () => {
+    vi.useFakeTimers();
+    const { socket, statuses } = await connectedManager();
+
+    socket.emit(
+      'data',
+      nativeStatus({ state: 'warning', eventName: 'OnLogonError', reasonCode: -5 }),
+    );
+    socket.emit(
+      'data',
+      nativeStatus({
+        state: 'disconnected',
+        eventName: 'OnDisconnected',
+        reasonCode: 3,
+        extendedReason: 0,
+      }),
+    );
+
+    expect(statuses.at(-1)).toMatchObject({ state: 'error', category: 'contention-ended' });
+  });
+
+  it('names a session taken over by another connection', async () => {
+    vi.useFakeTimers();
+    const { socket, statuses } = await connectedManager();
+
+    socket.emit('data', nativeStatus({ state: 'connected', eventName: 'OnLoginComplete' }));
+    socket.emit(
+      'data',
+      nativeStatus({
+        state: 'disconnected',
+        eventName: 'OnDisconnected',
+        reasonCode: 3,
+        extendedReason: 5,
+      }),
+    );
+
+    expect(statuses.at(-1)).toMatchObject({ state: 'disconnected', category: 'replaced' });
+  });
+
+  it('ignores a logon event after login instead of going back to connecting', async () => {
+    vi.useFakeTimers();
+    const { socket, statuses } = await connectedManager();
+
+    socket.emit('data', nativeStatus({ state: 'connected', eventName: 'OnLoginComplete' }));
+    socket.emit(
+      'data',
+      nativeStatus({ state: 'warning', eventName: 'OnLogonError', reasonCode: 3 }),
+    );
+
+    expect(statuses.at(-1)).toMatchObject({ state: 'connected' });
+  });
+
+  it('asks for a window probe before giving up on a silent control', async () => {
+    vi.useFakeTimers();
+    const socket = new FakeSocket();
+    const statuses = [];
+    const manager = createRdpSidecarManager({
+      spawnProcess: () => new FakeProcess(71),
+      connectPipe: async () => socket,
+      randomUUID: () => 'pipe',
+      firstEventTimeoutMs: 100,
+    });
+    await manager.startRdpSidecar('pc-1', startOptions('current'), (status) =>
+      statuses.push(status),
+    );
+    manager.sendRdpCommand('pc-1', { cmd: 'connect' }, 'current');
+    socket.emit('data', nativeStatus({ state: 'connecting', eventName: 'CommandReceived' }));
+    socket.emit('data', nativeStatus({ state: 'connecting', eventName: 'ConnectReturned' }));
+    await vi.advanceTimersByTimeAsync(100);
+
+    const commands = socket.writes.map((line) => JSON.parse(line).cmd);
+    expect(commands.slice(-2)).toEqual(['probe-windows', 'disconnect']);
+    socket.emit(
+      'data',
+      nativeStatus({
+        state: 'connecting',
+        eventName: 'WindowProbe',
+        windows: [{ className: '#32770', title: 'Aviso', owned: true, sameProcess: true }],
+      }),
+    );
+    expect(statuses.map(({ eventName }) => eventName)).not.toContain('WindowProbe');
+    expect(statuses.at(-1)).toMatchObject({ category: 'timeout', eventName: 'FirstEventTimeout' });
+  });
+});
+
+// GOALS 13: o instalador leva a sidecar em resources/sidecar (package.json,
+// build.extraResources) e o app instalado a procura lá.
+describe('resolveSidecarExe', () => {
+  it('uses the installed resources folder when running from app.asar', () => {
+    const resourcesPath = path.join('C:', 'Program Files', 'OpenPortal Remote', 'resources');
+    const moduleDir = path.join(resourcesPath, 'app.asar', 'src', 'main', 'connection');
+
+    expect(resolveSidecarExe({ moduleDir, resourcesPath })).toBe(
+      path.join(resourcesPath, 'sidecar', 'OpenPortalRdpSidecar.exe'),
+    );
+  });
+
+  it('uses the Debug build inside the project during development', () => {
+    const moduleDir = path.join('D:', 'proj', 'src', 'main', 'connection');
+
+    expect(resolveSidecarExe({ moduleDir, resourcesPath: 'unused' })).toBe(
+      path.join('D:', 'proj', 'sidecar', 'bin', 'Debug', 'OpenPortalRdpSidecar.exe'),
+    );
+  });
+
+  it('matches the folder the installer copies the Release build into', () => {
+    const { build } = JSON.parse(
+      readFileSync(new URL('../../../../package.json', import.meta.url), 'utf8'),
+    );
+
+    expect(build.extraResources).toContainEqual(
+      expect.objectContaining({ from: 'sidecar/bin/Release', to: 'sidecar' }),
+    );
+  });
+});
+
+// Caso 3.7 da bateria: recarregar a tela deixava a sidecar órfã.
+describe('stopAllRdpSidecars', () => {
+  it('stops every machine gracefully when the renderer goes away', async () => {
+    vi.useFakeTimers();
+    const sockets = { 'pc-1': new FakeSocket(), 'pc-2': new FakeSocket() };
+    const procs = [];
+    let next = 'pc-1';
+    const manager = createRdpSidecarManager({
+      spawnProcess: () => {
+        const proc = new FakeProcess(80 + procs.length);
+        procs.push(proc);
+        return proc;
+      },
+      connectPipe: async () => sockets[next],
+      randomUUID: () => 'pipe',
+    });
+    await manager.startRdpSidecar('pc-1', startOptions('one'), () => {});
+    next = 'pc-2';
+    await manager.startRdpSidecar('pc-2', startOptions('two'), () => {});
+
+    manager.stopAllRdpSidecars('renderer-navigation');
+
+    for (const socket of Object.values(sockets)) {
+      expect(socket.writes.map((line) => JSON.parse(line).cmd)).toContain('disconnect');
+    }
+    expect(manager.isRdpSidecarRunning('pc-1')).toBe(false);
+    expect(manager.isRdpSidecarRunning('pc-2')).toBe(false);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(procs.every((proc) => proc.killed)).toBe(true);
   });
 });

@@ -34,3 +34,34 @@ export function pickFocusAfterDisconnect(connectedMachines, focusedId, removedId
 export function resolveTransport(machine) {
   return machine?.transport === 'rdp' ? 'rdp' : 'vnc';
 }
+
+// Só resultados entram no histórico de conexões: conectado, erro ou queda.
+// "Conectando" é passo intermediário, e a desconexão pedida pelo próprio
+// usuário (intentional) não é um evento a registrar.
+export function isConnectionHistoryEvent(status) {
+  return !status?.intentional && ['connected', 'error', 'disconnected'].includes(status?.state);
+}
+
+// Conexões abertas que não são PCs salvos (conexão direta por IP). Sem
+// aparecer na barra lateral, não havia como voltar a uma delas depois de
+// focar outra sessão (bateria de 2026-09-29, bloco 5).
+export function listQuickSessions(machines, connectedMachines) {
+  const saved = new Set(machines.map((m) => m.id));
+  return Object.entries(connectedMachines || {})
+    .filter(([id]) => !saved.has(id))
+    .map(([id, entry]) => ({ id, name: entry.machine?.name, host: entry.machine?.host }));
+}
+
+// Mescla entradas consecutivas do mesmo PC (name+host) numa linha com
+// contador, mais recente primeiro. A linha mostra o resultado MAIS RECENTE:
+// antes ficava com o da entrada mais antiga do grupo ("Aguardando
+// aprovação...", visto na bateria de 2026-09-29).
+export function groupConnectionHistory(history) {
+  const groups = [];
+  for (const entry of history.slice().reverse()) {
+    const last = groups[groups.length - 1];
+    if (last && last.name === entry.name && last.host === entry.host) last.count += 1;
+    else groups.push({ ...entry, count: 1 });
+  }
+  return groups;
+}

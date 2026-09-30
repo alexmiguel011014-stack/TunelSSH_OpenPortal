@@ -27,6 +27,7 @@ namespace OpenPortalRdpSidecar
     //
     // Contrato de argv (nada sensível aqui):
     //   <pipeName> <parentHwnd> <x> <y> <w> <h> <hostMode> <lifecycleId> <ownerPid>
+    //   [<ipcTransport>] — só no modo ipc-test, para a comparação do G7-R4
     // Contrato do pipe: uma linha JSON por comando, UTF-8, terminada em \n:
     //   {"cmd":"resize","x":10,"y":10,"w":800,"h":600}
     //   {"cmd":"connect","host":"100.x.x.x","port":3389,"username":"u","password":"p"}
@@ -64,13 +65,58 @@ namespace OpenPortalRdpSidecar
         [DllImport("user32.dll")]
         static extern bool IsWindow(IntPtr hWnd);
 
+        internal delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
+
+        [DllImport("user32.dll")]
+        internal static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
+
+        [DllImport("user32.dll")]
+        internal static extern bool IsWindowVisible(IntPtr hWnd);
+
+        [DllImport("user32.dll")]
+        internal static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
+
+        [DllImport("user32.dll")]
+        internal static extern IntPtr GetWindow(IntPtr hWnd, uint uCmd);
+
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+        internal static extern int GetClassName(IntPtr hWnd, StringBuilder lpClassName, int nMaxCount);
+
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+        internal static extern int GetWindowText(IntPtr hWnd, StringBuilder lpString, int nMaxCount);
+
+        internal const uint GW_OWNER = 4;
+
+        // G7-R4: marcadores de início/fim das operações do pipe no stderr,
+        // ligados só quando o modo ipc-test recebe um transporte explícito.
+        static bool s_traceIpc;
+        static uint s_uiThreadId;
+
+        internal static void IpcTrace(string text)
+        {
+            if (!s_traceIpc) return;
+            uint thread = GetCurrentThreadId();
+            try
+            {
+                Console.Error.WriteLine(
+                    "[ipc] thread=" + (thread == s_uiThreadId ? "ui" : "worker") + " " + text
+                );
+            }
+            catch
+            {
+            }
+        }
+
         internal const int GWL_STYLE = -16;
         const int WS_CHILD = 0x40000000;
         const int WS_POPUP = unchecked((int)0x80000000);
         const int WS_CAPTION = 0x00C00000;
         const int WS_MINIMIZE = 0x20000000;
         internal const uint SWP_NOZORDER = 0x0004;
+        internal static readonly IntPtr HWND_TOP = IntPtr.Zero;
         internal const uint SWP_NOACTIVATE = 0x0010;
+        internal const uint SWP_NOSIZE = 0x0001;
+        internal const uint SWP_NOMOVE = 0x0002;
         const int SW_HIDE = 0;
         const int SW_SHOWNORMAL = 1;
 
@@ -89,15 +135,18 @@ namespace OpenPortalRdpSidecar
             // form.Location não serve mais uma vez WS_CHILD: WinForms ainda
             // pensa em coordenadas de tela, mas o Windows já espera
             // coordenadas relativas ao pai — SetWindowPos direto é o que
-            // funciona sem ambiguidade.
+            // funciona sem ambiguidade. HWND_TOP (sem SWP_NOZORDER) põe o
+            // form acima das janelas filhas do Chromium: na bateria de
+            // 2026-09-29 ele ficou atrás delas, e a sessão (inclusive a
+            // pergunta "outro usuário") não aparecia.
             bool positioned = SetWindowPos(
                 form.Handle,
-                IntPtr.Zero,
+                HWND_TOP,
                 x,
                 y,
                 w,
                 h,
-                SWP_NOZORDER | SWP_NOACTIVATE
+                SWP_NOACTIVATE
             );
             form.RecordEmbeddingResult(setParentError, positioned);
         }
@@ -125,6 +174,15 @@ namespace OpenPortalRdpSidecar
                 : "legacy";
             int ownerPid = 0;
             if (args.Length >= 9) int.TryParse(args[8], out ownerPid);
+            // G7-R4: só o modo ipc-test aceita outro transporte, para a
+            // comparação medida; conexões reais usam sempre o duplex assíncrono.
+            string ipcTransport = "async-duplex";
+            if (hostMode == "ipc-test" && args.Length >= 10)
+            {
+                ipcTransport = args[9];
+                s_traceIpc = true;
+            }
+            s_uiThreadId = GetCurrentThreadId();
 
             Application.EnableVisualStyles();
 
@@ -154,7 +212,7 @@ namespace OpenPortalRdpSidecar
                 }
                 if (!string.IsNullOrEmpty(pipeName))
                 {
-                    var listenerThread = new Thread(() => RunPipeServer(pipeName, form));
+                    var listenerThread = new Thread(() => RunPipeServer(pipeName, form, ipcTransport));
                     listenerThread.IsBackground = true;
                     listenerThread.Start();
                 }
@@ -197,7 +255,7 @@ namespace OpenPortalRdpSidecar
             }
         }
 
-        static void ExitForm(SidecarForm form)
+        internal static void ExitForm(SidecarForm form)
         {
             if (form.IsDisposed || !form.IsHandleCreated) return;
             try
@@ -217,98 +275,13 @@ namespace OpenPortalRdpSidecar
         // enfileirado de volta na thread da UI via BeginInvoke antes de
         // tocar em qualquer Win32/WinForms (regra de ouro do WinForms:
         // só a thread que criou o handle pode mexer nele).
-        static void RunPipeServer(string pipeName, SidecarForm form)
+        static void RunPipeServer(string pipeName, SidecarForm form, string ipcTransport)
         {
-            var commandSerializer = new JavaScriptSerializer();
             try
             {
-                var pipeSecurity = new PipeSecurity();
-                pipeSecurity.SetAccessRuleProtection(true, false);
-                pipeSecurity.AddAccessRule(new PipeAccessRule(
-                    WindowsIdentity.GetCurrent().User,
-                    PipeAccessRights.FullControl,
-                    AccessControlType.Allow
-                ));
-                using (var server = new NamedPipeServerStream(
-                    pipeName,
-                    PipeDirection.InOut,
-                    1,
-                    PipeTransmissionMode.Byte,
-                    PipeOptions.Asynchronous,
-                    0,
-                    0,
-                    pipeSecurity
-                ))
-                {
-                    server.WaitForConnection();
-                    using (var statuses = new BlockingCollection<StatusMessage>(256))
-                    using (var writer = new StreamWriter(server, new UTF8Encoding(false), 1024, true))
-                    using (var reader = new StreamReader(server, Encoding.UTF8, true, 1024, true))
-                    {
-                        int transportFailed = 0;
-                        var writerThread = new Thread(() =>
-                        {
-                            var statusSerializer = new JavaScriptSerializer();
-                            try
-                            {
-                                foreach (var message in statuses.GetConsumingEnumerable())
-                                {
-                                    writer.WriteLineAsync(statusSerializer.Serialize(message))
-                                        .GetAwaiter()
-                                        .GetResult();
-                                    writer.FlushAsync().GetAwaiter().GetResult();
-                                }
-                            }
-                            catch
-                            {
-                                if (Interlocked.Exchange(ref transportFailed, 1) == 0)
-                                {
-                                    form.SetStatusReporter(null);
-                                    ExitForm(form);
-                                }
-                            }
-                        });
-                        writerThread.IsBackground = true;
-                        writerThread.Start();
-
-                        form.SetStatusReporter(message =>
-                        {
-                            if (!statuses.TryAdd(message) &&
-                                Interlocked.Exchange(ref transportFailed, 1) == 0)
-                            {
-                                form.SetStatusReporter(null);
-                                ExitForm(form);
-                            }
-                        });
-
-                        try
-                        {
-                            string line;
-                            while ((line = reader.ReadLineAsync().GetAwaiter().GetResult()) != null)
-                            {
-                                object parsed;
-                                try
-                                {
-                                    parsed = commandSerializer.DeserializeObject(line);
-                                }
-                                catch
-                                {
-                                    continue;
-                                }
-                                var cmd = parsed as System.Collections.Generic.Dictionary<string, object>;
-                                if (cmd == null) continue;
-                                DispatchCommand(form, cmd);
-                            }
-                        }
-                        finally
-                        {
-                            form.SetStatusReporter(null);
-                            statuses.CompleteAdding();
-                            if (!writerThread.Join(500)) server.Dispose();
-                        }
-                        ExitForm(form);
-                    }
-                }
+                if (ipcTransport == "sync-duplex") RunSyncDuplexPipe(pipeName, form);
+                else if (ipcTransport == "split") RunSplitPipes(pipeName, form);
+                else RunAsyncDuplexPipe(pipeName, form);
             }
             catch (ObjectDisposedException)
             {
@@ -318,6 +291,177 @@ namespace OpenPortalRdpSidecar
                 // O nome do pipe é exclusivo desta geração; o processo
                 // principal não reconecta. Encerrar evita uma sidecar órfã.
                 ExitForm(form);
+            }
+        }
+
+        static PipeSecurity OwnerOnlyPipeSecurity()
+        {
+            var pipeSecurity = new PipeSecurity();
+            pipeSecurity.SetAccessRuleProtection(true, false);
+            pipeSecurity.AddAccessRule(new PipeAccessRule(
+                WindowsIdentity.GetCurrent().User,
+                PipeAccessRights.FullControl,
+                AccessControlType.Allow
+            ));
+            return pipeSecurity;
+        }
+
+        // Transporte em uso (GOALS 7): um pipe duplex aberto com
+        // PipeOptions.Asynchronous, leitura e escrita independentes, e status
+        // publicados por uma fila consumida fora da thread da UI.
+        static void RunAsyncDuplexPipe(string pipeName, SidecarForm form)
+        {
+            using (var server = new NamedPipeServerStream(
+                pipeName,
+                PipeDirection.InOut,
+                1,
+                PipeTransmissionMode.Byte,
+                PipeOptions.Asynchronous,
+                0,
+                0,
+                OwnerOnlyPipeSecurity()
+            ))
+            {
+                server.WaitForConnection();
+                using (var writer = new StreamWriter(server, new UTF8Encoding(false), 1024, true))
+                using (var reader = new StreamReader(server, Encoding.UTF8, true, 1024, true))
+                using (var channel = new StatusChannel(writer, form, true))
+                {
+                    try
+                    {
+                        ReadCommands(reader, form, true);
+                    }
+                    finally
+                    {
+                        if (!channel.Complete()) server.Dispose();
+                    }
+                    ExitForm(form);
+                }
+            }
+        }
+
+        // G7-R4 (a), só no modo ipc-test: o transporte anterior ao GOALS 7 —
+        // pipe duplex síncrono, com o status escrito pela thread que o gera
+        // (a da UI). Existe só para medir o defeito ao lado das alternativas.
+        static void RunSyncDuplexPipe(string pipeName, SidecarForm form)
+        {
+            using (var server = new NamedPipeServerStream(
+                pipeName,
+                PipeDirection.InOut,
+                1,
+                PipeTransmissionMode.Byte,
+                PipeOptions.None,
+                0,
+                0,
+                OwnerOnlyPipeSecurity()
+            ))
+            {
+                server.WaitForConnection();
+                var serializer = new JavaScriptSerializer();
+                var writeLock = new object();
+                using (var writer = new StreamWriter(server, new UTF8Encoding(false), 1024, true))
+                using (var reader = new StreamReader(server, Encoding.UTF8, true, 1024, true))
+                {
+                    form.SetStatusReporter(message =>
+                    {
+                        lock (writeLock)
+                        {
+                            try
+                            {
+                                IpcTrace("status-write-begin " + message.eventName);
+                                writer.WriteLine(serializer.Serialize(message));
+                                writer.Flush();
+                                IpcTrace("status-write-end " + message.eventName);
+                            }
+                            catch
+                            {
+                                IpcTrace("status-write-failed " + message.eventName);
+                            }
+                        }
+                    });
+                    try
+                    {
+                        ReadCommands(reader, form, false);
+                    }
+                    finally
+                    {
+                        form.SetStatusReporter(null);
+                    }
+                    ExitForm(form);
+                }
+            }
+        }
+
+        // G7-R4 (c), só no modo ipc-test: dois pipes independentes, comandos em
+        // "<nome>-cmd" e status em "<nome>-status", cada um usado num sentido
+        // e na sua thread. É a alternativa medida contra o duplex assíncrono.
+        // Os dois handles são InOut: o cliente `net` do Node sempre lê do pipe
+        // e fecha na hora um pipe só de entrada (PipeDirection.In).
+        static void RunSplitPipes(string pipeName, SidecarForm form)
+        {
+            using (var commandPipe = new NamedPipeServerStream(
+                pipeName + "-cmd",
+                PipeDirection.InOut,
+                1,
+                PipeTransmissionMode.Byte,
+                PipeOptions.None,
+                0,
+                0,
+                OwnerOnlyPipeSecurity()
+            ))
+            using (var statusPipe = new NamedPipeServerStream(
+                pipeName + "-status",
+                PipeDirection.InOut,
+                1,
+                PipeTransmissionMode.Byte,
+                PipeOptions.None,
+                0,
+                0,
+                OwnerOnlyPipeSecurity()
+            ))
+            {
+                statusPipe.WaitForConnection();
+                commandPipe.WaitForConnection();
+                using (var writer = new StreamWriter(statusPipe, new UTF8Encoding(false), 1024, true))
+                using (var reader = new StreamReader(commandPipe, Encoding.UTF8, true, 1024, true))
+                using (var channel = new StatusChannel(writer, form, false))
+                {
+                    try
+                    {
+                        ReadCommands(reader, form, false);
+                    }
+                    finally
+                    {
+                        if (!channel.Complete()) statusPipe.Dispose();
+                    }
+                    ExitForm(form);
+                }
+            }
+        }
+
+        static void ReadCommands(StreamReader reader, SidecarForm form, bool asyncReads)
+        {
+            var commandSerializer = new JavaScriptSerializer();
+            while (true)
+            {
+                IpcTrace("command-read-begin");
+                string line = asyncReads
+                    ? reader.ReadLineAsync().GetAwaiter().GetResult()
+                    : reader.ReadLine();
+                IpcTrace("command-read-end");
+                if (line == null) return;
+                object parsed;
+                try
+                {
+                    parsed = commandSerializer.DeserializeObject(line);
+                }
+                catch
+                {
+                    continue;
+                }
+                var cmd = parsed as System.Collections.Generic.Dictionary<string, object>;
+                if (cmd == null) continue;
+                DispatchCommand(form, cmd);
             }
         }
 
@@ -369,12 +513,20 @@ namespace OpenPortalRdpSidecar
                         }
                         break;
 
+                    case "probe-windows":
+                        form.ReportWindowProbe();
+                        break;
+
                     case "visibility":
                         // A janela não é filha do DOM — o React só consegue
                         // escondê-la/mostrá-la explicitamente por aqui (ver
                         // rdp-protocol.js, buildVisibilityCommand).
                         bool visible = cmd.ContainsKey("visible") && Convert.ToBoolean(cmd["visible"]);
                         ShowWindow(form.Handle, visible ? SW_SHOWNORMAL : SW_HIDE);
+                        if (visible)
+                        {
+                            SetWindowPos(form.Handle, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+                        }
                         break;
 
                     case "disconnect":
@@ -390,6 +542,87 @@ namespace OpenPortalRdpSidecar
         }
     }
 
+    // Fila limitada de status consumida por uma thread de fundo (GOALS 7): a
+    // UI e os eventos do ActiveX só enfileiram, nunca escrevem no pipe. Fila
+    // cheia ou escrita que falha encerram a sidecar uma única vez.
+    sealed class StatusChannel : IDisposable
+    {
+        readonly BlockingCollection<StatusMessage> _statuses = new BlockingCollection<StatusMessage>(256);
+        readonly SidecarForm _form;
+        readonly Thread _writerThread;
+        int _failed;
+
+        public StatusChannel(StreamWriter writer, SidecarForm form, bool asyncWrites)
+        {
+            _form = form;
+            _writerThread = new Thread(() =>
+            {
+                var serializer = new JavaScriptSerializer();
+                try
+                {
+                    foreach (var message in _statuses.GetConsumingEnumerable())
+                    {
+                        string line = serializer.Serialize(message);
+                        Program.IpcTrace("status-write-begin " + message.eventName);
+                        if (asyncWrites)
+                        {
+                            writer.WriteLineAsync(line).GetAwaiter().GetResult();
+                            writer.FlushAsync().GetAwaiter().GetResult();
+                        }
+                        else
+                        {
+                            writer.WriteLine(line);
+                            writer.Flush();
+                        }
+                        Program.IpcTrace("status-write-end " + message.eventName);
+                    }
+                }
+                catch
+                {
+                    Fail();
+                }
+            });
+            _writerThread.IsBackground = true;
+            _writerThread.Start();
+            form.SetStatusReporter(message =>
+            {
+                bool added;
+                try
+                {
+                    added = _statuses.TryAdd(message);
+                }
+                catch (InvalidOperationException)
+                {
+                    // A UI leu o reporter um instante antes de o canal fechar
+                    // (CompleteAdding/Dispose): o status é descartado em vez de
+                    // virar exceção não tratada na thread da UI.
+                    return;
+                }
+                if (!added) Fail();
+            });
+        }
+
+        void Fail()
+        {
+            if (Interlocked.Exchange(ref _failed, 1) != 0) return;
+            _form.SetStatusReporter(null);
+            Program.ExitForm(_form);
+        }
+
+        // true se o escritor esvaziou a fila a tempo; false se ficou preso.
+        public bool Complete()
+        {
+            _form.SetStatusReporter(null);
+            _statuses.CompleteAdding();
+            return _writerThread.Join(500);
+        }
+
+        public void Dispose()
+        {
+            _statuses.Dispose();
+        }
+    }
+
     class StatusMessage
     {
         public string type { get; set; }
@@ -398,6 +631,7 @@ namespace OpenPortalRdpSidecar
         public string eventName { get; set; }
         public string category { get; set; }
         public int? reasonCode { get; set; }
+        public int? extendedReason { get; set; }
         public string lifecycleId { get; set; }
         public string hostMode { get; set; }
         public string timestamp { get; set; }
@@ -413,6 +647,17 @@ namespace OpenPortalRdpSidecar
         public int? setParentError { get; set; }
         public bool? positioned { get; set; }
         public int? sequence { get; set; }
+        public System.Collections.Generic.List<ProbedWindow> windows { get; set; }
+    }
+
+    // Uma janela visível da sidecar (ou que pertence a ela) no WindowProbe:
+    // classe, título curto e dono. Nada do conteúdo da janela.
+    class ProbedWindow
+    {
+        public string className { get; set; }
+        public string title { get; set; }
+        public bool owned { get; set; }
+        public bool sameProcess { get; set; }
     }
 
     class SidecarForm : Form
@@ -468,9 +713,10 @@ namespace OpenPortalRdpSidecar
             {
                 _rdp = new AxMsRdpClient11NotSafeForScripting();
                 ((ISupportInitialize)_rdp).BeginInit();
-                // Adicionado depois do label: no WinForms, controles
-                // adicionados por último ficam por cima no z-order, então o
-                // controle RDP cobre o label assim que fica visível.
+                // Adicionado depois do label, o que no WinForms o deixa ABAIXO
+                // no z-order (índice 1): quando o label está visível, ele cobre
+                // o controle. Por isso SetStatus(null) assim que a sessão tem o
+                // que mostrar (OnConnected).
                 Controls.Add(_rdp);
                 ((ISupportInitialize)_rdp).EndInit();
                 _rdp.Dock = DockStyle.Fill;
@@ -482,7 +728,11 @@ namespace OpenPortalRdpSidecar
                 };
                 _rdp.OnConnected += (s, e) =>
                 {
-                    SetStatus("Autenticando...");
+                    // O label fica por cima do controle (foi adicionado antes,
+                    // então tem índice 0 no z-order). Com o transporte pronto, a
+                    // própria sessão desenha o login do Windows, inclusive a
+                    // pergunta "outro usuário está conectado"; o label a escondia.
+                    SetStatus(null);
                     ReportStatus("connecting", "transport-connected", "OnConnected");
                 };
                 _rdp.OnLoginComplete += (s, e) =>
@@ -492,18 +742,30 @@ namespace OpenPortalRdpSidecar
                 };
                 _rdp.OnDisconnected += (s, e) =>
                 {
-                    SetStatus(string.Format("Desconectado (motivo {0})", e.discReason));
-                    ReportStatus("disconnected", "terminal", "OnDisconnected", null, e.discReason);
+                    // O motivo numérico vai só para o log; a mensagem para a
+                    // pessoa aparece no OpenPortal (rdp-protocol.js).
+                    SetStatus("Sessão RDP encerrada. O motivo aparece no OpenPortal.");
+                    ReportStatus(
+                        "disconnected",
+                        "terminal",
+                        "OnDisconnected",
+                        null,
+                        e.discReason,
+                        extendedReason: ExtendedReasonValue()
+                    );
                 };
                 _rdp.OnFatalError += (s, e) =>
                 {
-                    SetStatus(string.Format("Erro fatal (código {0})", e.errorCode));
+                    SetStatus("O componente RDP falhou. O motivo aparece no OpenPortal.");
                     ReportStatus("error", "terminal", "OnFatalError", "host-control", e.errorCode);
                 };
                 _rdp.OnLogonError += (s, e) =>
                 {
-                    SetStatus(string.Format("Erro de login (código {0})", e.lError));
-                    ReportStatus("error", "terminal", "OnLogonError", "authentication", e.lError);
+                    // Nem todo OnLogonError é falha: a disputa de sessão
+                    // (alguém logado no destino) e avisos do Winlogon chegam
+                    // por aqui, e a própria sessão mostra o diálogo. Quem
+                    // classifica é rdp-protocol.js (classifyRdpLogonError).
+                    ReportStatus("warning", "logon-event", "OnLogonError", null, e.lError);
                 };
                 _rdp.OnAuthenticationWarningDisplayed += (s, e) =>
                 {
@@ -517,7 +779,7 @@ namespace OpenPortalRdpSidecar
                 };
                 _rdp.OnAuthenticationWarningDismissed += (s, e) =>
                 {
-                    SetStatus("Autenticando...");
+                    SetStatus(ConnectedValue() == 1 ? null : "Autenticando...");
                     ReportStatus(
                         "connecting",
                         "authenticating",
@@ -609,14 +871,16 @@ namespace OpenPortalRdpSidecar
         public void ResizeHost(int x, int y, int w, int h)
         {
             if (_hostMode != "embedded") return;
+            // O Chromium pode recolocar as janelas filhas dele por cima ao
+            // redimensionar; HWND_TOP mantém a sessão visível.
             Program.SetWindowPos(
                 Handle,
-                IntPtr.Zero,
+                Program.HWND_TOP,
                 x,
                 y,
                 w,
                 h,
-                Program.SWP_NOZORDER | Program.SWP_NOACTIVATE
+                Program.SWP_NOACTIVATE
             );
         }
 
@@ -679,6 +943,51 @@ namespace OpenPortalRdpSidecar
             }
         }
 
+        int? ExtendedReasonValue()
+        {
+            try
+            {
+                return _rdp == null ? (int?)null : (int)_rdp.ExtendedDisconnectReason;
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        // G6-C2: janelas visíveis deste processo ou cujo dono é este form
+        // (diálogos de certificado e de credencial), para o log dizer se uma
+        // espera tinha um diálogo aberto. No máximo 8, só classe e título.
+        public void ReportWindowProbe()
+        {
+            var windows = new System.Collections.Generic.List<ProbedWindow>();
+            uint ownPid = (uint)Process.GetCurrentProcess().Id;
+            IntPtr formHandle = Handle;
+            Program.EnumWindows((hwnd, _) =>
+            {
+                if (windows.Count >= 8) return false;
+                if (hwnd == formHandle || !Program.IsWindowVisible(hwnd)) return true;
+                uint windowPid;
+                Program.GetWindowThreadProcessId(hwnd, out windowPid);
+                bool owned = Program.GetWindow(hwnd, Program.GW_OWNER) == formHandle;
+                bool sameProcess = windowPid == ownPid;
+                if (!owned && !sameProcess) return true;
+                var className = new StringBuilder(65);
+                var title = new StringBuilder(65);
+                Program.GetClassName(hwnd, className, className.Capacity);
+                Program.GetWindowText(hwnd, title, title.Capacity);
+                windows.Add(new ProbedWindow
+                {
+                    className = className.ToString(),
+                    title = title.ToString(),
+                    owned = owned,
+                    sameProcess = sameProcess,
+                });
+                return true;
+            }, IntPtr.Zero);
+            ReportStatus(_state, _stage, "WindowProbe", _category, _reasonCode, windows: windows);
+        }
+
         long DpiContextValue()
         {
             try
@@ -697,7 +1006,9 @@ namespace OpenPortalRdpSidecar
             string eventName,
             string category = null,
             int? reasonCode = null,
-            int? sequence = null
+            int? sequence = null,
+            int? extendedReason = null,
+            System.Collections.Generic.List<ProbedWindow> windows = null
         )
         {
             _state = state;
@@ -715,6 +1026,7 @@ namespace OpenPortalRdpSidecar
                     eventName = eventName,
                     category = category,
                     reasonCode = reasonCode,
+                    extendedReason = extendedReason,
                     lifecycleId = _lifecycleId,
                     hostMode = _hostMode,
                     timestamp = DateTime.UtcNow.ToString("o"),
@@ -730,6 +1042,7 @@ namespace OpenPortalRdpSidecar
                     setParentError = _setParentError,
                     positioned = _positioned,
                     sequence = sequence,
+                    windows = windows,
                 };
                 Volatile.Write(ref _lastStatus, message);
                 Volatile.Read(ref _reportStatus)?.Invoke(message);
@@ -753,6 +1066,12 @@ namespace OpenPortalRdpSidecar
             {
                 SetStatus("Controle RDP ainda não está pronto.");
                 ReportStatus("error", "terminal", "ConnectBeforeReady", "host-control");
+                return;
+            }
+            if (string.IsNullOrEmpty(username) || string.IsNullOrEmpty(password))
+            {
+                SetStatus("Usuário ou senha RDP não configurados no OpenPortal.");
+                ReportStatus("error", "terminal", "CredentialsMissing", "authentication");
                 return;
             }
             SetStatus("Conectando a " + host + "...");
@@ -785,6 +1104,16 @@ namespace OpenPortalRdpSidecar
                 // escolhida em vez das libs JS abandonadas (ver GOALS.md).
                 var adv7 = (IMsRdpClientAdvancedSettings7)_rdp.AdvancedSettings7;
                 adv7.EnableCredSspSupport = true;
+
+                // As credenciais vêm só do OpenPortal. Sem isto, o controle abre
+                // "Digite suas credenciais" do Windows com a conta de quem está
+                // logado neste PC, e o CredSSP entregaria essa senha ao destino.
+                // Com o prompt proibido, senha errada vira OnDisconnected 2055.
+                var credentialUi = (IMsRdpClientNonScriptable5)_rdp.GetOcx();
+                credentialUi.AllowPromptingForCredentials = false;
+                credentialUi.PromptForCredentials = false;
+                credentialUi.PromptForCredsOnClient = false;
+                credentialUi.AllowCredentialSaving = false;
 
                 ReportStatus("connecting", "connect-invoking", "ConnectInvoking");
                 _rdp.Connect();

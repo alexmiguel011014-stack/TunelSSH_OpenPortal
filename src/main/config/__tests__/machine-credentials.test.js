@@ -22,6 +22,27 @@ describe('VNC credential config boundary', () => {
     expect(saved).toMatchObject({ name: 'PC B novo', passwordEnc: { enc: 'old' } });
   });
 
+  it('leaves the RDP transport and its credential untouched when the VNC one changes', () => {
+    const existing = {
+      id: 'pc-b',
+      transport: 'rdp',
+      rdpUsername: 'openportal-rdp',
+      rdpPasswordEnc: { enc: 'rdp-secret' },
+      passwordEnc: { enc: 'old' },
+    };
+    expect(mergeStoredMachine(existing, { id: 'pc-b', password: 'new-value' }, encrypt)).toEqual({
+      ...existing,
+      passwordEnc: { enc: 'encrypted:new-value' },
+    });
+    expect(mergeStoredMachine(existing, { id: 'pc-b', password: '' }, encrypt)).not.toHaveProperty(
+      'passwordEnc',
+    );
+    expect(mergeStoredMachine(existing, { id: 'pc-b', password: '' }, encrypt)).toMatchObject({
+      transport: 'rdp',
+      rdpPasswordEnc: { enc: 'rdp-secret' },
+    });
+  });
+
   it('can replace or clear a credential without retaining plaintext', () => {
     const existing = { id: 'pc-b', passwordEnc: { enc: 'old' } };
     expect(mergeStoredMachine(existing, { id: 'pc-b', password: 'new-value' }, encrypt)).toEqual({

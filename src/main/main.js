@@ -1,4 +1,11 @@
-const { app, BrowserWindow, ipcMain, globalShortcut, Notification } = require('electron');
+const {
+  app,
+  BrowserWindow,
+  ipcMain,
+  globalShortcut,
+  Notification,
+  powerMonitor,
+} = require('electron');
 const os = require('os');
 const { initLogging } = require('./logging');
 const { createMainWindow } = require('./windows/main-window');
@@ -11,6 +18,7 @@ const {
 } = require('./windows/update-progress');
 const { initAutoUpdater } = require('./updater/auto-updater');
 const { buildAppMenu } = require('./app-menu');
+const { stopAllRdpSidecars } = require('./connection/rdp-sidecar');
 const { startWebSocketProxy } = require('./connection/proxy');
 const { registerIpcHandlers } = require('./core/ipc-handlers');
 const { ConnectionRequestServer, sendActivityEvent } = require('./connection/connection-request');
@@ -48,6 +56,13 @@ const UPDATE_CHECK_INTERVAL_MS = parseInt(
   10,
 );
 const ALLOW_PRERELEASE = process.env.OPENPORTAL_ALLOW_PRERELEASE !== 'false';
+
+// O RDP "Dentro do app" encaixa a janela nativa da sidecar como filha da
+// janela principal. Com DirectComposition, o Chromium desenha a página numa
+// camada acima de todas as janelas filhas, e a sessão ficava invisível mesmo no
+// topo da ordem (bateria de 2026-09-29). Sem ela, a filha aparece. Precisa ser
+// antes do app ficar pronto.
+if (process.platform === 'win32') app.commandLine.appendSwitch('disable-direct-composition');
 
 // Outra instância deste app já está aberta: ela recebe 'second-instance' e vem
 // para a frente. Esta sai sem abrir janela nem portas — antes o whenReady
@@ -249,6 +264,19 @@ app.whenReady().then(() => {
   mainWindow = createMainWindow(isDev);
   buildAppMenu(() => mainWindow);
 
+  // Suspensão, retomada e troca de fonte de energia no log, para cruzar com
+  // quedas do app (o PC B hiberna sozinho e trocou de fonte nas duas quedas).
+  for (const event of [
+    'suspend',
+    'resume',
+    'on-ac',
+    'on-battery',
+    'lock-screen',
+    'unlock-screen',
+  ]) {
+    powerMonitor.on(event, () => console.log(`[power] ${event}`));
+  }
+
   wss = startWebSocketProxy(PROXY_PORT, {
     getTunnelToken: (host) => fileTransferSession.getVncTunnelToken(host),
   });
@@ -393,7 +421,16 @@ app.whenReady().then(() => {
   });
 });
 
+// Encerra as conexões abertas por este app antes de sair, em qualquer
+// caminho de saída (X, atualização, desligamento). A sidecar RDP é outro
+// processo: recebe o disconnect agora em vez de esperar notar a saída.
+app.on('will-quit', () => {
+  stopAllRdpSidecars('app-quit');
+  fileTransferSession.disconnectAll();
+});
+
 app.on('window-all-closed', () => {
+  console.log('[main] Todas as janelas fechadas; o app vai encerrar');
   globalShortcut.unregisterAll();
   if (wss) wss.close();
   if (requestServer) requestServer.stop();
