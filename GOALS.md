@@ -1643,6 +1643,64 @@ Suggested: sonnet · medium — packaging and CI configuration checked locally; 
 
 ---
 
+## GOALS 14 — Ask before closing, and end this app's connections on exit (feature)
+
+```mermaid
+flowchart TD
+    D[User decision: ask before closing] --> F1[Confirm on X and File > Sair]
+    D --> F2[Stop sidecars and approved sessions on quit]
+    F1 --> T1[Live check on one PC]
+    F2 --> T1
+    C[RDP into a host outlives the host app] --> F3[Carry RDP over the approved tunnel]
+    F3 --> T2[Two-PC check]
+```
+
+Suggested: sonnet · medium for F1/F2 (small, unit-tested); opus · high for F3 — it changes how RDP reaches the host and the firewall rule that provisioning creates.
+
+**Decision (2026-09-30, user):** closing the window asks first instead of minimizing to the
+tray, and when the app stops its connections stop too.
+
+**Observed facts (2026-09-30):** closing the main window quit the app with no prompt
+(`window-all-closed` → `app.quit()`). VNC viewing, the VNC tunnel and file transfer run
+inside the app's process, so they end with it on either PC. The RDP sidecar is a separate
+process: it noticed the exit through its pipe and its owner-PID watch (up to 1 s) instead of
+being told. RDP _into_ a host goes straight to TermService on 3389 (firewall rule
+`OpenPortal-RDP-Tailscale`), so once approved it does not depend on the host app: closing
+OpenPortal on the host leaves that RDP session connected, and a non-elevated app cannot
+disconnect another user's session.
+
+### Fix
+
+- [x] **G14-F1 — Ask before closing:** Done when: X, Alt+F4 and File > Sair show "Fechar o
+      OpenPortal?" (Fechar / Cancelar, Cancelar is the default); Cancelar keeps the window; the
+      prompt never shows when the app is already quitting (update install) or Windows is ending
+      the session (`query-session-end`/`session-end`), so it cannot block a shutdown. **Done
+      2026-09-30:** `src/main/windows/close-confirmation.js`, unit-tested (confirm, cancel, one
+      dialog at a time, the three bypasses, listener cleanup); File > Sair closes the window
+      instead of using `role: 'quit'`.
+- [x] **G14-F2 — End this app's connections on exit:** Done when: every exit path (X, update,
+      shutdown) sends the RDP sidecars a disconnect and closes approved file-transfer sessions
+      before the process exits. **Done 2026-09-30:** a `will-quit` handler in `main.js` calls
+      `stopAllRdpSidecars('app-quit')` and `fileTransferSession.disconnectAll()`; `will-quit`
+      also fires on `app.quit()`, where `window-all-closed` does not.
+- [ ] **G14-F3 — End RDP into a host when its app closes:** today the host app is only the
+      approval gate for RDP. Proposed: carry RDP over the same approved tunnel as VNC (the host
+      forwards to `127.0.0.1:3389` per approved token; the viewer's sidecar connects to a local
+      port) and drop the Tailscale-wide 3389 rule, so RDP is reachable only through an open,
+      approved OpenPortal. Done when: closing OpenPortal on the host ends an active RDP session
+      from the other PC within a few seconds, and 3389 no longer answers from the other PC
+      without the app. Needs its own plan pass first (certificate name, NLA over a forwarded
+      port, hosts that already have the rule).
+
+### Regression test
+
+- [ ] **G14-T1 — Live check `(manual)`:** on one PC with the new build: X → Cancelar keeps the
+      app and its sessions; X → Fechar closes it, no `OpenPortalRdpSidecar` is left running and
+      the other PC's view shows the disconnect; a Windows restart with the app open is not
+      blocked by the prompt. Done when: all three hold.
+
+---
+
 ## Cross-goal ordering
 
 GOALS 1 and GOALS 2 (transport: multi-session VNC, then optional RDP) are independent of

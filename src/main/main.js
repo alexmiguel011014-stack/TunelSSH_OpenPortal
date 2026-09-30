@@ -18,6 +18,7 @@ const {
 } = require('./windows/update-progress');
 const { initAutoUpdater } = require('./updater/auto-updater');
 const { buildAppMenu } = require('./app-menu');
+const { stopAllRdpSidecars } = require('./connection/rdp-sidecar');
 const { startWebSocketProxy } = require('./connection/proxy');
 const { registerIpcHandlers } = require('./core/ipc-handlers');
 const { ConnectionRequestServer, sendActivityEvent } = require('./connection/connection-request');
@@ -418,6 +419,14 @@ app.whenReady().then(() => {
       mainWindow.focus();
     }
   });
+});
+
+// Encerra as conexões abertas por este app antes de sair, em qualquer
+// caminho de saída (X, atualização, desligamento). A sidecar RDP é outro
+// processo: recebe o disconnect agora em vez de esperar notar a saída.
+app.on('will-quit', () => {
+  stopAllRdpSidecars('app-quit');
+  fileTransferSession.disconnectAll();
 });
 
 app.on('window-all-closed', () => {
