@@ -1639,7 +1639,7 @@ Suggested: sonnet · medium — packaging and CI configuration checked locally; 
 ### Regression test
 
 - [x] **G13-T1 — Gates and a local unpacked build:** Done when: `npm test`, `npm run lint`, the renderer build and `git diff --check` pass, and a local `electron-builder --dir` has a working sidecar under `resources/sidecar`. **Passed 2026-09-29:** 200 passed / 1 skipped, 0 lint errors (9 old warnings), renderer build OK, diff clean; `electron-builder --dir --win --x64 -c.electronDist=node_modules/electron/dist` (no download) produced `resources/sidecar` with the exe, the three DLLs and `runtimes/`, and that packed exe ran the real ActiveX path against a local closing TCP target (`ControlReady` → `ConnectReturned` +0.8 s → `OnConnecting` → `OnDisconnected` 2308, exit code 0 after `disconnect`).
-- [ ] **G13-T2 — Installer check `(manual)`:** only after the user orders the merge to `master`: the nightly run's "Build RDP sidecar (Release)" step passes, the `dev-latest` installer puts `resources\sidecar\OpenPortalRdpSidecar.exe` on disk, and an installed app logs `sidecar=true` in the RDP preflight and passes battery case 3.1. Done when: all three hold on one PC. **Partial 2026-09-30:** the step passed (G13-F3), and electron-builder signed `dist-electron\win-unpacked\resources\sidecar\OpenPortalRdpSidecar.exe` before building the NSIS installer from that tree (installer 102 MB, was 82 MB in v1.0.6). Still to run on a PC: install that build, confirm the file on disk, `sidecar=true` in the preflight and case 3.1.
+- [x] **G13-T2 — Installer check `(manual)`:** only after the user orders the merge to `master`: the nightly run's "Build RDP sidecar (Release)" step passes, the `dev-latest` installer puts `resources\sidecar\OpenPortalRdpSidecar.exe` on disk, and an installed app logs `sidecar=true` in the RDP preflight and passes battery case 3.1. Done when: all three hold on one PC. **Partial 2026-09-30:** the step passed (G13-F3), and electron-builder signed `dist-electron\win-unpacked\resources\sidecar\OpenPortalRdpSidecar.exe` before building the NSIS installer from that tree (installer 102 MB, was 82 MB in v1.0.6). Still to run on a PC: install that build, confirm the file on disk, `sidecar=true` in the preflight and case 3.1. **Done 2026-09-30 on PC A:** the `dev-latest` build (1.0.7-dev.20260930.205739) installed to `D:\Arquivos de programas\OpenPortal Remote` with `resources\sidecar` holding the exe, `AxInterop`/`Interop.MSTSCLib`, `Devolutions.MsRdpEx` and `runtimes` (no `.pdb`); the installed app logged `preflight ... sidecar=true tcp=true` (21:18:14Z), answered the session-contention prompt (`OnLogonError` -5 then -2) and reached `OnLoginComplete` (21:18:25Z); the user saw PC B's desktop and used mouse and keyboard, then closed the window (`NativeWindowClosed`, 21:18:32Z) and no sidecar was left running.
 
 ---
 
@@ -1697,7 +1697,78 @@ disconnect another user's session.
 - [ ] **G14-T1 — Live check `(manual)`:** on one PC with the new build: X → Cancelar keeps the
       app and its sessions; X → Fechar closes it, no `OpenPortalRdpSidecar` is left running and
       the other PC's view shows the disconnect; a Windows restart with the app open is not
-      blocked by the prompt. Done when: all three hold.
+      blocked by the prompt. Done when: all three hold. **Partial 2026-09-30 (installed build on PC A):** X showed "Fechar o OpenPortal?" and Fechar closed the app (21:18:37Z) with no sidecar left. Still to check: Cancelar keeps the sessions, the other PC sees the disconnect, and a Windows restart is not blocked.
+
+---
+
+## GOALS 15 — Nightly builds that keep updating, and a clean package (fix)
+
+```mermaid
+flowchart TD
+    R[Installed nightly never updates; package ships tests and a real IP] --> F1[Beta version string, valid SemVer]
+    R --> F2[Nightly tag per version, beta.yml, prune old ones]
+    R --> F3[Handle update-check rejections]
+    R --> F4[Package without tests or real IPs]
+    R --> F5[Keep dev and installed data apart]
+    F1 --> T1[Tests against the real electron-updater]
+    F2 --> T1
+    F4 --> T1
+    T1 --> T2[Two master builds, update offered by the app]
+```
+
+Suggested: sonnet · high — small code, but it changes what every installed app is offered as an update; the publishing half only runs on a master push the user orders.
+
+**Observed facts (2026-09-30):** the `dev-latest` installer (1.0.7-dev.20260930.205739) installed on
+PC A logged `[auto-update] Erro: No published versions on GitHub` plus an `Unhandled Rejection` on its
+first check. Cause, read in electron-updater 6.8.9 (`GitHubProvider.getLatestVersion`): with
+`allowPrerelease`, an installed prerelease takes its channel from the version suffix ("dev") and,
+outside alpha/beta, accepts only SemVer tags of that same channel; the fixed tag `dev-latest` is not
+SemVer, so a dev install finds nothing and never updates again, not even to a later stable release. A
+stable install (1.0.6, `allowPrerelease` on by default) takes the newest release of any kind, so it is
+offered the dev build and then gets stuck on it. `bump-dev-version.js` also wrote the time with a
+leading zero before 10:00 UTC (`.093012`), which is not valid SemVer. Separately, the installer
+packed `src/main/**/__tests__` (18 test files, two with the real Tailscale IPs of PC A and PC B) and
+the quick-connect hint used PC B's real IP as its example. The saved PCs the installed app showed on
+PC A did not come from the package: the dev checkout and the installed app share
+`%APPDATA%\openportal-remote`, and the package holds no `config.json` (defaults are three empty
+slots).
+
+### Fix
+
+- [x] **G15-F1 — Nightly version that updaters understand:** Done when: `bump-dev-version.js` writes
+      `X.Y.(Z+1)-beta.<YYYYMMDD>.<HHMMSS as a number>` and every value is valid SemVer. **Done
+      2026-09-30:** `nightlyVersion(base, date)` exported and unit-tested, including 00:00:05 →
+      `.5` and 09:30:12 → `.93012`.
+- [ ] **G15-F2 — Publish each nightly under its own tag:** Done when: the nightly job tags the
+      release `v<version>`, attaches `latest.yml` and a `beta.yml` copy, and deletes older
+      `-beta.`/`-dev.` prereleases and the legacy `dev-latest` (with their tags) after publishing.
+      **Implemented 2026-09-30** in `.github/workflows/nightly.yml`; a test pins the tag and
+      `beta.yml`. **Still open:** it runs on the next push to `master` (G15-T2).
+- [x] **G15-F3 — Update-check failures handled once:** Done when: the three `checkForUpdates()`
+      calls catch their rejection, leaving the `error` event as the only report. **Done
+      2026-09-30** in `src/main/updater/auto-updater.js`.
+- [x] **G15-F4 — Package without tests or real IPs:** Done when: `build.files` excludes
+      `src/main/**/__tests__/**` and no real Tailscale IP of PC A or PC B is in `app.asar`.
+      **Done 2026-09-30:** exclusion added; the hint's example is `100.101.102.103`; a local
+      `electron-builder --win dir` package had 0 test files and 0 occurrences of either IP.
+- [ ] **G15-F5 — Keep dev and installed data apart `(manual)`:** decide whether the dev checkout
+      moves to its own data folder (for example `%APPDATA%\openportal-remote-dev`) so test PCs,
+      history and logs never show up in an installed app on the same PC. Moving it resets the dev
+      app's saved PCs and its "Proteger TightVNC" password on both PCs (a new UAC run on each).
+      Done when: the user has decided and, if yes, the dev app starts with its own empty config.
+
+### Regression test
+
+- [x] **G15-T1 — Tests against the real updater:** Done when: electron-updater's own
+      `GitHubProvider`, fed a fake releases feed, reproduces the stuck `-dev` install and shows a
+      beta install finding the next beta (`beta.yml`), a beta install moving to a newer stable
+      (`latest.yml`), and a stable install being offered the newest beta. **Done 2026-09-30:**
+      `scripts/__tests__/bump-dev-version.test.js`; `npm test` (218) and `npm run lint` (0 errors)
+      pass.
+- [ ] **G15-T2 — Two master builds `(manual)`:** only after the user orders the next merge: the run
+      publishes `v1.0.7-beta.*` with `beta.yml` and removes `dev-latest`; PC A reinstalls that build
+      by hand once (its `-dev` build cannot see the new tags); after a later master build, PC A's
+      app offers the update by itself. Done when: both hold.
 
 ---
 

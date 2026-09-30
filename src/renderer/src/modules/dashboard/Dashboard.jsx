@@ -79,7 +79,7 @@ export default function Dashboard() {
       addLog(error, 'warn');
       setQuickFeedback({
         kind: 'error',
-        text: `${error}. Ex.: 100.81.199.56 (a senha de acesso vai no campo de baixo).`,
+        text: `${error}. Ex.: 100.101.102.103 (a senha de acesso vai no campo de baixo).`,
       });
       return;
     }

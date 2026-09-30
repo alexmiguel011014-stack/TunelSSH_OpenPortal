@@ -106,6 +106,7 @@ jobs:
         run: npx electron-builder --win nsis --x64 --publish never
 
       - name: Stage release assets
+        id: stage
         shell: pwsh
         run: |
           $ver  = (Get-Content -Raw package.json | ConvertFrom-Json).version
@@ -115,35 +116,29 @@ jobs:
             Copy-Item $_.FullName $newname -Force
             Write-Host "Staged $($_.Name) -> $newname"
           }
-          if (Test-Path "$dist\latest.yml") { Copy-Item "$dist\latest.yml" "latest.yml" -Force }
+          # O electron-builder grava latest.yml mesmo numa versão -beta (com o
+          # provider github o canal não vem da versão), e o electron-updater
+          # de um app beta instalado procura beta.yml: publica os dois iguais.
+          if (Test-Path "$dist\latest.yml") {
+            Copy-Item "$dist\latest.yml" "latest.yml" -Force
+            Copy-Item "$dist\latest.yml" "beta.yml" -Force
+          }
           if (Test-Path "resources/cert.cer") { Copy-Item "resources/cert.cer" "cert.cer" -Force }
-          Get-ChildItem | Where-Object { $_.Name -like "OpenPortal-Remote-Setup-*.exe*" -or $_.Name -eq "latest.yml" -or $_.Name -eq "cert.cer" } | Format-Table Name, Length
+          Get-ChildItem | Where-Object { $_.Name -like "OpenPortal-Remote-Setup-*.exe*" -or $_.Name -like "*.yml" -or $_.Name -eq "cert.cer" } | Format-Table Name, Length
+          "version=$ver" >> $env:GITHUB_OUTPUT
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Delete previous dev-latest release
-        # O nome do .exe muda a cada build (carimba timestamp), então sem
-        # isso a action de publish só ANEXA o .exe novo aos antigos em vez
-        # de substituir — a release "dev-latest" acumularia um instalador
-        # por push, para sempre. Apaga a release (mas não a tag; ela é
-        # recriada a seguir) antes de publicar a nova.
-        shell: pwsh
-        run: |
-          gh release delete dev-latest --yes --cleanup-tag 2>$null
-          exit 0
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
       - name: Publish pre-release
-        # Tag fixa (dev-latest): cada push em master SOBRESCREVE a mesma
-        # release em vez de criar uma nova. Isso é o que faz o
-        # electron-updater (allowPrerelease=true) enxergar sempre "a
-        # última dev" sem acumular dezenas de releases/tags soltas no
-        # repo — e sem precisar bumpar a versão estável só para testar
-        # uma mudança entre os dois PCs.
+        # Cada build sai com a própria versão como tag
+        # (v1.0.7-beta.20260930.205739). O electron-updater só aceita tags
+        # SemVer: com a tag fixa "dev-latest", o app de desenvolvimento
+        # instalado respondia "No published versions on GitHub" e nunca mais
+        # se atualizava (2026-09-30). O passo seguinte apaga as anteriores.
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: dev-latest
+          tag_name: v${{ steps.stage.outputs.version }}
+          target_commitish: ${{ github.sha }}
           name: 'Dev build (nightly) — run #${{ github.run_number }}'
           prerelease: true
           generate_release_notes: false
@@ -152,6 +147,20 @@ jobs:
             OpenPortal-Remote-Setup-*.exe
             OpenPortal-Remote-Setup-*.exe.blockmap
             latest.yml
+            beta.yml
             cert.cer
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Delete older dev releases
+        # Fica só a dev recém-publicada: apaga as anteriores e a antiga
+        # "dev-latest", com as tags, para não acumular uma release por push.
+        shell: pwsh
+        run: |
+          $keep = "v${{ steps.stage.outputs.version }}"
+          $old = gh release list --limit 100 --json tagName,isPrerelease | ConvertFrom-Json |
+            Where-Object { $_.isPrerelease -and $_.tagName -ne $keep -and ($_.tagName -eq 'dev-latest' -or $_.tagName -match '^v\d+\.\d+\.\d+-(beta|dev)\.') }
+          foreach ($r in $old) { gh release delete $r.tagName --yes --cleanup-tag }
+          exit 0
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

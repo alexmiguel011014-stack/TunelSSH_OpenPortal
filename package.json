@@ -53,6 +53,7 @@
     },
     "files": [
       "src/main/**/*",
+      "!src/main/**/__tests__/**",
       "dist/renderer/**/*",
       "resources/*.html"
     ],
