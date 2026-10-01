@@ -16,6 +16,11 @@ function send(mainWindow, channel, data) {
   }
 }
 
+// Sessão somente leitura (GOALS 18): o agente do outro PC já recusa; aqui se recusa antes.
+function assertWritable(sessionId) {
+  if (fileTransferSession.isReadOnly(sessionId)) throw new Error('Esta pasta é somente leitura');
+}
+
 function joinVirtual(baseDir, name) {
   return baseDir === '/' ? `/${name}` : `${baseDir}/${name}`;
 }
@@ -247,20 +252,24 @@ function registerFileTransferIpc(mainWindow) {
   });
 
   ipcMain.handle('ft:mkdir', async (_, sessionId, virtualPath) => {
+    assertWritable(sessionId);
     return fileTransferSession.getClient(sessionId).mkdir(virtualPath);
   });
 
   ipcMain.handle('ft:delete', async (_, sessionId, virtualPath) => {
+    assertWritable(sessionId);
     return fileTransferSession.getClient(sessionId).remove(virtualPath);
   });
 
   ipcMain.handle('ft:rename', async (_, sessionId, virtualPath, newVirtualPath) => {
+    assertWritable(sessionId);
     return fileTransferSession.getClient(sessionId).rename(virtualPath, newVirtualPath);
   });
 
   // --- Lote (upload/download em massa, sequencial, com progresso) ---
   ipcMain.handle('ft:uploadBatch', async (_, sessionId, { localPaths, destDir, batchId }) => {
     try {
+      assertWritable(sessionId);
       const jobs = await expandLocalUploadJobs(localPaths, destDir);
       const result = await runUploadBatch(mainWindow, sessionId, jobs, batchId);
       return { success: true, ...result };

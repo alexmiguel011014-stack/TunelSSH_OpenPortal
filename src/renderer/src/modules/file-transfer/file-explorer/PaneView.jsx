@@ -18,7 +18,18 @@ export function RemotePlaceholder({ activeMachine }) {
   );
 }
 
-export function PaneView({ label, pane, connectionBadge, onDisconnect, leftmost, dnd }) {
+// readOnly (GOALS 18, "Ver pasta" do gerente): só navega e baixa; criar, renomear e
+// excluir somem. O agente do outro PC recusa de novo, mesmo que isto falhe.
+export function PaneView({
+  label,
+  pane,
+  connectionBadge,
+  onDisconnect,
+  disconnectLabel = 'Desconectar',
+  readOnly = false,
+  leftmost,
+  dnd,
+}) {
   const lastIndexRef = useRef(-1);
   const [paneDragOver, setPaneDragOver] = useState(false);
 
@@ -125,7 +136,7 @@ export function PaneView({ label, pane, connectionBadge, onDisconnect, leftmost,
               <span className="w-1.5 h-1.5 rounded-full bg-[#107c10]" /> Conectado
             </span>
             <button onClick={onDisconnect} className="text-[11px] text-[#a80000] hover:underline">
-              Desconectar
+              {disconnectLabel}
             </button>
           </div>
         )}
@@ -156,26 +167,38 @@ export function PaneView({ label, pane, connectionBadge, onDisconnect, leftmost,
 
       {/* Barra de comandos */}
       <div className="flex items-center gap-0.5 px-2 py-1 border-b border-[#e5e5e5]">
-        <CommandButton onClick={handleNewFolder} title="Nova pasta">
-          📁 Novo
-        </CommandButton>
-        <span className="w-px h-4 bg-[#e0e0e0] mx-1" />
-        <CommandButton disabled title="Recortar (em breve)">
-          ✂️ Recortar
-        </CommandButton>
-        <CommandButton disabled title="Copiar (em breve)">
-          📋 Copiar
-        </CommandButton>
-        <CommandButton disabled title="Colar (em breve)">
-          📥 Colar
-        </CommandButton>
-        <span className="w-px h-4 bg-[#e0e0e0] mx-1" />
-        <CommandButton onClick={handleRenameStart} disabled={selectedCount !== 1} title="Renomear">
-          ✏️ Renomear
-        </CommandButton>
-        <CommandButton onClick={handleDelete} disabled={selectedCount === 0} title="Excluir">
-          🗑️ Excluir
-        </CommandButton>
+        {readOnly ? (
+          <span className="px-2.5 text-[12px] text-[#605e5c]">
+            Somente leitura: dá para abrir e receber arquivos, não para alterar.
+          </span>
+        ) : (
+          <>
+            <CommandButton onClick={handleNewFolder} title="Nova pasta">
+              📁 Novo
+            </CommandButton>
+            <span className="w-px h-4 bg-[#e0e0e0] mx-1" />
+            <CommandButton disabled title="Recortar (em breve)">
+              ✂️ Recortar
+            </CommandButton>
+            <CommandButton disabled title="Copiar (em breve)">
+              📋 Copiar
+            </CommandButton>
+            <CommandButton disabled title="Colar (em breve)">
+              📥 Colar
+            </CommandButton>
+            <span className="w-px h-4 bg-[#e0e0e0] mx-1" />
+            <CommandButton
+              onClick={handleRenameStart}
+              disabled={selectedCount !== 1}
+              title="Renomear"
+            >
+              ✏️ Renomear
+            </CommandButton>
+            <CommandButton onClick={handleDelete} disabled={selectedCount === 0} title="Excluir">
+              🗑️ Excluir
+            </CommandButton>
+          </>
+        )}
         <div className="flex-1" />
         <ToolbarButton
           onClick={() => pane.setView(pane.view === 'list' ? 'icons' : 'list')}

@@ -20,7 +20,10 @@ import { Splitter, TransferRail, StatusBar } from './file-explorer/TransferContr
 // Este arquivo só orquestra: os dois painéis, drag & drop entre eles, e o
 // batch de transferência — nada de UI de baixo nível mora aqui.
 
-export default function FileExplorer() {
+// session (opcional): uma sessão de arquivos já aberta por quem chama, em vez da do
+// PC em foco. Hoje é o "Ver pasta" do laboratório (GOALS 18):
+// { sessionId, readOnly, title, onClose }.
+export default function FileExplorer({ session = null }) {
   const local = usePane(localAdapter, null);
 
   // A aprovação e a sessão de arquivos já foram estabelecidas no momento em
@@ -28,7 +31,8 @@ export default function FileExplorer() {
   // lemos o sessionId pronto. Nenhum IP, nenhum "aguardando aprovação".
   const machineCtx = useContext(MachineContext);
   const activeMachine = machineCtx?.focusedMachine || null;
-  const sessionId = machineCtx?.ftSessionId || null;
+  const sessionId = session ? session.sessionId : machineCtx?.ftSessionId || null;
+  const readOnly = session?.readOnly === true;
 
   const remoteAdapter = useMemo(
     () => (sessionId ? makeRemoteAdapter(sessionId) : null),
@@ -127,6 +131,15 @@ export default function FileExplorer() {
     onDropOnCurrentDir: (e) => handleDrop(e, side, side === 'local' ? local.path : remote.path),
   });
 
+  // Painel somente leitura: dá para arrastar arquivos DE lá para o PC local (receber),
+  // mas nada pode ser solto nele.
+  const makeReadOnlyDnd = () => ({
+    ...makeDnd('remote'),
+    effectFor: () => 'none',
+    onDropOnFolder: (e) => e.preventDefault(),
+    onDropOnCurrentDir: (e) => e.preventDefault(),
+  });
+
   const handleDrop = async (e, targetSide, destDir) => {
     const files = e.dataTransfer.files;
     if (files && files.length > 0) {
@@ -169,18 +182,20 @@ export default function FileExplorer() {
         <TransferRail
           onSend={() => runBatch('upload')}
           onReceive={() => runBatch('download')}
-          sendDisabled={!sessionId || local.selected.size === 0 || transferring}
+          sendDisabled={readOnly || !sessionId || local.selected.size === 0 || transferring}
           receiveDisabled={!sessionId || remote.selected.size === 0 || transferring}
           sendCount={local.selected.size}
           receiveCount={remote.selected.size}
         />
         {remoteAdapter ? (
           <PaneView
-            label="PC Remoto"
+            label={session?.title || 'PC Remoto'}
             pane={remote}
             connectionBadge
-            onDisconnect={handleDisconnect}
-            dnd={makeDnd('remote')}
+            onDisconnect={session ? session.onClose : handleDisconnect}
+            disconnectLabel={session ? 'Fechar' : 'Desconectar'}
+            readOnly={readOnly}
+            dnd={readOnly ? makeReadOnlyDnd() : makeDnd('remote')}
           />
         ) : (
           <div className="flex-1 min-w-0 border-l border-[#e5e5e5]">

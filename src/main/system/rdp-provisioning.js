@@ -24,8 +24,18 @@ const REMOTE_DESKTOP_USERS_SID = 'S-1-5-32-555';
 const FIREWALL_RULE_NAME = 'OpenPortal-RDP-Tailscale';
 const TAILSCALE_RANGE = '100.64.0.0/10';
 
-function buildEnableHostingScript() {
-  const ruleSettings = `-Direction Inbound -Action Allow -Protocol TCP -LocalPort 3389 -RemoteAddress '${TAILSCALE_RANGE}' -Profile Any`;
+// `remoteAddresses`: de onde a 3389 aceita conexões. Por padrão só a faixa do
+// Tailscale; o modo laboratório acrescenta 'LocalSubnet' quando os alunos estão na
+// mesma rede do PC (G16-D1, opção E). Só entram os valores desta lista.
+const ALLOWED_REMOTE_ADDRESSES = [TAILSCALE_RANGE, 'LocalSubnet'];
+
+function buildEnableHostingScript({ remoteAddresses = [TAILSCALE_RANGE] } = {}) {
+  const scopes = remoteAddresses.filter((scope) => ALLOWED_REMOTE_ADDRESSES.includes(scope));
+  if (scopes.length === 0 || scopes.length !== remoteAddresses.length) {
+    throw new Error('Escopo de firewall inválido para a porta 3389');
+  }
+  const remote = scopes.map((scope) => `'${scope}'`).join(',');
+  const ruleSettings = `-Direction Inbound -Action Allow -Protocol TCP -LocalPort 3389 -RemoteAddress ${remote} -Profile Any`;
   return [
     "$ErrorActionPreference = 'Stop'",
     `Set-ItemProperty -Path '${TERMINAL_SERVER_KEY}' -Name 'fDenyTSConnections' -Value 0`,
@@ -157,6 +167,10 @@ function generatePassword(length = 24) {
 }
 
 module.exports = {
+  ALLOWED_REMOTE_ADDRESSES,
+  TAILSCALE_RANGE,
+  psQuote,
+  readPowerShell,
   buildEnableHostingScript,
   buildCreateCredentialScript,
   runElevatedPowerShell,

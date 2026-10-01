@@ -111,6 +111,149 @@ desconectar uma não derruba a outra.
 Esperado: a aba **Atividade** do PC A mostra a sessão com quem conectou, a
 duração e 1 arquivo. O Telegram é opcional e precisa do token de um bot seu.
 
+## 7. Laboratório (GOALS 16, G16-T2)
+
+Aqui o PC A faz o papel do professor (gerente) e o PC B o de um PC de laboratório. Os
+dois no Tailscale, cada um com o app aberto. Os blocos de GOALS 17 a 19 (contas de
+aluno, cota, reservas, registro de acessos) entram neste mesmo bloco quando forem feitos.
+
+1. No PC A, em **Configurações → Modo laboratório**, clique em **Desligado** para ligar.
+   A barra lateral ganha o item **Laboratório**.
+2. No PC A, abra **Laboratório**, digite o IP Tailscale do PC B e clique em **Adicionar PC**.
+   No PC B abre a janela **Gerenciar este PC** com o login Tailscale do PC A (o botão
+   padrão é **Rejeitar**): clique em **Aceitar**.
+   Esperado: o PC A lista o PC B como **Livre** em até 10 s; a tela inicial do PC B
+   mostra o cartão **Este PC é gerenciado** com o login do PC A.
+3. No PC A, clique em **Abrir tela** no PC B.
+   Esperado: a sessão abre **sem** janela de aprovação no PC B.
+4. Feche o app no PC B (Sair, confirmando).
+   Esperado: em até 30 s o PC A mostra o PC B como **Offline** e o botão **Abrir tela**
+   fica desligado. Abra o app no PC B de novo: volta a **Livre**.
+5. No PC B, no cartão **Este PC é gerenciado**, clique em **Remover gerente** e confirme.
+   Esperado: o cartão some; na consulta seguinte o PC A mostra o PC B como **Sem acesso**.
+6. Repita o passo 2 e confirme que o PC B pede o clique de novo (a matrícula não fica
+   guardada depois de removida).
+7. Reinício: no PC B instale o app, ligue **Iniciar com o Windows** (aparece com o modo
+   laboratório ligado ou o PC gerenciado) e deixe a conta dedicada com login automático
+   (decisão G16-D2). Reinicie o PC B.
+   Esperado: sem ninguém mexer, o PC B volta e o PC A o mostra como **Livre**.
+
+### Serviço do laboratório e contas de aluno (GOALS 17, G17-T2)
+
+Antes de começar, no PC B: o app instalado ou aberto pelo `ABRIR_APP.bat` da pasta do branch, e o
+`lab-service/bin/Release/OpenPortalLabService.exe` compilado (`MSBuild lab-service/OpenPortalLabService.csproj
+-p:Configuration=Release`). Os comandos `node scripts/lab-pipe.js ...` rodam no PC B, na conta que roda o
+OpenPortal, dentro da pasta do projeto. Use cota de 1 GB para o teste ser rápido.
+
+8. No PC B, em **Configurações → Modo laboratório → Alunos neste PC**, clique em **Habilitar neste PC** e
+   aprove o pedido do Windows (UAC). Marque "Os alunos estão na mesma rede" só se for o caso.
+   Esperado: o estado muda para **Funcionando · 0 alunos**; `sc query OpenPortalLab` mostra RUNNING; o PC A
+   continua vendo o PC B como Livre.
+9. `node scripts/lab-pipe.js student-create '{"label":"Ana","quotaGb":1}'` e o mesmo para `João`.
+   Esperado: as contas `ana` e `joao` existem, **desativadas** (`net user ana`), e as pastas `C:\Users\ana` e
+   `C:\Users\joao` já existem. `node scripts/lab-pipe.js disk-info` mostra a recomendação de quantos alunos cabem.
+10. `node scripts/lab-pipe.js reserve '{"account":"ana","startWithinMs":600000,"sessionMs":3600000}'`: anote
+    `userName` e `password`. No PC A, `mstsc /v:<IP do PC B>` e entre com esse usuário e senha.
+    Esperado: a sessão abre; `node scripts/lab-pipe.js status` no PC B mostra o PC **em uso** pela Ana.
+11. Na sessão da Ana: copie para Documentos um arquivo maior que 1 GB (ou baixe um) e deixe um arquivo em
+    `C:\Users\Public`. Tente abrir `C:\Users\joao`.
+    Esperado: o Windows recusa a gravação acima do limite; `C:\Users\joao` dá acesso negado.
+12. Com a Ana ativa, rode `reserve` para o João.
+    Esperado: erro `busy`, dizendo que a Ana está com o PC e até quando; a conta `joao` continua desativada.
+13. Na conta do dono do app no PC B (outra sessão do Windows, ou depois de a Ana sair), abra `C:\Users\ana`.
+    Esperado: lê os arquivos (a leitura do dono é do serviço), mas não consegue gravar.
+14. **Prazo:** encerre a sessão da Ana (`end` com `manager-ended`) e reserve de novo com
+    `"startWithinMs":600000,"sessionMs":360000` (6 minutos). Entre pelo PC A.
+    Esperado: cerca de 1 minuto depois da entrada aparece o aviso "termina em 1 minuto(s)"; no fim a sessão é
+    **encerrada** (não apenas desconectada); entrar de novo mostra o erro genérico de autenticação; o arquivo
+    que ela deixou em `C:\Users\Public` sumiu.
+15. **Troca de aluno:** reserve para a Ana, entre, e depois `end` com `manager-handover` e `reserve` para o João.
+    Esperado: a Ana recebe o aviso e é desconectada; o João recebe uma senha nova; a senha da Ana não entra
+    mais; a Ana não lê a pasta do João e o João não lê a da Ana.
+16. **Reinício no meio:** reserve (60 min), entre, e reinicie o PC B.
+    Esperado: depois que o PC B volta, o serviço está rodando, a reserva continua (`status`) e o aluno consegue
+    entrar de novo com a mesma senha até o prazo; no prazo o serviço encerra e desativa a conta.
+17. **Pipe fechado a outras contas:** numa conta comum diferente da do app, rode `node scripts/lab-pipe.js status`.
+    Esperado: erro `unauthorized`.
+18. `node scripts/lab-pipe.js student-delete '{"account":"joao"}'` e, depois, **Desabilitar** nas Configurações
+    (primeiro com uma reserva ativa, depois sem). Esperado: a conta, a pasta e a entrada de cota do `joao`
+    somem; desabilitar é recusado com reserva ativa; sem reserva o UAC abre, o serviço é removido e as contas
+    que restaram ficam desativadas, com os dados.
+
+Anote o que a cota e o `student-delete` fizeram de verdade (o Windows não tem um comando para apagar a entrada
+de cota de um usuário), e o conteúdo de `C:\ProgramData\OpenPortal\lab\service.log` se algo falhar.
+
+Fecha: G16-T2, G16-I9 e G16-I11 (passos 1 a 7) e G17-T2 (passos 8 a 18); o passo 8, com a opção de rede escolhida, fecha também o G16-D1.
+
+### Alunos e reserva pelas telas (GOALS 18, G18-T2)
+
+Antes de começar: os passos 1 a 8 já feitos (o PC B está matriculado e com o serviço habilitado, e aparece
+**Livre** no PC A). No PC A, o OpenPortal com o modo laboratório ligado e o cliente do Windows
+(`mstsc`). Se sobraram contas dos passos 9 a 18, apague-as antes (**Alunos → Apagar**) para começar do zero.
+Use cotas de 1 GB. Anote o horário de cada passo para conferir os prazos.
+
+19. No PC A, **Laboratório → PC B → Alunos**. Adicione **Ana** e **João** (cota 1 GB).
+    Esperado: a lista mostra os dois como **Livre**, com a barra de uso vazia; a caixa de capacidade bate com
+    `node scripts/lab-pipe.js disk-info` no PC B (quantos cabem, espaço livre, reserva, cotas somadas).
+20. **Reservar** a Ana (1 h, entrar em até 30 min). Esperado: abre "Acesso do aluno" com PC, IP, usuário,
+    senha, horários e os dois avisos (a pasta é vista pelo professor; o erro genérico de autenticação depois do
+    término). **Copiar mensagem** e cole num bloco de notas. Feche a janela: a senha **não** aparece mais na
+    tela, em Atividade, nos logs do app nem em `%AppData%` (procure a senha com uma busca no `config.json`
+    e nos logs do app).
+21. Entre como Ana pelo `mstsc` com a mensagem copiada. Crie um arquivo em Documentos. Esperado: no PC A o
+    cartão do PC B vira **Em uso**, com "Ana · em uso · faltam … min"; o app do PC B continua aberto.
+22. Com a Ana ativa, abra a lista do João. Esperado: o João oferece **Trocar aluno**, não Reservar. (A recusa
+    `busy` do serviço está coberta pelo passo 12.)
+23. **Trocar aluno** para o João (30 min). Esperado: o diálogo mostra "Encerrando a sessão de Ana…"; na sessão
+    da Ana aparece o aviso e ela é **desconectada (logoff)**; abre "Acesso do aluno" do João com senha nova.
+    Entre como João; a senha antiga da Ana não funciona mais; a Ana não lê `C:\Users\joao` e o João não lê
+    `C:\Users\ana`.
+24. **Ver pasta** da Ana. Esperado: abre a tela de Arquivos com a raiz na pasta dela (o arquivo do passo 21
+    aparece); **Receber** baixa o arquivo; **Novo**, **Renomear** e **Excluir** não existem no painel do PC
+    remoto e soltar um arquivo ali não faz nada; "Voltar ao laboratório" fecha a sessão. Não aparece o aviso
+    "alguém está conectado" no PC B.
+25. **Cota:** na sessão do João, grave mais que 1 GB. Esperado: o Windows recusa. Depois, em **Cota**, mude
+    para 2 GB e repita: agora grava até 2 GB.
+26. **Estender** +15 min e **Encerrar agora** (João ativo). Esperado: o horário do cartão muda; "Encerrar
+    agora" avisa e desconecta o João e o PC volta a **Livre** em poucos segundos.
+27. **Prazo com o app do gerente fechado:** reserve para a Ana (6 min), entre e **feche o OpenPortal do PC A**.
+    Esperado: perto do fim aparece o aviso e, no prazo, a sessão é encerrada sozinha (o serviço não depende
+    do PC A); ao reabrir o app do PC A, o PC B está **Livre**.
+28. **Apagar** a Ana. Esperado: a confirmação diz "Apagar Ana e … de arquivos?"; com a Ana reservada o botão
+    fica desabilitado; depois de livre, a conta, a pasta e a cota somem (`net user ana`) e a caixa de
+    capacidade mostra o espaço de volta.
+
+Fecha: G18-T2 (passos 19 a 28). Registre qual opção do G16-D1 a rede usada representou.
+
+### Registro central de acessos (GOALS 19, G19-T2)
+
+Antes de começar: o serviço do PC B habilitado (passo 8) e o PC B na lista do PC A. Anote o IP Tailscale do
+PC A (`tailscale ip -4`).
+
+29. **Reserva com o app do gerente fechado:** no PC A, **feche o OpenPortal**. Reserve para a Ana pelo
+    `node scripts/lab-pipe.js reserve '{"account":"ana","startWithinMs":600000,"sessionMs":360000}'` no PC B,
+    entre como Ana pelo `mstsc` do PC A, saia e entre de novo, e espere o fim do prazo (6 minutos). Depois
+    **abra o OpenPortal no PC A** e vá em **Atividade → Laboratório**. Esperado: a reserva inteira aparece
+    (aluno, início, as entradas e saídas, o fim e "Fim do prazo"), sem ter estado com o app aberto.
+30. **Endereço de origem:** abra essa reserva (clique nela). Esperado: as entradas mostram o **IP do PC A**
+    anotado acima (e só ele; se aparecer outro, é o que o professor procura quando uma senha foi passada
+    adiante). Confira também no PC B, em **Visualizador de Eventos → Logs de Aplicativos e Serviços →
+    Microsoft → Windows → TerminalServices-LocalSessionManager**, os eventos 21 a 25 no mesmo horário e com o
+    mesmo endereço.
+31. **PC sem resposta:** com o app do PC A aberto e uma reserva em andamento, feche o OpenPortal do PC B
+    (a reserva continua, é do serviço). Esperado: depois de cerca de 30 segundos o cartão do PC B mostra a
+    falta de resposta e a aba Laboratório registra "PC sem resposta"; ao reabrir o OpenPortal do PC B, "PC
+    voltou" aparece na primeira consulta.
+32. **Filtros e planilha:** filtre por aluno, por PC, por período e por tipo. Esperado: a lista e as reservas
+    acompanham. **Exportar CSV** e abra no Excel em português. Esperado: os acentos aparecem certos, as
+    colunas se separam sozinhas, há uma coluna de hora local e outra em UTC, e o arquivo traz só as linhas
+    do filtro.
+33. **Retenção:** em "Guardar o registro por... dias" troque para 1 e salve; troque de volta para 180.
+    Esperado: aceita de 1 a 3650 e recusa o resto; com 1 dia o que for mais velho que ontem some da lista.
+
+Fecha: G19-T2 (passos 29 a 33), G19-I3 (a entrada real com o endereço do PC A) e G19-I8 (o CSV abre certo na
+planilha).
+
 ## Fora desta bateria
 
 - **GOALS 3** precisa de três logins Tailscale diferentes e dois PCs.

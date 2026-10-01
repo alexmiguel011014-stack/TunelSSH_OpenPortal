@@ -53,6 +53,7 @@
     },
     "files": [
       "src/main/**/*",
+      "!src/main/**/__tests__/**",
       "dist/renderer/**/*",
       "resources/*.html"
     ],
@@ -63,6 +64,13 @@
         "filter": [
           "**/*",
           "!*.pdb"
+        ]
+      },
+      {
+        "from": "lab-service/bin/Release",
+        "to": "lab-service",
+        "filter": [
+          "OpenPortalLabService.exe"
         ]
       }
     ],

@@ -45,3 +45,7 @@ Trusted Root Certification Authorities
 # Build output do sidecar C#/.NET (GOALS 2)
 sidecar/bin/
 sidecar/obj/
+
+# Build output do serviço do modo laboratório (GOALS 17)
+lab-service/bin/
+lab-service/obj/

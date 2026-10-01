@@ -46,6 +46,50 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('rdp:createCredential', { username, password }),
   generateRdpPassword: () => ipcRenderer.invoke('rdp:generatePassword'),
 
+  // Modo laboratório (GOALS 16) — lista de PCs do gerente, matrícula, quem gerencia
+  // este PC e "Iniciar com o Windows".
+  getLabRoster: () => ipcRenderer.invoke('lab:roster'),
+  addLabPc: (host) => ipcRenderer.invoke('lab:add', host),
+  removeLabPc: (hostId) => ipcRenderer.invoke('lab:remove', hostId),
+  openLabPc: (hostId) => ipcRenderer.invoke('lab:open', hostId),
+  onLabStatus: (callback) => {
+    const handler = (_, roster) => callback(roster);
+    ipcRenderer.on('lab:status', handler);
+    return () => ipcRenderer.removeListener('lab:status', handler);
+  },
+  getLabManagers: () => ipcRenderer.invoke('lab:managers'),
+  removeLabManager: (login) => ipcRenderer.invoke('lab:removeManager', login),
+  onLabHostChanged: (callback) => {
+    const handler = (_, state) => callback(state);
+    ipcRenderer.on('lab:hostChanged', handler);
+    return () => ipcRenderer.removeListener('lab:hostChanged', handler);
+  },
+  getStartWithWindows: () => ipcRenderer.invoke('lab:getStartWithWindows'),
+  setStartWithWindows: (enabled) => ipcRenderer.invoke('lab:setStartWithWindows', enabled),
+  getLabServiceState: () => ipcRenderer.invoke('lab:serviceState'),
+  enableLabService: (options) => ipcRenderer.invoke('lab:enableService', options),
+  disableLabService: () => ipcRenderer.invoke('lab:disableService'),
+  // GOALS 18: alunos, reserva, troca de aluno e pasta de um PC de laboratório.
+  getLabStudents: (hostId) => ipcRenderer.invoke('lab:students', hostId),
+  addLabStudent: (payload) => ipcRenderer.invoke('lab:studentAdd', payload),
+  setLabStudentQuota: (payload) => ipcRenderer.invoke('lab:studentQuota', payload),
+  deleteLabStudent: (payload) => ipcRenderer.invoke('lab:studentDelete', payload),
+  reserveLabPc: (payload) => ipcRenderer.invoke('lab:reserve', payload),
+  handOverLabPc: (payload) => ipcRenderer.invoke('lab:handOver', payload),
+  extendLabReservation: (payload) => ipcRenderer.invoke('lab:extend', payload),
+  endLabReservation: (payload) => ipcRenderer.invoke('lab:end', payload),
+  openLabFolder: (payload) => ipcRenderer.invoke('lab:folder', payload),
+  // GOALS 19: o registro central de acessos do laboratório.
+  queryLabLog: (filters) => ipcRenderer.invoke('lab:logQuery', filters),
+  exportLabLog: (filters) => ipcRenderer.invoke('lab:logExport', filters),
+  getLabLogRetention: () => ipcRenderer.invoke('lab:logRetention'),
+  setLabLogRetention: (days) => ipcRenderer.invoke('lab:setLogRetention', days),
+  onLabLogChanged: (callback) => {
+    const handler = () => callback();
+    ipcRenderer.on('lab:logChanged', handler);
+    return () => ipcRenderer.removeListener('lab:logChanged', handler);
+  },
+
   getVersion: () => ipcRenderer.invoke('app:version'),
 
   // Server/Agent status

@@ -1,6 +1,7 @@
 import { useContext, useEffect, useState } from 'react';
 import { ArrowLeft, Check, XCircle, AlertTriangle, Copy } from 'lucide-react';
 import { MachineContext } from '../../App';
+import LabModeSettings from '../lab/LabModeSettings';
 
 const MAX_PORT = 65535;
 
@@ -882,6 +883,8 @@ export default function ConfigPanel() {
             {telegramSaved && <span className="text-xs text-success">Configuração salva</span>}
           </div>
         </div>
+
+        <LabModeSettings />
 
         <div className="mt-6 p-4 bg-surface/50 rounded-lg border border-line-subtle">
           <p className="text-xs text-text-faint">

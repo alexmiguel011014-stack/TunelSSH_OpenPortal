@@ -24,7 +24,7 @@ function initAutoUpdater({ getMainWindow, isDev, allowPrerelease, updateCheckInt
       console.log(`[auto-update] Periodic check every ${Math.round(updateCheckIntervalMs / 60000)} min`);
       updateInterval = setInterval(() => {
         console.log('[auto-update] Periodic check: checking for updates...');
-        getAutoUpdater().checkForUpdates();
+        getAutoUpdater().checkForUpdates().catch(() => {});
       }, updateCheckIntervalMs);
     }
   }
@@ -93,7 +93,7 @@ function initAutoUpdater({ getMainWindow, isDev, allowPrerelease, updateCheckInt
     }
     sendToUpdateWindow("addLog('Verificando atualizações...')");
     sendToUpdateWindow("setStatus('Verificando...')");
-    getAutoUpdater().checkForUpdates();
+    getAutoUpdater().checkForUpdates().catch(() => {});
     return { checking: true };
   }
 
@@ -107,7 +107,10 @@ function initAutoUpdater({ getMainWindow, isDev, allowPrerelease, updateCheckInt
       owner: 'alexmiguel011014-stack',
       repo: 'TunelSSH_OpenPortal'
     });
-    autoUpdater.checkForUpdates();
+    // Falhas chegam pelo evento 'error' abaixo, que registra e avisa. Sem o
+    // catch a mesma falha também escapava como Unhandled Rejection no log
+    // (2026-09-30).
+    autoUpdater.checkForUpdates().catch(() => {});
     startDailyUpdateCheck();
 
     autoUpdater.on('checking-for-update', () => {

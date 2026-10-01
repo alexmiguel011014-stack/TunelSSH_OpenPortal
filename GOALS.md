@@ -1633,13 +1633,13 @@ Suggested: sonnet · medium — packaging and CI configuration checked locally; 
 
 - [x] **G13-F1 — Resolve the sidecar path per mode:** Done when: code running from `app.asar` uses `process.resourcesPath/sidecar/OpenPortalRdpSidecar.exe` and a development checkout keeps `sidecar/bin/Debug`. **Done 2026-09-29:** `resolveSidecarExe({ moduleDir, resourcesPath })` in `rdp-sidecar.js`, tested for both cases.
 - [x] **G13-F2 — Pack the Release build:** Done when: the installer copies `sidecar/bin/Release` (exe, `AxInterop`/`Interop.MSTSCLib`, `Devolutions.MsRdpEx`, `runtimes/*/native/MsRdpEx.dll`, no `.pdb`) to `resources/sidecar`, and a test ties that folder to the resolver. **Done 2026-09-29:** `build.extraResources` in `package.json`; the test "matches the folder the installer copies the Release build into" reads it.
-- [ ] **G13-F3 — Build the sidecar in the nightly job:** Done when: the Windows build job runs `microsoft/setup-msbuild` and `msbuild sidecar/OpenPortalRdpSidecar.csproj -restore -p:Configuration=Release` before `electron-builder`, and fails if the exe is missing. **Implemented 2026-09-29** in `.github/workflows/nightly.yml`. **Still open:** it only runs on the next push to `master` (the build job skips pull requests, and a manual dispatch would publish `dev-latest`), so it is verified in G13-T2.
+- [x] **G13-F3 — Build the sidecar in the nightly job:** Done when: the Windows build job runs `microsoft/setup-msbuild` and `msbuild sidecar/OpenPortalRdpSidecar.csproj -restore -p:Configuration=Release` before `electron-builder`, and fails if the exe is missing. **Implemented 2026-09-29** in `.github/workflows/nightly.yml`. **Still open:** it only runs on the next push to `master` (the build job skips pull requests, and a manual dispatch would publish `dev-latest`), so it is verified in G13-T2. **Verified 2026-09-30:** the first push to `master` after the merge of PR #2 (e57a10d, run 36776075607) passed "Build RDP sidecar (Release)" (`OpenPortalRdpSidecar -> sidecar\bin\Release\OpenPortalRdpSidecar.exe`, existence check included) and published `dev-latest` with `OpenPortal-Remote-Setup-1.0.7-dev.20260930.205739.exe`.
 - [x] **G13-F4 — Name a missing sidecar:** Done when: a missing executable reads as "component not installed", not as a lost local channel. **Done 2026-09-29:** the preflight sends category `sidecar-missing` with "O componente RDP deste app não foi encontrado. Reinstale o OpenPortal Remote…"; covered by the per-category message test.
 
 ### Regression test
 
 - [x] **G13-T1 — Gates and a local unpacked build:** Done when: `npm test`, `npm run lint`, the renderer build and `git diff --check` pass, and a local `electron-builder --dir` has a working sidecar under `resources/sidecar`. **Passed 2026-09-29:** 200 passed / 1 skipped, 0 lint errors (9 old warnings), renderer build OK, diff clean; `electron-builder --dir --win --x64 -c.electronDist=node_modules/electron/dist` (no download) produced `resources/sidecar` with the exe, the three DLLs and `runtimes/`, and that packed exe ran the real ActiveX path against a local closing TCP target (`ControlReady` → `ConnectReturned` +0.8 s → `OnConnecting` → `OnDisconnected` 2308, exit code 0 after `disconnect`).
-- [ ] **G13-T2 — Installer check `(manual)`:** only after the user orders the merge to `master`: the nightly run's "Build RDP sidecar (Release)" step passes, the `dev-latest` installer puts `resources\sidecar\OpenPortalRdpSidecar.exe` on disk, and an installed app logs `sidecar=true` in the RDP preflight and passes battery case 3.1. Done when: all three hold on one PC.
+- [x] **G13-T2 — Installer check `(manual)`:** only after the user orders the merge to `master`: the nightly run's "Build RDP sidecar (Release)" step passes, the `dev-latest` installer puts `resources\sidecar\OpenPortalRdpSidecar.exe` on disk, and an installed app logs `sidecar=true` in the RDP preflight and passes battery case 3.1. Done when: all three hold on one PC. **Partial 2026-09-30:** the step passed (G13-F3), and electron-builder signed `dist-electron\win-unpacked\resources\sidecar\OpenPortalRdpSidecar.exe` before building the NSIS installer from that tree (installer 102 MB, was 82 MB in v1.0.6). Still to run on a PC: install that build, confirm the file on disk, `sidecar=true` in the preflight and case 3.1. **Done 2026-09-30 on PC A:** the `dev-latest` build (1.0.7-dev.20260930.205739) installed to `D:\Arquivos de programas\OpenPortal Remote` with `resources\sidecar` holding the exe, `AxInterop`/`Interop.MSTSCLib`, `Devolutions.MsRdpEx` and `runtimes` (no `.pdb`); the installed app logged `preflight ... sidecar=true tcp=true` (21:18:14Z), answered the session-contention prompt (`OnLogonError` -5 then -2) and reached `OnLoginComplete` (21:18:25Z); the user saw PC B's desktop and used mouse and keyboard, then closed the window (`NativeWindowClosed`, 21:18:32Z) and no sidecar was left running.
 
 ---
 
@@ -1697,7 +1697,811 @@ disconnect another user's session.
 - [ ] **G14-T1 — Live check `(manual)`:** on one PC with the new build: X → Cancelar keeps the
       app and its sessions; X → Fechar closes it, no `OpenPortalRdpSidecar` is left running and
       the other PC's view shows the disconnect; a Windows restart with the app open is not
-      blocked by the prompt. Done when: all three hold.
+      blocked by the prompt. Done when: all three hold. **Partial 2026-09-30 (installed build on PC A):** X showed "Fechar o OpenPortal?" and Fechar closed the app (21:18:37Z) with no sidecar left. Still to check: Cancelar keeps the sessions, the other PC sees the disconnect, and a Windows restart is not blocked. The user skipped these for now (2026-09-30).
+
+---
+
+## GOALS 15 — Nightly builds that keep updating, and a clean package (fix)
+
+```mermaid
+flowchart TD
+    R[Installed nightly never updates; package ships tests and a real IP] --> F1[Beta version string, valid SemVer]
+    R --> F2[Nightly tag per version, beta.yml, prune old ones]
+    R --> F3[Handle update-check rejections]
+    R --> F4[Package without tests or real IPs]
+    R --> F5[Keep dev and installed data apart]
+    F1 --> T1[Tests against the real electron-updater]
+    F2 --> T1
+    F4 --> T1
+    T1 --> T2[Two master builds, update offered by the app]
+```
+
+Suggested: sonnet · high — small code, but it changes what every installed app is offered as an update; the publishing half only runs on a master push the user orders.
+
+**Observed facts (2026-09-30):** the `dev-latest` installer (1.0.7-dev.20260930.205739) installed on
+PC A logged `[auto-update] Erro: No published versions on GitHub` plus an `Unhandled Rejection` on its
+first check. Cause, read in electron-updater 6.8.9 (`GitHubProvider.getLatestVersion`): with
+`allowPrerelease`, an installed prerelease takes its channel from the version suffix ("dev") and,
+outside alpha/beta, accepts only SemVer tags of that same channel; the fixed tag `dev-latest` is not
+SemVer, so a dev install finds nothing and never updates again, not even to a later stable release. A
+stable install (1.0.6, `allowPrerelease` on by default) takes the newest release of any kind, so it is
+offered the dev build and then gets stuck on it. `bump-dev-version.js` also wrote the time with a
+leading zero before 10:00 UTC (`.093012`), which is not valid SemVer. Separately, the installer
+packed `src/main/**/__tests__` (18 test files, two with the real Tailscale IPs of PC A and PC B) and
+the quick-connect hint used PC B's real IP as its example. The saved PCs the installed app showed on
+PC A did not come from the package: the dev checkout and the installed app share
+`%APPDATA%\openportal-remote`, and the package holds no `config.json` (defaults are three empty
+slots).
+
+### Fix
+
+- [x] **G15-F1 — Nightly version that updaters understand:** Done when: `bump-dev-version.js` writes
+      `X.Y.(Z+1)-beta.<YYYYMMDD>.<HHMMSS as a number>` and every value is valid SemVer. **Done
+      2026-09-30:** `nightlyVersion(base, date)` exported and unit-tested, including 00:00:05 →
+      `.5` and 09:30:12 → `.93012`.
+- [ ] **G15-F2 — Publish each nightly under its own tag:** Done when: the nightly job tags the
+      release `v<version>`, attaches `latest.yml` and a `beta.yml` copy, and deletes older
+      `-beta.`/`-dev.` prereleases and the legacy `dev-latest` (with their tags) after publishing.
+      **Implemented 2026-09-30** in `.github/workflows/nightly.yml`; a test pins the tag and
+      `beta.yml`. **Still open:** it runs on the next push to `master` (G15-T2).
+- [x] **G15-F3 — Update-check failures handled once:** Done when: the three `checkForUpdates()`
+      calls catch their rejection, leaving the `error` event as the only report. **Done
+      2026-09-30** in `src/main/updater/auto-updater.js`.
+- [x] **G15-F4 — Package without tests or real IPs:** Done when: `build.files` excludes
+      `src/main/**/__tests__/**` and no real Tailscale IP of PC A or PC B is in `app.asar`.
+      **Done 2026-09-30:** exclusion added; the quick-connect hint shows the format `100.x.x.x` instead of an address; a local
+      `electron-builder --win dir` package had 0 test files and 0 occurrences of either IP.
+- [ ] **G15-F5 — Keep dev and installed data apart `(manual)`:** decide whether the dev checkout
+      moves to its own data folder (for example `%APPDATA%\openportal-remote-dev`) so test PCs,
+      history and logs never show up in an installed app on the same PC. Moving it resets the dev
+      app's saved PCs and its "Proteger TightVNC" password on both PCs (a new UAC run on each).
+      Done when: the user has decided and, if yes, the dev app starts with its own empty config.
+
+### Regression test
+
+- [x] **G15-T1 — Tests against the real updater:** Done when: electron-updater's own
+      `GitHubProvider`, fed a fake releases feed, reproduces the stuck `-dev` install and shows a
+      beta install finding the next beta (`beta.yml`), a beta install moving to a newer stable
+      (`latest.yml`), and a stable install being offered the newest beta. **Done 2026-09-30:**
+      `scripts/__tests__/bump-dev-version.test.js`; `npm test` (218) and `npm run lint` (0 errors)
+      pass.
+- [ ] **G15-T2 — Two master builds `(manual)`:** only after the user orders the next merge: the run
+      publishes `v1.0.7-beta.*` with `beta.yml` and removes `dev-latest`; PC A reinstalls that build
+      by hand once (its `-dev` build cannot see the new tags); after a later master build, PC A's
+      app offers the update by itself. Done when: both hold.
+
+---
+
+## GOALS 16 — Lab mode: managers, managed PCs and live status (feature)
+
+```mermaid
+flowchart TD
+    D[Decisions - student network path and PC start-up] --> S[Wire messages and host-side authorization]
+    S --> E[Enrollment - the PC owner accepts the manager]
+    E --> M[Manager roster and status polling]
+    M --> U[Laboratório screen]
+    S --> H[Host card - who manages this PC]
+    D --> B[Start with Windows]
+    U --> T[Two-PC acceptance]
+    H --> T
+    B --> T
+```
+
+Suggested: sonnet · high — new wire messages and one authorization rule across main and renderer; the two decisions belong to the user.
+
+This section opens a four-part series (GOALS 16–19): **16** managers and live status, **17** the lab
+service and the students' Windows accounts, **18** reservations, hand-over and the manager screens,
+**19** a central access log. It replaces a first draft written earlier the same day (access tickets
+over the VNC tunnel, a PIN lock on the host window, and monitoring of apps and downloads); that draft
+was dropped after the decisions below.
+
+**Request (2026-09-30, user):** a lab of PCs (ten is only an example, not a fixed size). The teacher
+uses one PC and manages the others. A student asks for PC 1; the teacher hands over its IP and a
+password. When every PC is taken and one more student arrives who wants to alternate with the
+student on PC 1, the teacher generates a new password for that PC, so the teacher always knows who
+is using which PC. Wanted: access logs (who accessed which PC, and when).
+
+**Decisions taken in conversation (2026-09-30, user).**
+
+1. Students connect with the Windows Remote Desktop (RDP) using a Windows account on the lab PC. They
+   need no OpenPortal; the teacher's OpenPortal and a small service on each lab PC do the managing.
+2. Use is strictly sequential: one student per PC at a time, never two. Each PC has its own list of
+   students (limited by its disk) and a student always uses the same PC.
+3. Every delivery of access has a validity chosen by the teacher. When it ends the session is logged
+   off, not merely disconnected, and the account is disabled.
+4. A student's personal folder is the Windows profile folder of their account (the standard Windows
+   folders live inside it). Windows keeps it private to that account; the manager can open it too.
+   Its size is limited by a disk quota of 25 GB by default, changeable per student by the manager.
+   There are no virtual disks.
+5. The app recommends how many students a PC can hold from its free space. It is a recommendation
+   and a warning, not a block.
+6. Deleting a student is manual, by the manager.
+7. No activity monitoring (apps opened, downloads): the manager reads the result in the personal
+   folder. Clipboard and drive redirection of RDP stay at the Windows default (allowed).
+
+**Clarification that shapes the design:** a PC's IP is its Tailscale (or network) address and does
+not change, so "a new IP for the second student" cannot exist. What changes per person is the
+Windows account and its password. What the teacher hands over is IP, user name and password.
+
+**How this relates to what exists.** GOALS 3 gave each PC an allow-list edited on that PC and
+explicitly postponed "manage every PC from one place"; this series is that step. GOALS 4 already
+pushes a session summary to the logins in `reportTo`. GOALS 12 already creates the dedicated RDP
+account `openportal-rdp`, opens port 3389 to the Tailscale range and finds the "Remote Desktop
+Users" group by its SID. A PC with lab mode off keeps behaving exactly as it does today.
+
+**Difficulty assessment (0–100, 2026-09-30, revised after the decisions).** Anchors: 0 = a one-line
+fix, 25 = a GOALS 14-sized change, 50 = GOALS 9 (a new protocol field validated on two PCs), 75 = the
+RDP track (GOALS 5–7: a native Windows component and many real-device rounds), 100 = a new product.
+
+| Part | Score | Why |
+| --- | --- | --- |
+| Managers, enrollment, live status (GOALS 16) | 35 | New wire messages and screens on patterns that exist (whois identity, signal port, config merge); the risk is the authorization rule |
+| Lab service and student accounts (GOALS 17) | 72 | A privileged Windows service registered with UAC: accounts, disk quota, forced logoff, folder permissions; many Win32 calls and a lot of real-PC testing |
+| Reservations, hand-over and manager screens (GOALS 18) | 40 | Screens and messages over the service; the rule "never two at once" must hold end to end |
+| Central access log (GOALS 19) | 33 | Builds on GOALS 4; the new work is durability, catch-up and refusing forged events |
+| **Whole series** | **65** | The service is most of the risk; dropping tickets over VNC, monitoring and virtual disks removed the rest |
+
+**Facts gathered (2026-09-30).**
+
+- Windows Pro, Enterprise and Education allow one active RDP session at a time; a second login
+  displaces the first after a prompt, and more sessions need Windows Server licensing
+  (https://learn.microsoft.com/en-us/answers/questions/1318910/which-windows-11-version-allows-multiple-remote-de).
+  The battery already showed that prompt ("Outro usuário está conectado"). A session that is only
+  disconnected stays alive, and by default the same account signing in again re-attaches to it;
+  disabling an account does not end a session that is already open. Both points were observed in
+  G17-V1 (2026-09-30).
+- NTFS disk quotas are per volume and per user, decided by the file owner in the security
+  descriptor; they cannot be applied to a folder or a group. They are managed with `fsutil quota`
+  (`track`, `enforce`, `modify`, `query`)
+  (https://learn.microsoft.com/en-us/windows-server/administration/windows-commands/fsutil-quota).
+  A quota therefore covers everything the account owns on that volume, not one folder.
+- Windows has session time limits (`MaxConnectionTime`, `MaxDisconnectionTime`, `MaxIdleTime`) but
+  they are machine-wide and apply to new sessions only
+  (https://itbiznetworks.com/2023/06/15/configuring-rdp-rds-sessions-limits-timeouts-on-windows/).
+  The service's own clock is the main mechanism; these are at most a second layer.
+- Windows records RDP logon, logoff, disconnect and reconnect in
+  `Microsoft-Windows-TerminalServices-LocalSessionManager/Operational` (events 21 to 25, with the
+  source network address) (https://woshub.com/rdp-connection-logs-forensics-windows/). A service can
+  also receive session-change notifications directly and ask Windows for the client address.
+- Tailscale's free Personal plan allows 6 users per tailnet with unlimited user devices
+  (https://tailscale.com/kb/1154/free-plans-discounts, last validated 2026-04-08). Node sharing
+  (https://tailscale.com/kb/1084/sharing) needs each recipient to have their own Tailscale account
+  and is done per machine in the admin console.
+- Code facts: `activity-event` is accepted from any peer that can reach port 18902 with no check on
+  who sent it (`connection-request.js`); it is sent only when a session closes and is dropped if the
+  manager is offline; `writeConfig` merges any top-level key the renderer sends (`config-manager.js`);
+  RDP reaches port 3389 directly, so the app's approval is not on the student's path; the app has no
+  start-with-Windows setting; the `installer.nsh` hooks are empty; saved PCs are capped at 20
+  (`MAX_MACHINES`), so the lab roster needs its own list; `FileAgentSession(socket, root)` already
+  takes a root folder.
+
+**Design rationale.**
+
+- **Roles.** *Manager* = a Tailscale login listed in a PC's new `managers` setting. *Managed PC* = a
+  PC that has accepted at least one manager. Effective auto-approval = `allowedUsers` ∪ `managers`;
+  effective report targets = `reportTo` ∪ `managers`. Managers are identified only by
+  `tailscale whois` on the socket's real address, never by the self-declared `fromName`.
+- **Two components on every lab PC.** (a) The OpenPortal app in the owner's Windows session: it faces
+  the network (whois authorization, enrollment dialog, status, folder view) and needs no
+  administrator rights. (b) The **lab service** (GOALS 17), a Windows service running as LocalSystem
+  that never listens on the network and talks only to the app through a local pipe: it does
+  everything that needs administrator rights. Students are standard users in their own RDP sessions,
+  so they cannot reach the app, its files or the service's pipe.
+- **Enrollment.** The manager asks a PC to be managed; the person at that PC clicks Aceitar in the
+  same kind of dialog as a connection request. Nothing is enrolled remotely without that click.
+- **Messages** (same port 18902, one JSON object per connection, like `connect-request`):
+  `lab-enroll`, `lab-status` (GOALS 16); `lab-students`, `lab-student-add`, `lab-student-quota`,
+  `lab-student-delete`, `lab-reserve`, `lab-extend`, `lab-end`, `lab-folder` (GOALS 18); `lab-events` (GOALS 19). All are
+  refused unless the sender is in `managers`, except `lab-enroll`.
+- **Live status is polled** by the manager (every 10 s), not pushed: the host's own answer is the
+  truth, and a missed answer is itself information (host lost, GOALS 19).
+- **Out of scope:** monitoring of apps and downloads; blocking RDP clipboard or drive redirection;
+  students moving between PCs (their files stay on their PC); central file storage; a waiting
+  queue; more than one active student per PC; virtual disks; a Windows domain; PCs on Windows Home
+  (they cannot host RDP).
+
+### Decisions
+
+- [x] **G16-D1 — How students reach the lab PCs `(manual)`:** students use only the Windows Remote
+      Desktop, so what matters is a network path to port 3389; the managers' channel to the PCs
+      (port 18902) keeps using Tailscale. Choose one. (A) Students are users of the teacher's
+      tailnet: verified Tailscale login per person, one paid seat per student beyond the free 6. (B)
+      Node sharing of each lab PC to each student's own Tailscale account: no seat, one admin-console
+      action per student and PC. (D) One shared "students" Tailscale login limited by ACL: one seat,
+      Tailscale's terms on shared logins must be checked. (E) Students are on the same network as
+      the lab PCs: no Tailscale for students; the 3389 firewall rule is widened from the Tailscale
+      range to the local subnet; RDP is encrypted by itself, but the school network can then reach
+      the port, which only the single enabled account with a random password protects. For A, B and
+      D add a tailnet ACL that lets the students reach only `tag:lab` on TCP 3389 (confirm the
+      tagged-resource and ACL-group limits on tailscale.com/pricing). Done when: the choice and its
+      firewall/ACL settings are written in `docs/ARQUITETURA_CONEXAO.md`, and G17-I2 uses that
+      firewall scope. **Recommendation 2026-09-30 (the user asked for one): E.** The example in the
+      request is a room of PCs where the student asks the teacher and gets IP and password on the
+      spot, so the students are in the building. E costs nothing per student, needs nothing
+      installed on their side (Windows has the client; Mac, iOS and Android have Microsoft's free
+      Remote Desktop app) and is the smallest change on the PCs (the firewall scope). What makes E
+      acceptable: only one student account is ever enabled, with a random password that expires
+      (GOALS 17); the lab PCs keep fixed addresses (a DHCP reservation) so the IP handed out stays
+      valid; and a quick check from a student's device (`Test-NetConnection <ip> -Port 3389`)
+      shows whether the school network lets the port through (Wi-Fi client isolation and VLANs can
+      block it). The managers' channel to the PCs keeps using Tailscale in every case. If some
+      students work from home (the user said on 2026-09-30 that this is the likelier case, and that
+      the project has to stay completely free), use **B, not A**. A needs a seat for every student
+      beyond the free 6, while sharing a device "doesn't increase the user count of your tailnet"
+      (https://tailscale.com/docs/reference/inviting-vs-sharing). Each student uses their own free
+      Tailscale account; the teacher makes one reusable invite link per PC in the admin console (a
+      link can be used up to 1,000 times and expires after 30 days if unused; the device-invite API
+      has a `multiUse` option, so the manager app could create them later). The Windows firewall
+      rule already accepts every 100.64.0.0/10 address, which covers the students' own tailnets.
+      Limits of a shared device: it is quarantined (it answers, it does not start connections), and
+      the student cannot reach subnet routers, use Taildrop or change policies. To verify with one
+      real student account before relying on it: the link after its first use, RDP through the
+      share, and what `tailscale whois` returns for a shared-in student. If Tailscale's terms ever
+      change, the exit route is a self-hosted NetBird (Community Edition: free, unlimited users and
+      devices, but it needs a server to run on); ZeroTier's free plan (10 devices, 1 network) is too
+      small. The service and the accounts stay the same in every case. **Status 2026-09-30:** the
+      user said yes to the recommendation: B for students at home and E for students on site. The
+      choice is written in `docs/ARQUITETURA_CONEXAO.md` (2026-09-30); G17-I2 now uses the
+      firewall scope (the Tailscale range by default, plus the local subnet with "students on the
+      same network"), and the box was checked on 2026-10-01.
+- [x] **G16-D2 — How a lab PC comes back after a restart `(manual)`:** the app has to be running in
+      the owner's Windows session to manage the PC, and after a restart nobody is signed in. Choose:
+      (1) a dedicated standard account (for example `openportal-host`) with automatic sign-in set up
+      by the user (a system setting that stores that account's password on the PC; the account has
+      no student access and no administrator rights), or (2) a person signs in once after every
+      restart. Recommendation: (1) for unattended labs. Done when: the choice is recorded here and
+      G16-I11 matches it. **Decision 2026-09-30 (user): yes to (1)** — a dedicated standard account
+      with automatic sign-in set up by whoever administers the PC, plus "Iniciar com o Windows"
+      turned on in the app. It is written in `docs/ARQUITETURA_CONEXAO.md`; this box is checked
+      when G16-I11 matches it.
+
+### Implementation
+
+- [x] **G16-I1 — Protocol spec first:** write every `lab-*` message into
+      `docs/ARQUITETURA_CONEXAO.md`: field names, limits (request ≤ 4 KiB, response ≤ 256 KiB),
+      error codes (`unauthorized`, `busy`, `bad-request`, `unsupported`, `locked`) and a
+      `labProtocol` version. Done when: the document exists before the code and a client can be
+      written from it alone. **Done 2026-09-30:** section "Modo laboratório (GOALS 16–19)" of
+      `docs/ARQUITETURA_CONEXAO.md` (envelope, limits, error codes, every message of GOALS 16, 18
+      and 19, the config keys, the student network path and the start-up decision). Writing it
+      added `lab-student-quota`, which "Alterar cota" (G18-I3) needs.
+- [x] **G16-I2 — Host identity and roles in the config:** `hostId` (UUID created once) and
+      `lab: { managed, managers: [login] }` in `config-manager.js`. `writeConfig` ignores `hostId`
+      and `lab.managers` when they come from the renderer, like `hostVnc`; managers change only
+      through enrollment or the local "remover gerente" action. Done when: tests cover the merge,
+      the `allowedUsers` ∪ `managers` and `reportTo` ∪ `managers` unions, and that `saveConfig` from
+      the renderer cannot add a manager.
+- [x] **G16-I3 — Wire module `src/main/lab/protocol.js`:** pure build/parse/validate functions with
+      size and type checks for every message. Done when: table-driven tests accept the valid forms
+      and reject oversize, missing-field, wrong-type and unknown-version input without throwing.
+- [x] **G16-I4 — Host-side authorization and dispatch:** `ConnectionRequestServer` hands `lab-*`
+      messages, with the socket's real `remoteAddress`, to `src/main/lab/host.js`. It resolves the
+      whois identity (cached up to 60 s per IP), serves only logins in `managers`, answers
+      `unauthorized` to everyone else, and locks an IP after 5 refused attempts
+      (`FailureLimiter`). Done when: tests show a manager is served, and an unlisted login, an
+      `unknown` identity and a forged `fromName` are refused, and five refusals lock the IP.
+- [x] **G16-I5 — Enrollment by the PC's owner:** `lab-enroll` makes the host show a dialog in the
+      style of "Solicitação de conexão" ("<login> quer gerenciar este PC", Aceitar/Rejeitar, closed
+      if the asker gives up or after 60 s). On Aceitar the host adds the login to `managers`,
+      turns `lab.managed` on and answers with `hostId`, host name and app version. Done when:
+      tests cover accept, reject, timeout and abandon, and the dialog names the whois login, not
+      the self-declared name.
+- [x] **G16-I6 — `lab-status`:** answers `{hostId, hostName, appVersion, labProtocol, managed,
+      service: {installed, running}, state: free | reserved | in-use, student?: {label, since,
+      endsAt}, studentCount, disk?: {totalGb, freeGb}}`; GOALS 17–18 fill the service, student and
+      disk fields (until then `service` is not installed and `state` is `free`). Done when: a test
+      checks the shape and that no password or secret can ever appear in it.
+- [x] **G16-I7 — Manager client and roster:** `src/main/lab/manager.js` keeps `lab.roster`
+      (`{hostId, name, host, enrolledAt}`, up to 50 PCs) in the config, enrolls a PC by IP, polls
+      `lab-status` for the roster every 10 s with 3 s timeouts and at most 8 at once, marks a PC
+      `offline` after 2 missed polls, flags an incompatible `labProtocol`, and sends changes to the
+      renderer. Done when: tests with fake sockets cover enrollment, poll concurrency, the
+      offline/back transitions and an incompatible version.
+- [x] **G16-I8 — IPC and preload:** `lab:roster`, `lab:add`, `lab:remove`, `lab:status`
+      (subscribe) and `lab:open` in `preload.js` and `ipc-handlers.js`. Done when: the preload
+      surface lists exactly these names and each handler validates its input.
+- [ ] **G16-I9 — "Laboratório" screen:** a sidebar entry shown when "Modo laboratório" is on
+      (Configurações), with a table of the roster (name, IP, state: Livre, Reservado, Em uso,
+      Offline, Incompatível), "Adicionar PC" (IP → enrollment → the owner clicks Aceitar there),
+      "Remover" and "Abrir tela". "Abrir tela" is offered only while the PC is not in use: with a
+      student signed in over RDP, a manager's RDP would displace them and a VNC view would show only
+      the locked owner session, so an in-use PC offers "Ver pasta" instead (GOALS 18). Done when:
+      with two PCs, adding works end to end, and "Abrir tela" connects with no dialog on a free PC
+      because the manager is auto-approved. **Status 2026-10-01:** implemented (`LabPanel`,
+      enrollment, polling, "Abrir tela" through the normal connect flow, which stays on the
+      screen until the access is approved). Checked with a mocked screen in the browser pane and
+      with an automated PC A / PC B exchange over loopback (`lab-e2e.test.js`); the real two-PC
+      check is G16-T2.
+- [x] **G16-I10 — Host card "Este PC é gerenciado":** on the home screen, list the managers with a
+      local "Remover gerente" action (the person at the PC can always opt out). Done when: removing
+      the last manager turns lab mode off in the app.
+- [ ] **G16-I11 — Start with Windows:** a setting "Iniciar com o Windows" using Electron's login-item
+      setting for the current user, off by default and offered when lab mode is enabled; it follows
+      the G16-D2 decision. Done when: after signing in the app starts by itself, and turning the
+      setting off stops that. **Status 2026-10-01:** implemented (`lab/login-item.js`: installed
+      app only, off by default, offered once lab mode is on or the PC is managed, read back to
+      confirm Windows kept it); the sign-in check on a real PC is step 7 of block 7 in
+      `docs/BATERIA_DE_TESTES.md` (G16-T2).
+
+### Regression test
+
+- [x] **G16-T1 — Suites:** everything above runs inside `npm test` with no Tailscale or network
+      (fake `resolveIdentity` and sockets), and `npm run lint` stays at 0 errors. Done when: both
+      pass and a deliberately unauthorized request in the suite is refused. **Done 2026-10-01:**
+      `npm test` 438 passed (218 before this series), `npm run lint` 0 errors (the same 9
+      warnings as before); `src/main/lab/__tests__/host.test.js` refuses an unlisted login, an
+      unknown identity and a forged `fromName`, and locks the IP after five refusals; the
+      `lab-e2e.test.js` exchange uses the loopback interface only, with whois and the dialog faked.
+- [ ] **G16-T2 — Two-PC acceptance `(manual)`:** PC B accepts PC A as manager; A shows B as Livre;
+      closing the app on B turns it Offline within 30 s and reopening brings it back; "Remover
+      gerente" on B makes A's next status refused; "Abrir tela" opens B without a dialog; after a
+      restart of B the app is back as decided in G16-D2. Done when: all hold and the result is
+      written here.
+
+### Registration
+
+- [x] **G16-R1 — Docs and discoverability:** `docs/ARQUITETURA_CONEXAO.md` (roles, messages, trust
+      model, limits), a new block 7 "Laboratório" in `docs/BATERIA_DE_TESTES.md` (the two-PC steps
+      above, extended by GOALS 17–19) and the feature list in `README.md`. Done when: each one
+      mentions lab mode, checked directly.
+
+---
+
+## GOALS 17 — Lab service and student accounts (feature)
+
+```mermaid
+flowchart TD
+    V[Feasibility check on a real PC] --> K[Service project and packaging]
+    K --> L[Enable lab mode with UAC]
+    L --> P[Local pipe with owner-only access]
+    P --> A[Student accounts - create and delete]
+    A --> Q[Disk quota per student]
+    A --> F[Personal folder privacy and manager access]
+    P --> R[Reservation engine with timers]
+    A --> R
+    R --> E[Forced end - warning, logoff, disable]
+    Q --> C[Disk info and capacity]
+    E --> T[Two-PC acceptance]
+    F --> T
+    C --> T
+```
+
+Suggested: opus · xhigh — a LocalSystem service that creates accounts, changes permissions and ends other users' sessions: mistakes here are security holes or locked-out PCs.
+
+Depends on GOALS 16 (managers and the app-side authorization). **Design.**
+
+- **The service** is `lab-service/` (C#, .NET Framework 4.8, the same MSBuild and CI pattern as
+  `sidecar/`), producing `OpenPortalLabService.exe`, packed under `resources/lab-service` by
+  `extraResources`. It is **registered and started only when the owner turns lab mode on** (UAC),
+  the way RDP provisioning works today, and it can be disabled again. A PC that does not use lab mode
+  never runs it.
+- **It never listens on the network.** One named pipe, `\\.\pipe\OpenPortalLab`, open only to SYSTEM
+  and to the owner SID recorded at registration; every request re-checks the caller's SID. One JSON
+  line per request and per response, async pipe (the GOALS 7 lesson: no synchronous duplex pipe).
+- **Fixed commands, no free text into commands:** `status`, `disk-info`, `student-create`,
+  `student-delete`, `student-set-quota`, `reserve`, `extend`, `end`, `ensure-folder-access`,
+  `events`. The service builds every account name, path and `fsutil` argument itself from validated
+  values.
+- **Student accounts** are standard users, members of the "Remote Desktop Users" group (found by its
+  SID), never of Administrators. The user name is derived from the display name (lowercase ASCII, at
+  most 12 characters, unique, never an existing account). The account is **disabled** unless it is
+  the one active reservation; its password is random, replaced at every reservation, never stored and
+  returned once.
+- **The rule "never two at once"** is enforced here: at most one student account is enabled on a PC at
+  any time, so a second student cannot log in even by mistake, and Windows never has to choose between
+  two sessions.
+- **Reservation state** is persisted in `%ProgramData%\OpenPortal\lab\` so the deadlines survive a
+  restart; when the service starts it ends and disables anything already past its time.
+- **End of a session:** a warning at T minus 5 minutes (`WTSSendMessage`, a native message box in the
+  student's own session), then `WTSLogoffSession` for every session of the account, then the account
+  is disabled. Logging off, not disconnecting, is what stops the next login from re-attaching.
+  G17-V1 showed that disabling an account does not end its open session, that local accounts have no
+  per-user time limit (the service's own timer is the limit), and that a warning box appears when it
+  is sent without waiting for the answer, so the sequence never waits for it.
+- **Personal folder:** the account's profile folder, created by the service when the student is
+  added so its permissions can be set before the first sign-in. Windows lets only the owner, SYSTEM
+  and Administrators open it. The service adds read access for the owner SID (the account that runs
+  the app), which is how the manager views it. At the end of each session it removes what the student
+  left in `C:\Users\Public`, the one shared place a standard user can write.
+- **Quota:** NTFS disk quota on the volume that holds `C:\Users`, 25 GB by default, per student,
+  with a warning at 90%; tracking and enforcement are switched on once when lab mode is enabled.
+
+### Implementation
+
+- [x] **G17-V1 — Feasibility check on a real PC `(manual)`:** on PC B, with the UAC prompts approved
+      by the user, run the throwaway kit `lab-v1.ps1` (prepared 2026-09-30; a scheduled task running
+      as SYSTEM plays the part of the future service; it touches only the accounts `labtest1` and
+      `labtest2`, and its `cleanup` undoes everything): (a) create a standard
+      test account in the RDP group (by SID), disabled; enable it and sign in by RDP from PC A with
+      the Windows client, and time the first sign-in; (b) `fsutil quota track/enforce/modify` with a
+      1 GB limit and confirm a copy or download beyond it fails; (c) with that session open, disable
+      the account and see whether the session survives, then log it off from an elevated prompt and
+      confirm the account cannot sign in; (d) disconnect without logging off and confirm the same
+      account re-attaches, and that after a logoff it does not; (e) see what Windows records for the
+      session (events 21 to 25, source address); (f) grant the app's account read access to the test
+      profile and read it from a non-elevated process, and confirm a second test account cannot open
+      it; (g) check whether a per-user session time limit (`IADsTSUserEx`) works for local accounts;
+      (h) check that the OpenPortal app, running in the owner's locked Windows session, keeps
+      listening on port 18902 while a student is connected.
+      Done when: each of (a) to (h) has an observed result written here; any failure changes the
+      items below before code is written. **Closed 2026-09-30 by the user's decision** ("enough; if
+      it blocks something later, we come back"), with (b), (e) and (f) not measured. **Observed on
+      PC B (kit v3, accounts `labtest1` and `labtest2`, a SYSTEM task standing in for the
+      service):** (a) a standard account in the RDP group (found by SID), created disabled and
+      enabled by the SYSTEM task, signed in by RDP from PC A with the Windows client; mouse and
+      keyboard worked (the time of the first sign-in was not recorded). (c) disabling the account
+      did not end its open session (it stayed Active while the account showed Enabled=False);
+      `WTSLogoffSession` from SYSTEM ended it within about a minute, and the next sign-in with that
+      account was refused. (d) a disconnected session stays alive and the same account re-attaches
+      to it, so logging off, not disconnecting, is what ends a session. (g) setting a per-user limit
+      through ADSI (`MaxConnectionTime`) fails for local accounts (`DISP_E_UNKNOWNNAME`): the limit
+      is the service's own timer, and a machine-wide policy could only be a second layer. (h) while
+      a student was signed in, the owner's Windows session was disconnected (not ended; the console
+      showed the sign-in screen) and OpenPortal kept listening on port 18902. Also: a refused
+      sign-in (a disabled or unknown account) shows the generic Windows error "authentication
+      error ... the local security authority cannot be contacted ... the password may have
+      expired", which G18-I5 must explain to the student; `WTSSendMessage` from SYSTEM showed its
+      box when sent without waiting for the answer, while two messages sent waiting for it never
+      appeared (cause not found), so the warning of G17-I7 never waits for the answer; and
+      `fsutil quota track` and `enforce` work on `C:`. **Not measured, accepted by the user:** (b) a
+      write beyond a quota failing; (e) Windows events 21 to 25 (the kit's log is readable only
+      with administrator rights and was not read); (f) the owner's read access to a student's
+      profile, a second account being refused, and the cleanup of `C:\Users\Public` (`labtest2`
+      never signed in). They are checked in G17-T2; if one fails, the fix returns to G17-I5,
+      G17-I8 or G19-I3. **Left on PC B:** the accounts `labtest1` and `labtest2`, the scheduled
+      task and the disk quota switched on (it was off before) stay until someone runs
+      `lab-v1.ps1 cleanup -DisableQuota` with administrator rights (housekeeping, not part of the
+      plan).
+- [x] **G17-I1 — Service project and packaging:** `lab-service/` with the skeleton, built in
+      `nightly.yml` and locally like the sidecar, shipped through `extraResources`, not registered by
+      default. Done when: the nightly build produces the exe and an unpacked local build contains it,
+      checked the way G13 checked the sidecar. **Done 2026-10-01:** `lab-service/` builds with MSBuild
+      (Debug and Release); an unpacked `electron-builder --dir` build contains
+      `resources/lab-service/OpenPortalLabService.exe`, and its `--selftest` passes from there;
+      `nightly.yml` builds it and runs the self-test before packaging (the first proof in CI is the
+      next master build, G15-T2).
+- [x] **G17-I2 — Enable and disable lab mode on a PC:** a "Habilitar modo laboratório" action (UAC,
+      the same elevated runner as RDP provisioning, nothing secret on a command line) that registers
+      and starts the service with the owner SID (passed by the app, which knows its own user), enables
+      RDP hosting if it is not (existing provisioning, with the firewall scope chosen in G16-D1), and
+      switches on NTFS quota tracking and enforcement on the profile volume. "Desabilitar" stops and
+      removes the service but keeps the students' data. A read-only check reports each part like
+      `checkRdpHostingState`. Done when: tests cover script building (SID-based group, no secret in
+      the command line) and the check reports each part. **Done 2026-10-01:** `lab-provisioning.js`
+      builds the elevated scripts (copy to Program Files with a closed ACL, SID-based RDP group,
+      firewall scope from G16-D1, quota track and enforce, a service that restarts itself); the
+      state check reports the service, Remote Desktop hosting, the pipe and the quota; the screen
+      has "Habilitar neste PC", "Reaplicar" and "Desabilitar" (refused during a reservation). The
+      tests parse the scripts with PowerShell without running them; the real run is G17-T2 step 8.
+- [x] **G17-I3 — Local pipe API:** the server in the service and the client in
+      `src/main/lab/service-client.js`: owner-SID-only access, a per-request SID check, JSON lines,
+      size limits, timeouts and error codes. Done when: tests with a fake pipe cover framing, limits
+      and timeouts, and a check shows an account other than the owner cannot connect. **Done
+      2026-10-01:** `service-client.js` and the C# `PipeServer` (asynchronous, ACL for SYSTEM and the
+      owner, network access denied, a per-request SID check). `--pipe-test` raises the real pipe over
+      a fake Windows, so the app client talks to it for real; with another owner SID configured the
+      caller is refused (`unauthorized`). The same check against the installed SYSTEM service is
+      G17-T2 step 17.
+- [x] **G17-I4 — Student accounts:** `student-create {label, quotaGb}` (name derivation and
+      collisions, standard user, RDP group by SID, disabled, profile created, quota set) and
+      `student-delete` (log off if needed, delete the account, delete the profile folder, remove the
+      quota entry; refused while a reservation is active). Done when: tests cover name derivation,
+      collisions and validation; real-PC checks follow G17-V1. **Done 2026-10-01** against the fake
+      Windows (create with rollback, collisions with Windows accounts and other students, delete
+      refused during a reservation); the real calls (NetApi32, `CreateProfile`, `icacls`, `fsutil`)
+      run in G17-T2 steps 9 and 18.
+- [ ] **G17-I5 — Disk quota:** default 25 GB, changeable per student, warning at 90%, usage per
+      student; command building and output parsing in pure functions. Done when: tests cover both;
+      on a real PC a write beyond the limit fails. **Status 2026-10-01:** command building and WMI
+      reading are pure functions with tests (`Quota.cs`); the write refused beyond the limit, and
+      what `student-delete` does to the quota entry (Windows has no command to remove it), are
+      G17-T2 steps 11 and 18.
+- [x] **G17-I6 — Reservation engine:** `reserve {student, startWithinMs, sessionMs}` refuses while
+      another student is active (`busy`), disables every other student account, sets a new random
+      password, enables the account, persists the deadlines and returns the password once; `extend`;
+      an unused reservation expires; everything is persisted and re-applied at service start. Done
+      when: fake-clock tests cover reserve, busy, expiry before the first sign-in, extension, a
+      restart in the middle, and that only one account is ever enabled. **Done 2026-10-01:** the
+      session clock starts at the first sign-in (before it, `endsAt` is the latest possible end); a
+      student seen leaving frees the PC after 15 s, but a reboot, where nobody left, does not: the
+      student can sign back in until the deadline.
+- [ ] **G17-I7 — Forced end:** the warning, the logoff of every session of the account, then the
+      disable, on the deadline, on a manual end and on a hand-over; it checks that no session of the
+      account is left. Done when: tests cover the sequence and timers with a fake Windows layer; on a
+      real PC a student sitting in a session is logged off at the deadline and cannot sign in again.
+      **Status 2026-10-01:** the sequence and the timers are covered with the fake Windows (one
+      warning five minutes before, warn → disable → logoff → check, a stubborn session keeps the
+      reservation "ending" and the clock retries, a restart finishes it); the real logoff at the
+      deadline is G17-T2 steps 14 to 16.
+- [ ] **G17-I8 — Personal folder privacy and manager access:** `ensure-folder-access` gives the owner
+      SID read access to the student's profile (inherited) and is re-applied after each session; the
+      end-of-session cleanup of `C:\Users\Public`. Done when: on a real PC student A cannot open
+      student B's folder, the app's account can read both, and a file left in Public is gone after the
+      session. **Status 2026-10-01:** `ensure-folder-access`, the owner's read grant (`icacls`,
+      reapplied after every session) and the Public cleanup (only what the student owns, never
+      through a link) are implemented and tested against the fake; privacy between two real
+      accounts and the real cleanup are G17-T2 steps 11, 13 and 15.
+- [x] **G17-I9 — Disk info and capacity:** `disk-info` returns total, free and used-by-students for
+      the volume that holds `C:\Users`; a pure function computes the recommendation
+      `floor((free − reserve) ÷ quota)` with a reserve of the larger of 20% of the disk and 20 GB,
+      editable, plus the sum of the assigned quotas and a status (`ok`, `tight`, `over`). Done when:
+      table-driven tests give 5 students for a 250 GB disk with 70 GB in use and 28 for a 1 TB disk
+      (taken as 1000 GB) with 100 GB in use, at 25 GB each, and `over` when the quotas exceed what is
+      free minus the reserve. **Done 2026-10-01** (`Capacity.cs`, answered by `disk-info`).
+
+### Regression test
+
+- [x] **G17-T1 — Suites:** all of the above in `npm test` with fake pipes, clocks and a fake Windows
+      layer; the service builds in CI; `npm run lint` at 0 errors. Done when: all three pass. **Done
+      2026-10-01:** 48 service self-test cases (run by `npm test` on Windows and by the nightly job),
+      524 JS tests, lint 0 errors. `rdp-sidecar-binary.test.js` ("reproduces the stall") failed once
+      in eight full runs under load; it is an older timing test and not part of this series.
+- [ ] **G17-T2 — Two-PC acceptance `(manual)`:** on PC B, enable lab mode (UAC), add two students
+      and reserve one through the pipe client or the screens of GOALS 18: sign in by RDP from PC A,
+      download a file, see the quota refuse a write beyond the limit, see the warning and the logoff
+      at the deadline, see the other student's account refuse a sign-in while the first is active, open one student's
+      folder from the other's account and be refused while the app's account can read it, see a
+      file left in Public gone after the session, see Windows record the session events (21 to 25),
+      restart PC B in the middle of a reservation and see the deadline still honoured. Done when: all
+      hold and the result is written here.
+
+### Registration
+
+- [x] **G17-R1 — Docs:** the service, its pipe, what needs administrator rights and why, the quota,
+      the personal folder and its privacy, and the two-PC steps in `docs/ARQUITETURA_CONEXAO.md` and
+      block 7 of `docs/BATERIA_DE_TESTES.md`. Done when: both mention them, checked directly. **Done
+      2026-10-01:** "Serviço do laboratório (GOALS 17)" in `docs/ARQUITETURA_CONEXAO.md` and steps 8
+      to 18 of block 7 in `docs/BATERIA_DE_TESTES.md`.
+
+---
+
+## GOALS 18 — Reservations, hand-over and the manager screens (feature)
+
+```mermaid
+flowchart TD
+    M[Network messages for students and reservations] --> R[Never two at once, end to end]
+    R --> S[Students list per PC with usage and capacity]
+    S --> L[Reserve, hand over, extend and end]
+    L --> C[Credential message to copy]
+    S --> F[Folder view for the manager]
+    L --> D[Delete student]
+    C --> A[Two-PC acceptance]
+    F --> A
+    D --> A
+```
+
+Suggested: sonnet · high — screens and messages over a service whose rules are settled in GOALS 17.
+
+Depends on GOALS 16 (roster and authorization) and GOALS 17 (the service). **The scenario it serves:**
+PC 1 has students Ana and João; Ana is using it. The teacher presses "Trocar aluno" and chooses João
+and how long he may use the PC: Ana gets the warning and is logged off, João's account gets a new
+password, and the teacher copies IP, user name and password for João. Ana's files stay in her personal
+folder for her next turn; the teacher can look at them any time.
+
+### Implementation
+
+- [x] **G18-I1 — Network messages:** `lab-students`, `lab-student-add`, `lab-student-quota`,
+      `lab-student-delete`, `lab-reserve`, `lab-extend`, `lab-end` and `lab-folder` in the protocol module and host
+      dispatch, each authorized by `managers`, validated (display name 1 to 40 characters without
+      control characters, quota 1 to 2000 GB, bounded durations) and passed to the service client.
+      The password appears only in the `lab-reserve` response, never in `lab-status`, never in a log.
+      Done when: tests prove authorization, validation, and the password's absence from logs. **Done
+      2026-10-01:** the host answers all eight messages through the service pipe (`host.js`); the
+      answers are built from allow-lists (`protocol.js`), the new error codes are `not-found`, `full`,
+      `logoff-failed` and `service-down`, and a `busy` reserve carries `busyWith`. `host-service.test.js`
+      covers a stranger being refused before the service is touched, every validation limit, and the
+      password appearing in no answer but `lab-reserve` and in no log line; `lab-students-e2e.test.js`
+      runs it over real sockets.
+- [x] **G18-I2 — Never two at once, end to end:** a reserve on a PC with an active student answers
+      `busy` with who and until when; "Trocar aluno" is one manager action that ends the active
+      session (with the warning) and then reserves, and does not reserve if the end failed. Done when:
+      tests cover busy, a successful hand-over and a hand-over where the logoff fails (nothing is
+      reserved and the manager sees why). **Done 2026-10-01:** `handOver` in `manager.js` lists, ends
+      (`manager-handover`) and only then reserves; one change at a time per PC. Covered in
+      `manager-actions.test.js` and, over real sockets with a fake service that follows the engine's
+      rules, in `lab-students-e2e.test.js` (busy with who and until when, a failed logoff, a good
+      hand-over with a new password and the old one gone).
+- [x] **G18-I3 — Students list per PC:** for each PC a list with name, quota, used space (bar), last
+      session and state (Livre, Reservado, Em uso), plus a capacity box — recommended number of
+      students, the sum of quotas against the free space — in a warning tone when `tight` or `over`;
+      "Adicionar aluno" (name, quota with 25 GB preset) and "Alterar cota". Done when: with seeded
+      data the numbers and warnings match the G17-I9 function. **Done 2026-10-01:** "Alunos" on each PC
+      card (`HostStudents.jsx`); the capacity box (`describeCapacity`) shows what the service's
+      `disk-info` returned (it does not recompute it), in a warning tone for `tight` and an alert tone
+      for `over`; checked in the browser with seeded data (list, bar, states, add, quota).
+- [ ] **G18-I4 — Reserve, extend, end:** dialogs where the teacher chooses the validity (quick
+      choices of 30, 60 and 120 minutes plus a custom value) and the time allowed to start (default 30
+      minutes), "Estender" and "Encerrar agora". Done when: a manager runs the scenario above on a real
+      PC with one action each. **Status 2026-10-01:** the dialogs are built and were driven twice: in
+      the browser against a mock, and in the real Electron app through the DevTools Protocol against
+      the real host and manager code and the real service executable (`--pipe-test`, a fake Windows
+      underneath, a simulated "PC B" on this PC, an isolated `--user-data-dir`): add two students,
+      reserve, copy the credentials (the password was gone from the page after closing), hand over
+      (new password), extend, end now. The run on a real PC is G18-T2 steps 19 to 28.
+- [x] **G18-I5 — Credential message:** a copy button that builds the text — PC name, IP, user name,
+      password, start-by time, session-until time — and a notice line ("O professor pode ver a sua
+      pasta pessoal neste PC"), editable by the institution, and a line saying that the generic Windows
+      sign-in error ("authentication error ... the password may have expired") after the end time means
+      the access has ended (seen in G17-V1). The password is shown once, kept in
+      renderer memory only and cleared when the dialog closes. Done when: a test covers the text and
+      that the password is not persisted anywhere. **Done 2026-10-01:** `buildCredentialMessage` (tested
+      line by line); the password lives only in the dialog's state, the editable notice is the only
+      thing saved (`localStorage`), and in the browser the password was gone from the page and from
+      `localStorage` after the dialog closed.
+- [ ] **G18-I6 — Folder view for the manager:** "Ver pasta" opens the Arquivos tab on that PC with the
+      student's profile folder as root, read-only (list and download). `FileAgentSession` gets a
+      `readOnly` option that refuses put, delete, rename and mkdir; `lab-folder` is answered only for a
+      manager, with no dialog. Done when: tests show every mutating operation is refused and paths
+      cannot leave the root; on a real PC the manager lists and downloads a file the student created.
+      **Status 2026-10-01:** `FileAgentSession` takes `{ readOnly }` and refuses put, mkdir, rename and
+      delete (and ignores upload frames); in that mode it also resolves real paths, so a junction inside
+      the student's folder cannot lead out of it. `lab-folder` upgrades the same connection after the
+      answer, with no dialog and no "alguém está conectado" banner; a read-only session is never reused by
+      a normal connection, and `ft:mkdir/delete/rename/uploadBatch` refuse it in the main process too.
+      It was also opened from the real app against the simulated PC B (the student's files listed,
+      "Somente leitura" shown, the session closed when going back).
+      `file-agent-readonly.test.js` and, over real sockets, `lab-students-e2e.test.js` cover list,
+      download, every refused change and the paths that cannot leave the root. The real-PC run is
+      G18-T2 step 24.
+- [ ] **G18-I7 — Delete student:** a confirmation that shows the folder size ("Apagar Ana e 4,2 GB de
+      arquivos?"), then `lab-student-delete`; refused while the student is active; the freed space
+      shows in the capacity box. Done when: tests cover the refusal and the confirmation text; on a
+      real PC the account, the folder and the quota entry are gone. **Status 2026-10-01:** the
+      confirmation text (`deleteConfirmText`) and the refusal while the student is reserved (the
+      service's `busy`, and the button disabled) are tested; the real removal is G18-T2 step 28 and
+      G17-T2 step 18.
+
+### Regression test
+
+- [x] **G18-T1 — Suites:** all of the above in `npm test`; `npm run lint` at 0 errors. Done when:
+      both pass. **Done 2026-10-01:** 662 JS tests (six full runs in a row) and 48 service self-test
+      cases pass; lint at 0 errors (9 warnings, the same as before). Running the suite many times
+      found a real bug in the pipe server, fixed here: it created the next pipe instance only after
+      serving the current one, so under load a client could find no pipe at all (`service-down`);
+      the next instance is now created before the accepted one is served, with a regression test.
+      Driving the real app found the same gap again under a burst of requests, so the service now keeps
+      four listening instances at all times and the app's pipe client retries a connection that failed
+      to open (`ENOENT`/`EBUSY`, nothing sent yet, so even `reserve` is safe to repeat), also tested.
+      (`--pipe-test` also takes an optional lifetime in seconds; its 60 s default had looked like a
+      crashing service during the long app run.)
+- [ ] **G18-T2 — Two-PC acceptance `(manual)`:** the full scenario on PC B with students Ana and João,
+      driven from PC A's screens and a Windows RDP client: reserve Ana, sign in as Ana, download a file;
+      try to reserve João while Ana is active (`busy`); hand over: Ana is warned and logged off, João
+      signs in with the new password and Ana's old one fails; Ana's folder is unreadable for João and
+      readable in "Ver pasta"; Ana's quota refuses a write past the limit; the deadline ends João's
+      session with the manager app closed; delete Ana. Done when: all hold and the result is written
+      here, stating which G16-D1 option it stood for.
+
+### Registration
+
+- [x] **G18-R1 — Docs:** the messages, the flows and the screens in `docs/ARQUITETURA_CONEXAO.md` and
+      block 7 of `docs/BATERIA_DE_TESTES.md`. Done when: both mention them, checked directly. **Done
+      2026-10-01:** "Alunos, reserva, troca de aluno e pasta (GOALS 18)" in
+      `docs/ARQUITETURA_CONEXAO.md` (with the corrected message table and error codes) and steps 19 to
+      28 in block 7 of `docs/BATERIA_DE_TESTES.md`.
+
+---
+
+## GOALS 19 — Central access log: who, which PC, when (feature)
+
+```mermaid
+flowchart TD
+    S[Event schema v2] --> J[Service journal with sequence numbers]
+    J --> W[Windows session events]
+    J --> P[Live push to an authenticated receiver]
+    J --> C[Catch-up by sequence]
+    P --> M[Manager store and retention]
+    C --> M
+    M --> H[Host lost detection]
+    M --> V[Activity screen with filters and CSV]
+    V --> A[Two-PC acceptance]
+    H --> A
+```
+
+Suggested: sonnet · high — durable storage, idempotent merging and the refusal of forged events; no native code beyond the service's own journal.
+
+Depends on GOALS 16 (roster), 17 (service and journal) and 18 (reservations). GOALS 4's push is
+best-effort and only fires when a session closes, so a manager that is offline loses the record and
+any peer can inject one. For an audit trail the PC keeps its own durable journal, pushes live, and
+the manager can always catch up by sequence number. "Who" is the student the teacher reserved; the
+Windows account, the times and the source address of each sign-in are recorded next to it, so a
+password passed on to someone else shows up as an unexpected address. Timestamps are the PC's clock
+plus the manager's `receivedAt`.
+
+### Implementation
+
+- [x] **G19-I1 — Event schema v2:** `{v: 2, hostId, hostName, seq, at, type, student?: {label,
+      account}, reservationId?, sourceIp?, endReason?, detail?}` with types `student-added`,
+      `student-deleted`, `quota-changed`, `reservation-start`, `reservation-end`, `session-logon`,
+      `session-logoff`, `manager-enrolled`, `manager-removed`, `host-lost`, `host-back`; the end
+      reasons are `student-left`, `manager-ended`, `manager-handover`, `deadline`, `unused-expired` and
+      `service-restart`. GOALS 4 events (no `v`) are still accepted and shown. Done when: tests accept
+      both shapes and reject malformed events. **Done 2026-10-01:** `src/main/lab/events.js`
+      (`validateEvent` returns only the known fields; a PC can never deliver `host-lost`/`host-back`,
+      which only the manager creates, with sequence 0); `events.test.js` (47 cases).
+- [x] **G19-I2 — Service journal:** append-only `%ProgramData%\OpenPortal\lab\journal.jsonl` with a
+      persistent `seq`, a size cap (20 MB, then rotated to `.1`) and a retention period, written
+      before anything is pushed; the student cannot reach it. Done when: tests cover `seq` continuity
+      across a restart, rotation, and a corrupt last line being skipped. **Done 2026-10-01:**
+      `lab-service/Core/Journal.cs` (`IJournalStorage`, file and memory), written before any push; the
+      15 new self-test cases (60 in all) cover those three, retention that never empties the journal,
+      paging up to 500, what each engine action records with its reason, the password never being
+      written, and the `events` / `note` commands; `lab-service-pipe.test.js` reads the journal through
+      the real pipe. The service's data folder is closed to students (G17-I1).
+- [ ] **G19-I3 — Windows session events:** the service records a `session-logon`, `session-logoff`,
+      disconnect and reconnect for the lab accounts from the service's own session-change
+      notifications, asking Windows for the client address of the session; the TerminalServices
+      events 21 to 25 are a cross-check described in the docs, not the source. Done when: tests cover
+      the mapping with a fake Windows layer; on a real PC a sign-in shows the account, time and
+      address of PC A. **Status 2026-10-01:** `LabService.OnSessionChange` forwards logon, logoff,
+      remote connect and disconnect; `Engine.OnSessionEvent` keeps the account and address of each
+      session (`WTSClientAddress`, read while the session exists, because at logoff it is gone), records
+      only lab students, adds the reservation id and treats a connect right after a logon as one fact.
+      Self-tests and the real-pipe test cover logon, disconnect, reconnect, logoff, other accounts and
+      unknown sessions. Reading the real address is G19-T2 steps 29 and 30.
+- [x] **G19-I4 — Authenticated receiver:** the manager accepts `activity-event` and v2 events only
+      from a roster PC (`remoteAddress` in the roster and the event's `hostId` matching that entry)
+      or, for legacy GOALS 4 use, from a login in `reportTo`; everything else is dropped and counted
+      in the log. Done when: a forged event from an unlisted IP, and one from a roster IP with another
+      `hostId`, are both not stored. **Done 2026-10-01:** `activity-receiver.js`; the server now hands the
+      real socket address with every `activity-event`. For GOALS 4 events "a login in `reportTo`" is read
+      as `reportTo` or `allowedUsers` of the receiving app (a reporter is normally a PC already
+      approved there); a stranger's login, an unconfirmed identity and malformed events are dropped.
+      `activity-receiver.test.js` and, over real sockets, `lab-events-e2e.test.js` cover both forgeries.
+- [x] **G19-I5 — Catch-up by sequence:** the status poll carries the PC's `lastSeq`; the manager asks
+      `lab-events {sinceSeq, limit ≤ 500}` until it is level and merges idempotently on
+      `(hostId, seq)`. Done when: tests cover a gap after the manager was offline, the same event
+      arriving by push and by pull, and a journal that rotated past the manager's position (recorded
+      as a gap). **Done 2026-10-01:** `lab-status` carries `lastSeq`; the manager keeps a per-PC cursor
+      (the highest number up to which the sequence is complete, gaps included) and asks `lab-events`
+      from there in pages of 500, in the background so the PC list is never delayed; a push ahead of a
+      hole does not hide the hole. The live push is `journal-feed.js` (the app polls its own service
+      every 2 s). Covered by `manager-events.test.js` (17), `journal-feed.test.js` (8) and the
+      real-sockets `lab-events-e2e.test.js`, which includes a reservation that ran with the manager
+      app closed.
+- [x] **G19-I6 — Manager store, retention and export:** `userData/lab-log.jsonl` with an in-memory
+      index by student, PC and date; retention (default 180 days) applied at start and daily; CSV
+      export with `;` as separator and a UTF-8 BOM so it opens correctly in a pt-BR spreadsheet, with
+      local-time and UTC columns. Done when: tests cover retention, the header, and the quoting of
+      names that contain `;` or quotes. **Done 2026-10-01:** `event-log.js` and `buildCsv` in
+      `events.js`; retention (default 180 days, 1 to 3650, saved in `lab.logRetentionDays` and changed
+      only through its own channel) is applied at start and daily, keeps each PC's cursor and its last
+      event; the CSV also guards against formulas (`=`, `+`, `-`, `@`). Opening the file in a
+      spreadsheet is part of G19-I8.
+- [x] **G19-I7 — Host lost and back:** during an active reservation, 3 missed polls (30 s) record
+      `host-lost` and the PC shows "Sem resposta"; the next answer records `host-back`. Done when: a
+      fake-clock test covers it. **Done 2026-10-01:** in `manager.js`; the snapshot carries `lost`.
+      `manager-events.test.js` covers it (once per loss, silent for a free PC, a blip of one or two
+      misses, a second loss) and `lab-events-e2e.test.js` closes and reopens a real PC server. The
+      screen's "Sem resposta" label is shown in the activity tab as the event.
+- [ ] **G19-I8 — Activity screen for the lab:** `ActivityPanel` gains filters (student, PC, date
+      range, type), a detail drawer per reservation (student, account, start, end, duration, reason,
+      sign-in times and addresses), an "Exportar CSV" button and the retention setting; GOALS 4 entries
+      keep showing. Done when: with seeded data the filters return the expected rows and the exported
+      file shows accents correctly in a spreadsheet. **Status 2026-10-01:** Atividade has a
+      "Sessões" tab (the GOALS 4 feed, unchanged) and a "Laboratório" tab (only with lab mode on).
+      Driven in the real Electron app against a simulated PC B with the real service: 13 real events
+      arrived by catch-up, the filters returned the expected rows, the drawer showed two source
+      addresses with a warning, the export came back with the BOM and the right columns. Only opening
+      the CSV in a spreadsheet remains (G19-T2 step 32).
+
+### Regression test
+
+- [x] **G19-T1 — Suites:** all of the above in `npm test`; `npm run lint` at 0 errors. Done when:
+      both pass. **Done 2026-10-01:** 796 JS tests (three full runs in a row) and 60 service
+      self-test cases; lint at 0 errors (the same 9 warnings as before).
+- [ ] **G19-T2 — Two-PC acceptance `(manual)`:** run a reservation on B with A's manager app closed
+      while it runs, then open it: the whole reservation appears (student, start, sign-in address, end,
+      reason). Stop B's app mid-reservation: A records `host-lost` and later `host-back`. Done when:
+      both hold.
+
+### Registration
+
+- [x] **G19-R1 — Docs:** event schema, journal, retention, export format and the forged-event rule in
+      `docs/ARQUITETURA_CONEXAO.md`; the two-PC steps in block 7 of `docs/BATERIA_DE_TESTES.md`.
+      Done when: both mention them, checked directly. **Done 2026-10-01:** "Registro central de
+      acessos (GOALS 19)" in the architecture doc (and the `events` / `note` pipe commands) and steps
+      29 to 33 in block 7 of the battery.
 
 ---
 
@@ -1731,3 +2535,18 @@ for every remaining manual item is in `docs/BATERIA_DE_TESTES.md`. Known limitat
 yet planned: RDP reaches 3389 directly, so approval is not the only way in for RDP
 (Windows authentication and the Tailscale-only rule are); tunnelling RDP through 18902
 like VNC would need its own GOALS. **GOALS 13 closes before any release that advertises RDP** (v1.0.7 or later): until G13-T2 passes, an installed app has the RDP options but no sidecar.
+
+For the lab series (GOALS 16–19, added 2026-09-30 and reshaped the same day after the decisions on
+RDP accounts, strictly sequential use, personal folders with a quota and no activity monitoring):
+**the two decisions in GOALS 16 come first**, G16-D1 (how students reach the PCs) and G16-D2 (how a PC
+comes back after a restart). **G17-V1 (the feasibility check on a real PC) comes before any other
+GOALS 17 code**, because any of its results can reorder or drop items (closed on 2026-09-30; the results are in the
+item). Then 16 → 17 → 18 → 19: GOALS 16
+and the first GOALS 17 items (the service skeleton, enabling lab mode, the pipe) can proceed in
+parallel; GOALS 18 needs the service's reservation engine (G17-I6 and G17-I7); the journal of GOALS 19
+(G19-I2) lands together with the reservation engine so that nothing is reserved without a record, and
+its forged-event rule (G19-I4) no later than the first time a manager accepts v2 events. The series is
+independent of GOALS 15 and of any open PR; delivery to `master` follows the user's order, as for every
+series. Not planned: monitoring of apps and downloads (the manager reads the student's folder instead),
+students moving between PCs, central file storage, more than one active student per PC, blocking RDP
+clipboard or drive redirection, PCs on Windows Home.

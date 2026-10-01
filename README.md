@@ -84,6 +84,26 @@ npm run dev
 - **"Conectar a um PC"** — lista de PCs cadastrados com conexao VNC e conexao rapida por IP
 - **"Conectar por IP"** — dispara um pedido de conexao que o PC remoto precisa aceitar
 
+### 5. Modo laboratorio
+- **Configuracoes → Modo laboratorio** mostra a tela **Laboratorio**: o PC do professor gerencia
+  os PCs de um laboratorio. A pessoa em cada PC aceita o pedido uma vez; depois o professor ve
+  o estado de cada PC (Livre, Reservado, Em uso, Offline) e abre a tela dele sem novo dialogo.
+- Na tela inicial de um PC gerenciado, o cartao **Este PC e gerenciado** lista os gerentes e
+  deixa a pessoa remove-los quando quiser.
+- **Iniciar com o Windows** (no app instalado) faz o PC voltar a ser gerenciado depois de reiniciar.
+- Os alunos usam o Remote Desktop do Windows, sem instalar nada. As mensagens e a confianca
+  estao em `docs/ARQUITETURA_CONEXAO.md` ("Modo laboratorio") e o roteiro de teste no bloco 7
+  de `docs/BATERIA_DE_TESTES.md`.
+- **Alunos (GOALS 17 e 18):** em **Configuracoes → Modo laboratorio → Habilitar neste PC** (pede
+  permissao de administrador) o PC ganha um servico que cria as contas dos alunos, a cota de disco
+  e o fim forcado da sessao. Na tela **Laboratorio**, o botao **Alunos** de cada PC reserva o PC
+  para um aluno (ou **Trocar aluno**), mostra a mensagem com usuario e senha para copiar (a senha
+  aparece uma vez so), estende ou encerra a sessao, mostra o espaco usado e **Ver pasta** abre os
+  arquivos do aluno somente para leitura.
+- **Registro de acessos (GOALS 19):** em **Atividade → Laboratorio** fica quem usou qual PC, quando
+  e de que endereco entrou, mesmo com o app do professor fechado durante a reserva. Tem filtros e
+  **Exportar CSV** (abre direto no Excel em portugues).
+
 ---
 
 ## Estrutura do projeto

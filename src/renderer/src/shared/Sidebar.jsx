@@ -4,6 +4,7 @@ import {
   Settings,
   FolderOpen,
   Activity,
+  GraduationCap,
   Download,
   Sun,
   Moon,
@@ -49,6 +50,9 @@ export default function Sidebar() {
     setShowFiles,
     showActivity,
     setShowActivity,
+    showLab,
+    setShowLab,
+    labMode,
     sidebarCollapsed,
     toggleSidebar,
     maxMachines,
@@ -106,9 +110,10 @@ export default function Sidebar() {
     setShowConfig(false);
     setShowFiles(false);
     setShowActivity(false);
+    setShowLab(false);
   };
 
-  const isHome = !focusedMachineId && !showConfig && !showFiles && !showActivity;
+  const isHome = !focusedMachineId && !showConfig && !showFiles && !showActivity && !showLab;
 
   return (
     <aside className="w-64 min-w-64 bg-surface border-r border-line flex flex-col">
@@ -197,6 +202,7 @@ export default function Sidebar() {
                 setShowConfig(false);
                 setShowFiles(false);
                 setShowActivity(false);
+                setShowLab(false);
                 setFocusedMachineId(session.id);
               }}
               className={`w-full text-left px-3 py-2.5 rounded-lg border-none cursor-pointer ${
@@ -242,17 +248,33 @@ export default function Sidebar() {
           onClick={() => {
             setShowConfig(false);
             setShowFiles(false);
+            setShowLab(false);
             setShowActivity(!showActivity);
           }}
           icon={<Activity size={16} />}
         >
           Atividade
         </NavButton>
+        {labMode && (
+          <NavButton
+            active={showLab}
+            onClick={() => {
+              setShowConfig(false);
+              setShowFiles(false);
+              setShowActivity(false);
+              setShowLab(!showLab);
+            }}
+            icon={<GraduationCap size={16} />}
+          >
+            Laboratório
+          </NavButton>
+        )}
         <NavButton
           active={showConfig}
           onClick={() => {
             setShowFiles(false);
             setShowActivity(false);
+            setShowLab(false);
             setShowConfig(!showConfig);
           }}
           icon={<Settings size={16} />}
@@ -264,6 +286,7 @@ export default function Sidebar() {
           onClick={() => {
             setShowConfig(false);
             setShowActivity(false);
+            setShowLab(false);
             setShowFiles(!showFiles);
           }}
           icon={<FolderOpen size={16} />}
