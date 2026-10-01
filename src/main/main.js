@@ -32,9 +32,17 @@ const {
 const { SessionPasswordGate } = require('./connection/session-password');
 const { VncTunnelTokens } = require('./connection/vnc-tunnel');
 const fileTransferSession = require('./file-transfer/file-transfer-session');
-const { getHostVncPassword, getHostVncState, readConfig } = require('./config/config-manager');
+const {
+  getHostVncPassword,
+  getHostVncState,
+  labStore,
+  readConfig,
+} = require('./config/config-manager');
 const { addActivityEntry } = require('./config/activity-log');
 const { sendTelegramAlert } = require('./activity/telegram');
+const { isAllowedHost } = require('./connection/net-guard');
+const { effectiveAllowedUsers, effectiveReportTo } = require('./lab/lab-config');
+const { createLabRuntime } = require('./lab/runtime');
 
 initLogging();
 
@@ -42,6 +50,8 @@ let mainWindow = null;
 let wss = null;
 let requestServer = null;
 let updater = null;
+// Modo laboratório (GOALS 16): host, gerente e canais IPC (ver lab/runtime.js).
+let labRuntime = null;
 // Senha de acesso exibida na tela inicial (ver session-password.js).
 const accessGate = new SessionPasswordGate();
 // GOALS 10: token do túnel VNC por aprovação (requestId -> token), revogado
@@ -111,7 +121,8 @@ function reportSessionActivity(req) {
   };
 
   const config = readConfig();
-  const reportTo = Array.isArray(config.reportTo) ? config.reportTo : [];
+  // Os gerentes do modo laboratório também recebem o resumo das sessões.
+  const reportTo = effectiveReportTo(config);
   (async () => {
     for (const login of reportTo) {
       try {
@@ -213,12 +224,9 @@ async function handleConnectionRequest(req, respond, signal, sessionPassword) {
     return;
   }
 
-  const { allowedUsers } = readConfig();
-  if (
-    Array.isArray(allowedUsers) &&
-    allowedUsers.length > 0 &&
-    isAllowed(req.identity, allowedUsers)
-  ) {
+  // Os gerentes do modo laboratório entram sem diálogo, como os de allowedUsers.
+  const allowedUsers = effectiveAllowedUsers(readConfig());
+  if (allowedUsers.length > 0 && isAllowed(req.identity, allowedUsers)) {
     console.log(
       `[main] Auto-approved connection request ${req.requestId} from ${req.identity} (${req.fromName}, ${req.remoteAddress})`,
     );
@@ -292,10 +300,29 @@ app.whenReady().then(() => {
         : err.message;
   });
 
+  const liveWindow = () => (mainWindow && !mainWindow.isDestroyed() ? mainWindow : null);
+  labRuntime = createLabRuntime({
+    app,
+    ipcMain,
+    store: labStore,
+    getMainWindow: () => mainWindow,
+    resolveIdentity,
+    showDialog: (options) => {
+      const { dialog } = require('electron');
+      const parent = liveWindow();
+      return parent ? dialog.showMessageBox(parent, options) : dialog.showMessageBox(options);
+    },
+    drawAttention: () => drawAttention(liveWindow()),
+    isAllowedHost,
+    hostName: () => os.hostname(),
+    isPackaged: app.isPackaged,
+  });
+
   requestServer = new ConnectionRequestServer(
     (req, respond, signal, sessionPassword) =>
       handleConnectionRequest(req, respond, signal, sessionPassword),
     {
+      labHandler: labRuntime.labHandler,
       authorizeVncTunnel: (token, remoteAddress) => {
         const ip = normalizeIp(remoteAddress);
         const verdict = vncTunnelTokens.check(token, ip);
@@ -305,6 +332,7 @@ app.whenReady().then(() => {
     },
   );
   requestServer.start();
+  labRuntime.start();
   requestServer.server.on('listening', () => {
     portStatus.signal.listening = true;
     portStatus.signal.error = null;
@@ -434,6 +462,7 @@ app.on('window-all-closed', () => {
   globalShortcut.unregisterAll();
   if (wss) wss.close();
   if (requestServer) requestServer.stop();
+  if (labRuntime) labRuntime.stop();
   if (updater) updater.stop();
   if (process.platform !== 'darwin') app.quit();
 });

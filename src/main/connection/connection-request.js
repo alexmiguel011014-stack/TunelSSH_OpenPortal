@@ -3,6 +3,7 @@ const os = require('os');
 const { EventEmitter } = require('events');
 const { FileAgentSession } = require('../file-transfer/file-agent');
 const { FrameDecoder } = require('../file-transfer/protocol');
+const labProtocol = require('../lab/protocol');
 
 const SIGNAL_PORT = 18902;
 // Dois prazos distintos: abrir o TCP é rápido (falha → pode tentar de novo),
@@ -13,6 +14,9 @@ const CONNECT_TIMEOUT = 8000;
 const DECISION_TIMEOUT = 60000;
 const MAX_ATTEMPTS = 3;
 const RETRY_DELAY = 5000;
+// Nenhum pedido legítimo desta porta chega perto disso: acima, sem JSON
+// completo, o socket é derrubado em vez de crescer na memória.
+const MAX_PENDING_BYTES = 64 * 1024;
 
 // Emite 'file-session-open'/'file-session-close' (com o req da conexão)
 // quando um pedido aprovado vira sessão de arquivos — usado pelo main.js
@@ -26,10 +30,13 @@ const RETRY_DELAY = 5000;
 class ConnectionRequestServer extends EventEmitter {
   // authorizeVncTunnel(token, remoteAddress) -> 'ok' | 'wrong' | 'locked'
   // decide os pedidos de túnel VNC (GOALS 10); vncPort é o TightVNC local.
-  constructor(onRequest, { authorizeVncTunnel = null, vncPort = 5900 } = {}) {
+  // labHandler({ input, remoteAddress, signal }) -> resposta | null atende as
+  // mensagens `lab-*` do modo laboratório (GOALS 16, lab/host.js).
+  constructor(onRequest, { authorizeVncTunnel = null, vncPort = 5900, labHandler = null } = {}) {
     super();
     this.onRequest = onRequest;
     this.authorizeVncTunnel = authorizeVncTunnel;
+    this.labHandler = labHandler;
     this.vncPort = vncPort;
     this.server = null;
   }
@@ -84,9 +91,15 @@ class ConnectionRequestServer extends EventEmitter {
         try {
           msg = JSON.parse(buffer.toString('utf8'));
         } catch {}
-        if (!msg) return;
+        if (!msg) {
+          if (buffer.length > MAX_PENDING_BYTES) socket.destroy();
+          return;
+        }
 
-        if (msg.type === 'connect-request') {
+        if (typeof msg.type === 'string' && msg.type.startsWith('lab-')) {
+          socket.removeListener('data', dataHandler);
+          this.handleLab(socket, buffer, pendingDecision.signal);
+        } else if (msg.type === 'connect-request') {
           const wantsTunnel = msg.capability === 'tunnel';
           const req = {
             requestId: msg.requestId || String(Date.now()),
@@ -172,6 +185,33 @@ class ConnectionRequestServer extends EventEmitter {
     });
 
     return this.server;
+  }
+
+  // GOALS 16: uma mensagem `lab-*` por conexão. O host decide tudo (identidade,
+  // autorização, limites); aqui só se entrega o pedido cru com o endereço real
+  // do socket e se devolve a resposta. Sem resposta (quem pediu desistiu), fecha.
+  async handleLab(socket, input, signal) {
+    const respondWith = (response) => {
+      if (socket.destroyed) return;
+      socket.end(labProtocol.serializeResponse(response));
+    };
+    if (!this.labHandler) {
+      respondWith(
+        labProtocol.buildError(undefined, 'unsupported', 'Modo laboratório indisponível'),
+      );
+      return;
+    }
+    try {
+      const response = await this.labHandler({
+        input,
+        remoteAddress: socket.remoteAddress || '',
+        signal,
+      });
+      if (response) respondWith(response);
+      else socket.destroy();
+    } catch {
+      respondWith(labProtocol.buildError(undefined, 'internal', 'Falha ao atender o pedido'));
+    }
   }
 
   // GOALS 10: com um token de sessão aprovada válido para o IP real do

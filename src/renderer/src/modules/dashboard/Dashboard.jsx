@@ -9,6 +9,7 @@ import {
 } from '../../shared/lib/vncSession';
 import { groupConnectionHistory } from '../../shared/lib/connectionState';
 import LocalAccessCard from './LocalAccessCard';
+import ManagedHostCard from '../lab/ManagedHostCard';
 
 const sectionTitle = 'text-xs font-semibold mb-3 uppercase tracking-wide text-text-muted';
 
@@ -120,6 +121,7 @@ export default function Dashboard() {
         <p className="text-sm text-text-faint mb-6">Acesso remoto seguro via Tailscale</p>
 
         <LocalAccessCard />
+        <ManagedHostCard />
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div className="bg-surface rounded-xl border border-line-subtle p-5">

@@ -7,6 +7,8 @@ import ConfigPanel from './modules/config/ConfigPanel';
 import FileExplorer from './modules/file-transfer/FileExplorer';
 import ActivityPanel from './modules/activity/ActivityPanel';
 import Dashboard from './modules/dashboard/Dashboard';
+import LabPanel from './modules/lab/LabPanel';
+import { isLabModeOn } from './shared/lib/lab';
 import {
   connectMachineEntry,
   disconnectMachineEntry,
@@ -57,6 +59,9 @@ export default function App() {
   const [showConfig, setShowConfig] = useState(false);
   const [showFiles, setShowFiles] = useState(false);
   const [showActivity, setShowActivity] = useState(false);
+  const [showLab, setShowLab] = useState(false);
+  // Modo laboratório (GOALS 16): { mode, managed, managers } deste PC.
+  const [labHost, setLabHost] = useState({ mode: false, managed: false, managers: [] });
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [reconnectFlag, setReconnectFlag] = useState(0);
   const [logs, setLogs] = useState([]);
@@ -128,6 +133,18 @@ export default function App() {
       })
       .catch(() => {});
   }, []);
+
+  useEffect(() => {
+    window.electronAPI
+      ?.getLabManagers?.()
+      .then((state) => state && setLabHost(state))
+      .catch(() => {});
+    return window.electronAPI?.onLabHostChanged?.((state) => setLabHost(state));
+  }, []);
+
+  const labMode = isLabModeOn(labHost);
+  // Com o modo laboratório desligado a tela não aparece, mesmo que tenha ficado aberta.
+  const labVisible = showLab && labMode;
 
   useEffect(() => {
     const handleTransportStatus = (status) => {
@@ -225,18 +242,23 @@ export default function App() {
   // libera a sessão de arquivos (ver file-transfer-session.js no main),
   // então a tela de Arquivos nunca precisa pedir IP nem permissão de novo.
   const connectMachine = useCallback(
-    async ({ sessionPassword, ...machine } = {}) => {
+    async ({ sessionPassword, stayOnScreen = false, ...machine } = {}) => {
       // A senha de acesso vale só para este pedido: nunca entra no estado, no
-      // histórico nem no log.
+      // histórico nem no log. `stayOnScreen`: quem pede (a tela Laboratório) quer
+      // ver o resultado onde está; a tela só troca quando o acesso é aprovado.
       if (!machine.host) return { ok: false, message: 'PC sem endereço IP' };
       if (connectedMachines[machine.id]) {
         setShowConfig(false);
         setShowFiles(false);
+        setShowLab(false);
         setFocusedMachineId(machine.id);
         return { ok: true };
       }
-      setShowConfig(false);
-      setShowFiles(false);
+      if (!stayOnScreen) {
+        setShowConfig(false);
+        setShowFiles(false);
+        setShowLab(false);
+      }
       setStatuses((prev) => ({ ...prev, [machine.id]: 'requesting-access' }));
       addLog(`Solicitando conexão a ${machine.name} (${machine.host})...`);
       recordConn({
@@ -290,6 +312,9 @@ export default function App() {
           });
           return { ok: false, rejected, message };
         }
+        setShowConfig(false);
+        setShowFiles(false);
+        setShowLab(false);
         setStatuses((prev) => ({ ...prev, [machine.id]: 'opening-vnc' }));
         setConnectedMachines((prev) =>
           connectMachineEntry(prev, machine, {
@@ -435,6 +460,11 @@ export default function App() {
     setShowFiles,
     showActivity,
     setShowActivity,
+    showLab: labVisible,
+    setShowLab,
+    labHost,
+    setLabHost,
+    labMode,
     sidebarCollapsed,
     toggleSidebar,
     maxMachines: MAX_MACHINES,
@@ -463,7 +493,7 @@ export default function App() {
               docs/ARQUITETURA_CONEXAO.md). */}
           {Object.entries(connectedMachines).map(([id, entry]) => {
             const isFocusedAndVisible =
-              !showConfig && !showFiles && !showActivity && id === focusedMachineId;
+              !showConfig && !showFiles && !showActivity && !labVisible && id === focusedMachineId;
             return (
               <div
                 key={id}
@@ -492,6 +522,8 @@ export default function App() {
             <FileExplorer />
           ) : showActivity ? (
             <ActivityPanel />
+          ) : labVisible ? (
+            <LabPanel />
           ) : !focusedMachineId ? (
             <Dashboard />
           ) : null}

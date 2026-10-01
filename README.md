@@ -84,6 +84,18 @@ npm run dev
 - **"Conectar a um PC"** — lista de PCs cadastrados com conexao VNC e conexao rapida por IP
 - **"Conectar por IP"** — dispara um pedido de conexao que o PC remoto precisa aceitar
 
+### 5. Modo laboratorio
+- **Configuracoes → Modo laboratorio** mostra a tela **Laboratorio**: o PC do professor gerencia
+  os PCs de um laboratorio. A pessoa em cada PC aceita o pedido uma vez; depois o professor ve
+  o estado de cada PC (Livre, Reservado, Em uso, Offline) e abre a tela dele sem novo dialogo.
+- Na tela inicial de um PC gerenciado, o cartao **Este PC e gerenciado** lista os gerentes e
+  deixa a pessoa remove-los quando quiser.
+- **Iniciar com o Windows** (no app instalado) faz o PC voltar a ser gerenciado depois de reiniciar.
+- Os alunos usam o Remote Desktop do Windows, sem instalar nada. As mensagens e a confianca
+  estao em `docs/ARQUITETURA_CONEXAO.md` ("Modo laboratorio") e o roteiro de teste no bloco 7
+  de `docs/BATERIA_DE_TESTES.md`. O servico que cria as contas e a cota dos alunos entra com o
+  GOALS 17 (`GOALS.md`).
+
 ---
 
 ## Estrutura do projeto

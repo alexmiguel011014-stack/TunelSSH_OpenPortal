@@ -2,6 +2,8 @@ const fs = require('fs');
 const path = require('path');
 const { app, safeStorage } = require('electron');
 const { mergeStoredMachine, toRendererMachine } = require('./machine-credentials');
+const { guardLabKeys } = require('../lab/lab-config');
+const { createLabStore } = require('../lab/lab-store');
 
 const CONFIG_DIR = app.getPath('userData');
 const CONFIG_FILE = path.join(CONFIG_DIR, 'config.json');
@@ -102,7 +104,9 @@ function writeConfig(config) {
     // particular save.
     const existing = readStoredConfig();
     // hostVnc só muda por setHostVncPassword, nunca pelo que o renderer mandar.
-    const toWrite = { ...existing, ...config, hostVnc: existing.hostVnc };
+    // hostId e lab (gerentes, lista de PCs) também só mudam por dentro do main
+    // (lab-store.js); do renderer só passa lab.mode.
+    const toWrite = guardLabKeys(existing, { ...existing, ...config, hostVnc: existing.hostVnc });
     if (Array.isArray(config.machines)) {
       const existingById = new Map(
         (existing.machines || []).map((machine) => [machine.id, machine]),
@@ -185,7 +189,17 @@ function setHostVncLocalOnly(localOnly) {
   writeStoredConfig(config);
 }
 
+// Modo laboratório (GOALS 16): identidade do PC, gerentes e lista de PCs.
+const labStore = createLabStore({
+  read: readStoredConfig,
+  write: (config) => {
+    if (!fs.existsSync(CONFIG_DIR)) fs.mkdirSync(CONFIG_DIR, { recursive: true });
+    writeStoredConfig(config);
+  },
+});
+
 module.exports = {
+  labStore,
   getHostVncPassword,
   getHostVncState,
   getVncCredential,

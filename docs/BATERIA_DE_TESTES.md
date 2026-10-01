@@ -111,6 +111,35 @@ desconectar uma não derruba a outra.
 Esperado: a aba **Atividade** do PC A mostra a sessão com quem conectou, a
 duração e 1 arquivo. O Telegram é opcional e precisa do token de um bot seu.
 
+## 7. Laboratório (GOALS 16, G16-T2)
+
+Aqui o PC A faz o papel do professor (gerente) e o PC B o de um PC de laboratório. Os
+dois no Tailscale, cada um com o app aberto. Os blocos de GOALS 17 a 19 (contas de
+aluno, cota, reservas, registro de acessos) entram neste mesmo bloco quando forem feitos.
+
+1. No PC A, em **Configurações → Modo laboratório**, clique em **Desligado** para ligar.
+   A barra lateral ganha o item **Laboratório**.
+2. No PC A, abra **Laboratório**, digite o IP Tailscale do PC B e clique em **Adicionar PC**.
+   No PC B abre a janela **Gerenciar este PC** com o login Tailscale do PC A (o botão
+   padrão é **Rejeitar**): clique em **Aceitar**.
+   Esperado: o PC A lista o PC B como **Livre** em até 10 s; a tela inicial do PC B
+   mostra o cartão **Este PC é gerenciado** com o login do PC A.
+3. No PC A, clique em **Abrir tela** no PC B.
+   Esperado: a sessão abre **sem** janela de aprovação no PC B.
+4. Feche o app no PC B (Sair, confirmando).
+   Esperado: em até 30 s o PC A mostra o PC B como **Offline** e o botão **Abrir tela**
+   fica desligado. Abra o app no PC B de novo: volta a **Livre**.
+5. No PC B, no cartão **Este PC é gerenciado**, clique em **Remover gerente** e confirme.
+   Esperado: o cartão some; na consulta seguinte o PC A mostra o PC B como **Sem acesso**.
+6. Repita o passo 2 e confirme que o PC B pede o clique de novo (a matrícula não fica
+   guardada depois de removida).
+7. Reinício: no PC B instale o app, ligue **Iniciar com o Windows** (aparece com o modo
+   laboratório ligado ou o PC gerenciado) e deixe a conta dedicada com login automático
+   (decisão G16-D2). Reinicie o PC B.
+   Esperado: sem ninguém mexer, o PC B volta e o PC A o mostra como **Livre**.
+
+Fecha: G16-T2, G16-I9 e G16-I11 (e, junto com o GOALS 17, G16-D1).
+
 ## Fora desta bateria
 
 - **GOALS 3** precisa de três logins Tailscale diferentes e dois PCs.

@@ -470,6 +470,173 @@ prazo de autenticação o limita. O teste "RDP sidecar with the real ActiveX
 control" repete o segundo caso nos dois modos a cada `npm test` no Windows, e
 falha se o `.exe` for mais velho que o `Program.cs`.
 
+### Modo laboratório (GOALS 16–19)
+
+Um professor (o **gerente**) gerencia vários PCs de laboratório a partir do próprio
+OpenPortal; o aluno entra no PC com o **Remote Desktop do Windows**, usando uma conta do
+Windows que o gerente cria, e não precisa do OpenPortal. O uso é estritamente sequencial
+(um aluno por PC, nunca dois) e não há monitoramento de atividade. Um PC com o modo
+laboratório desligado se comporta exatamente como antes.
+
+**Dois componentes em cada PC de laboratório**
+
+| Componente                         | Onde roda                   | O que faz                                                                                   |
+| ---------------------------------- | --------------------------- | ------------------------------------------------------------------------------------------- |
+| App OpenPortal                     | Sessão do dono do PC        | Atende a rede (porta 18902): autoriza o gerente, mostra o diálogo de matrícula, responde ao status |
+| Serviço do laboratório (GOALS 17)  | LocalSystem, sem rede       | Contas dos alunos, cota de disco, fim forçado da sessão; conversa só com o app, por um pipe local |
+
+Os alunos são usuários comuns, em sessões RDP próprias: não alcançam o app, os arquivos
+dele nem o pipe do serviço.
+
+**Papéis e confiança**
+
+- **Gerente** = um login Tailscale listado em `lab.managers` do PC gerenciado. **PC
+  gerenciado** = um PC que aceitou pelo menos um gerente.
+- A identidade do gerente vem **só** de `tailscale whois` sobre o IP real do socket
+  (`socket.remoteAddress`), nunca de um nome declarado na mensagem. Sem login verificado
+  (`unknown`), a resposta é `unauthorized`.
+- A autorização efetiva é a lista de aprovação automática `allowedUsers` ∪ `lab.managers`
+  (um gerente abre a tela do PC sem diálogo) e a lista de envio `reportTo` ∪ `lab.managers`.
+- **Matrícula:** o gerente pede para gerenciar um PC (`lab-enroll`); a pessoa que está nele
+  clica em **Aceitar** num diálogo no estilo de "Solicitação de conexão" que mostra o login
+  verificado. Nada é matriculado remotamente sem esse clique. O dono pode sair a qualquer
+  momento por **Remover gerente** no cartão "Este PC é gerenciado"; remover o último gerente
+  desliga o modo laboratório do PC.
+- **Bloqueio:** 5 pedidos recusados seguidos do mesmo IP bloqueiam esse IP por 5 minutos
+  (`locked`), o mesmo limitador usado pela senha de acesso (`FailureLimiter`).
+- O **status é consultado** pelo gerente a cada 10 s (não empurrado): a resposta do próprio PC
+  é a verdade, e uma resposta que não vem também é informação ("PC sem resposta", GOALS 19).
+
+**Protocolo (versão `labProtocol` = 1)**
+
+Mesma porta de sinalização (18902) e mesma ideia do `connect-request`: **um objeto JSON por
+conexão**, em UTF-8. O cliente abre a conexão, escreve o pedido e espera um objeto JSON de
+resposta; o PC gerenciado responde e fecha (a única exceção é `lab-folder`, abaixo).
+
+- **Limites:** pedido ≤ 4 KiB; resposta ≤ 256 KiB; textos sem caracteres de controle; campos
+  desconhecidos são ignorados. Pedido maior que o limite, JSON inválido, campo ausente ou de
+  tipo errado: `bad-request`.
+- **Pedido:** `{ "type": "lab-…", "labProtocol": 1, …campos }`. `labProtocol` é obrigatório.
+- **Resposta de sucesso:** `{ "type": "lab-response", "request": "<tipo do pedido>", "ok": true,
+"labProtocol": 1, …campos }`.
+- **Resposta de erro:** `{ "type": "lab-response", "request": "<tipo>", "ok": false, "error":
+"<código>", "message": "<texto em português, opcional>", "labProtocol": 1 }`.
+- **Códigos de erro:** `unauthorized` (não é gerente, ou identidade desconhecida), `locked`
+  (IP bloqueado), `busy` (outro diálogo de matrícula aberto, ou PC com aluno ativo),
+  `bad-request`, `unsupported` (tipo desconhecido, `labProtocol` maior que o do PC, ou
+  mensagem de um GOALS ainda não implementado — a resposta traz o `labProtocol` do PC para o
+  gerente marcar "Incompatível"), `internal` (falha inesperada no PC; nunca carrega detalhes).
+- **Autorização:** toda mensagem `lab-*` exige que o remetente seja gerente, **exceto**
+  `lab-enroll`. Não há senha nem segredo em nenhuma resposta, salvo a senha do aluno em
+  `lab-reserve`, entregue uma única vez.
+
+**Mensagens**
+
+| Tipo (GOALS)                  | Pedido (além de `type`, `labProtocol`)                                  | Resposta de sucesso (além do envelope)                                                                 |
+| ----------------------------- | ----------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| `lab-enroll` (16)             | —                                                                       | `accepted: true, hostId, hostName, appVersion` — ou `accepted: false, reason: "rejected" ou "timeout"` |
+| `lab-status` (16)             | —                                                                       | `hostId, hostName, appVersion, managed, service, state, student?, studentCount, disk?`                  |
+| `lab-students` (18)           | —                                                                       | `students: [{label, account, quotaGb, usedGb, lastSessionAt?, state}], capacity`                        |
+| `lab-student-add` (18)        | `label` (1–40 caracteres), `quotaGb` (1–2000)                           | `student`                                                                                               |
+| `lab-student-quota` (18)      | `account`, `quotaGb` (1–2000)                                           | `student`                                                                                               |
+| `lab-student-delete` (18)     | `account`                                                               | — (recusado com `busy` se o aluno está ativo)                                                           |
+| `lab-reserve` (18)            | `account`, `startWithinMs` (60 s a 24 h), `sessionMs` (5 min a 12 h)    | `reservationId, account, userName, password, startBy, endsAt` (única resposta com senha)                |
+| `lab-extend` (18)             | `reservationId`, `addMs` (1 min a 12 h)                                 | `endsAt`                                                                                                |
+| `lab-end` (18)                | `reservationId`, `reason`: `manager-ended` ou `manager-handover`        | `ended: true`                                                                                           |
+| `lab-folder` (18)             | `account`                                                               | `tunnel: true`; depois da resposta o socket vira uma sessão de arquivos **somente leitura** na pasta do aluno |
+| `lab-events` (19)             | `sinceSeq` (inteiro ≥ 0), `limit` (1–500)                               | `events: [...], lastSeq, firstSeq`                                                                      |
+
+`lab-enroll` aceito é **idempotente**: um login que já é gerente recebe `accepted: true` sem
+novo diálogo. O diálogo fecha sozinho depois de 60 s (`reason: "timeout"`) ou quando quem
+pediu desiste. Só um diálogo de matrícula fica aberto por vez (os outros recebem `busy`), e
+cada recusa conta para o bloqueio do IP.
+
+**Campos de `lab-status`**
+
+- `hostId` (UUID criado uma vez neste PC), `hostName`, `appVersion`, `managed` (verdadeiro se
+  há ao menos um gerente).
+- `service: { installed, running }` — até o GOALS 17 o serviço não está instalado.
+- `state`: `free` | `reserved` | `in-use`; até o GOALS 18 é sempre `free`.
+- `student?: { label, since, endsAt }` — presente com `state` ≠ `free`; só rótulo e horários.
+- `studentCount`; `disk?: { totalGb, freeGb }` — preenchido a partir do GOALS 17.
+- O status é montado por uma lista de campos permitidos: nenhuma senha, token ou segredo
+  consegue entrar nele, mesmo que a camada de baixo devolva mais.
+
+**`lab-folder`** é a única mensagem que mantém o socket aberto: depois do `tunnel: true`
+ele vira o mesmo transporte multiplexado da sessão de arquivos (`FileAgentSession`), com
+raiz na pasta de perfil do aluno e **sem** operações que alteram (enviar, apagar, renomear,
+criar pasta). Não abre diálogo: o gerente já está autorizado.
+
+**Eventos (GOALS 19)** têm o formato `{ v: 2, hostId, hostName, seq, at, type, student?:
+{label, account}, reservationId?, sourceIp?, endReason?, detail? }`, com os tipos
+`student-added`, `student-deleted`, `quota-changed`, `reservation-start`, `reservation-end`,
+`session-logon`, `session-logoff`, `manager-enrolled`, `manager-removed`, `host-lost` e
+`host-back`, e os motivos de fim `student-left`, `manager-ended`, `manager-handover`,
+`deadline`, `unused-expired` e `service-restart`. Os eventos do GOALS 4 (sem `v`) continuam
+aceitos e mostrados.
+
+**Configuração deste PC (`config.json`)**
+
+| Chave                   | Quem altera                                              | Para quê                                                  |
+| ----------------------- | -------------------------------------------------------- | --------------------------------------------------------- |
+| `hostId`                | Só o main, uma vez; o renderer não consegue alterar      | Identidade estável do PC                                  |
+| `lab.managers`          | Só a matrícula aceita e "Remover gerente" (locais)       | Logins que gerenciam este PC                              |
+| `lab.managed`           | Só o main (derivado de `lab.managers`)                   | Este PC é gerenciado                                      |
+| `lab.mode`              | O renderer (Configurações → "Modo laboratório")          | Mostra a tela "Laboratório" neste PC (lado do gerente)    |
+| `lab.roster`            | Só o main (matrícula e "Remover" da tela)                | Lista de PCs que este app gerencia (até 50)               |
+
+**Como os alunos chegam aos PCs (decisão G16-D1, 2026-09-30)**
+
+Os alunos usam só o Remote Desktop do Windows, então o que importa é um caminho de rede até
+a porta 3389; o canal dos gerentes (porta 18902) continua pelo Tailscale em todos os casos.
+
+- **Alunos em casa — opção B (gratuita):** compartilhar cada PC de laboratório com a conta
+  Tailscale do aluno ("node sharing"). Cada aluno usa a própria conta gratuita e o
+  compartilhamento não aumenta o número de usuários da tailnet do professor (o plano gratuito
+  tem 6). O professor gera um link de convite reutilizável por PC no painel do Tailscale
+  (até 1.000 usos; expira em 30 dias se não for usado). O dispositivo compartilhado fica em
+  quarentena (responde, mas não inicia conexões). A regra de firewall `OpenPortal-RDP-Tailscale`
+  já aceita todo o `100.64.0.0/10`, o que cobre as tailnets dos alunos. Antes de depender
+  disso, confirmar com um aluno real: o uso do link, o RDP pelo compartilhamento e o que
+  `tailscale whois` devolve para um aluno convidado.
+- **Alunos na sala — opção E:** os alunos estão na mesma rede dos PCs; a regra de firewall da
+  3389 é ampliada da faixa Tailscale para a sub-rede local. O RDP é criptografado por si, mas a
+  rede da escola passa a alcançar a porta: só a conta de aluno habilitada (uma por vez, com
+  senha aleatória que expira) a protege. Os PCs precisam de IP fixo (reserva no DHCP) e vale
+  conferir, a partir do aparelho do aluno, que a rede deixa a porta passar
+  (`Test-NetConnection <ip> -Port 3389`; isolamento de clientes no Wi-Fi e VLANs podem
+  bloquear).
+- Saída se os termos do Tailscale mudarem: NetBird Community (gratuito, sem limite de
+  usuários e dispositivos, mas exige um servidor próprio).
+
+**Como um PC de laboratório volta depois de reiniciar (decisão G16-D2, 2026-09-30)**
+
+O app precisa estar rodando na sessão do dono para gerenciar o PC, e depois de reiniciar
+ninguém está logado. Decisão: uma **conta comum dedicada** (por exemplo `openportal-host`,
+sem direitos de administrador e sem acesso de aluno) com **login automático** configurado
+por quem administra o PC (ferramenta Autologon da Sysinternals ou `netplwiz`; isso guarda a
+senha dessa conta no PC, por escolha de quem administra) e a opção **Iniciar com o Windows**
+ligada nas Configurações do app. Quando um aluno entra por RDP, a sessão do dono é só
+**desconectada**, não encerrada: o app continua rodando e escutando a 18902 (observado no
+G17-V1). O app só oferece "Iniciar com o Windows" depois que o modo laboratório está ligado e
+a opção vem desligada por padrão.
+
+**Canais internos (renderer ↔ main)**
+
+`lab:roster`, `lab:add`, `lab:remove`, `lab:status` (assinatura de eventos), `lab:open`
+(GOALS 16 I8); `lab:managers` e `lab:removeManager` (cartão "Este PC é gerenciado");
+`lab:getStartWithWindows` e `lab:setStartWithWindows` ("Iniciar com o Windows"). Dois
+canais só empurram dados do main para a tela: `lab:status` (a lista de PCs, quando algo que
+ela mostra muda) e `lab:hostChanged` (os gerentes deste PC ou o modo mudaram). Cada
+handler valida a entrada; nenhum devolve segredo ao renderer. `lab:open` devolve só o
+necessário para pedir acesso pelo fluxo normal (nome, IP e porta) e recusa PC em uso,
+Offline, Incompatível ou Sem acesso.
+
+**Fora do escopo:** monitoramento de apps e downloads; bloqueio de área de transferência ou
+de unidades no RDP; alunos trocando de PC; armazenamento central de arquivos; fila de
+espera; mais de um aluno ativo por PC; discos virtuais; domínio Windows; PCs com Windows
+Home (não hospedam RDP).
+
 ---
 
 ## 3. Comparação Lado-a-Lado

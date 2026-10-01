@@ -46,6 +46,27 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('rdp:createCredential', { username, password }),
   generateRdpPassword: () => ipcRenderer.invoke('rdp:generatePassword'),
 
+  // Modo laboratório (GOALS 16) — lista de PCs do gerente, matrícula, quem gerencia
+  // este PC e "Iniciar com o Windows".
+  getLabRoster: () => ipcRenderer.invoke('lab:roster'),
+  addLabPc: (host) => ipcRenderer.invoke('lab:add', host),
+  removeLabPc: (hostId) => ipcRenderer.invoke('lab:remove', hostId),
+  openLabPc: (hostId) => ipcRenderer.invoke('lab:open', hostId),
+  onLabStatus: (callback) => {
+    const handler = (_, roster) => callback(roster);
+    ipcRenderer.on('lab:status', handler);
+    return () => ipcRenderer.removeListener('lab:status', handler);
+  },
+  getLabManagers: () => ipcRenderer.invoke('lab:managers'),
+  removeLabManager: (login) => ipcRenderer.invoke('lab:removeManager', login),
+  onLabHostChanged: (callback) => {
+    const handler = (_, state) => callback(state);
+    ipcRenderer.on('lab:hostChanged', handler);
+    return () => ipcRenderer.removeListener('lab:hostChanged', handler);
+  },
+  getStartWithWindows: () => ipcRenderer.invoke('lab:getStartWithWindows'),
+  setStartWithWindows: (enabled) => ipcRenderer.invoke('lab:setStartWithWindows', enabled),
+
   getVersion: () => ipcRenderer.invoke('app:version'),
 
   // Server/Agent status
