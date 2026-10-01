@@ -31,12 +31,14 @@ describe('readLab', () => {
       managed: false,
       mode: false,
       roster: [],
+      logRetentionDays: 180,
     });
     expect(readLab(undefined)).toEqual({
       managers: [],
       managed: false,
       mode: false,
       roster: [],
+      logRetentionDays: 180,
     });
     expect(readLab({ lab: 'oops' }).managed).toBe(false);
   });
@@ -323,5 +325,51 @@ describe('createLabStore', () => {
     expect(store.getLab().roster).toEqual([pc(1)]);
     expect(store.removeRosterEntry('host-1').removed).toBe(true);
     expect(store.getLab().roster).toEqual([]);
+  });
+});
+
+describe('lab.logRetentionDays (G19-I6)', () => {
+  it('defaults to 180 days and clamps whatever is stored to 1..3650', () => {
+    expect(readLab({ lab: {} }).logRetentionDays).toBe(180);
+    expect(readLab({ lab: { logRetentionDays: 30 } }).logRetentionDays).toBe(30);
+    expect(readLab({ lab: { logRetentionDays: 0 } }).logRetentionDays).toBe(1);
+    expect(readLab({ lab: { logRetentionDays: 99999 } }).logRetentionDays).toBe(3650);
+    expect(readLab({ lab: { logRetentionDays: 'abc' } }).logRetentionDays).toBe(180);
+    expect(readLab({ lab: { logRetentionDays: 45.6 } }).logRetentionDays).toBe(46);
+  });
+
+  it('is kept when the renderer saves the config, and the renderer cannot change it', () => {
+    const existing = { lab: { mode: false, managers: [], roster: [], logRetentionDays: 90 } };
+    const merged = mergeLabFromRenderer(existing.lab, { mode: true, logRetentionDays: 1 });
+    expect(merged.mode).toBe(true);
+    expect(merged.logRetentionDays).toBe(90);
+  });
+});
+
+describe('lab store: setLogRetentionDays', () => {
+  it('saves the clamped number of days and leaves managers and roster as they were', () => {
+    let disk = {
+      lab: {
+        mode: true,
+        managers: ['prof@escola.com'],
+        roster: [{ hostId: 'h1', name: 'PC', host: '100.64.0.11', enrolledAt: 1 }],
+      },
+    };
+    const store = createLabStore({
+      read: () => structuredClone(disk),
+      write: (next) => {
+        disk = structuredClone(next);
+      },
+    });
+    expect(store.setLogRetentionDays(60)).toBe(60);
+    expect(store.getLab()).toMatchObject({
+      mode: true,
+      managers: ['prof@escola.com'],
+      logRetentionDays: 60,
+    });
+    expect(store.getLab().roster).toHaveLength(1);
+    expect(store.setLogRetentionDays(0)).toBe(1);
+    expect(store.setLogRetentionDays(100000)).toBe(3650);
+    expect(store.setLogRetentionDays(undefined)).toBe(180);
   });
 });

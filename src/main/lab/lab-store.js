@@ -52,9 +52,20 @@ function createLabStore({ read, write, randomUUID = crypto.randomUUID }) {
     return result;
   }
 
+  // Só o main chama (o renderer pede por um canal próprio, que valida): quantos dias o registro
+  // de acessos guarda.
+  function setLogRetentionDays(days) {
+    const config = read();
+    const lab = labConfig.readLab(config);
+    const next = labConfig.clampRetentionDays(days);
+    save(config, { ...lab, logRetentionDays: next });
+    return next;
+  }
+
   return {
     getHostId,
     getLab,
+    setLogRetentionDays,
     addManager,
     removeManager,
     upsertRosterEntry,

@@ -243,6 +243,10 @@ describe('responses', () => {
       'bad-request',
       'unsupported',
       'internal',
+      'not-found',
+      'full',
+      'logoff-failed',
+      'service-down',
     ]);
     for (const code of ERROR_CODES) expect(buildError('lab-status', code).error).toBe(code);
     expect(buildError('lab-status', 'made-up').error).toBe('internal');
@@ -320,6 +324,7 @@ describe('statusPayload', () => {
     state: 'in-use',
     student: { label: 'Ana', since: 1000, endsAt: 5000 },
     studentCount: 3,
+    lastSeq: 42,
     disk: { totalGb: 250, freeGb: 120.46 },
   };
 
@@ -334,6 +339,7 @@ describe('statusPayload', () => {
         'disk',
         'hostId',
         'hostName',
+        'lastSeq',
         'managed',
         'service',
         'state',
@@ -352,6 +358,7 @@ describe('statusPayload', () => {
       service: { installed: false, running: false },
       state: 'free',
       studentCount: 0,
+      lastSeq: 0,
     });
     expect(statusPayload()).toMatchObject({ state: 'free', managed: false });
     expect(statusPayload('nonsense')).toMatchObject({ state: 'free' });

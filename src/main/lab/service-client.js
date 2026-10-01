@@ -13,6 +13,10 @@ const PIPE_PATH = '\\\\.\\pipe\\OpenPortalLab';
 const MAX_REQUEST_BYTES = 4 * 1024;
 const MAX_RESPONSE_BYTES = 256 * 1024;
 const DEFAULT_TIMEOUT_MS = 5000;
+// O pipe pode sumir por um instante sob uma rajada de pedidos (nenhuma instância livre):
+// só um erro ao ABRIR a conexão, antes de qualquer byte enviado, vale outra tentativa.
+const CONNECT_RETRIES = 3;
+const CONNECT_RETRY_DELAY_MS = 100;
 
 // Os mesmos comandos de lab-service/Core/Protocol.cs.
 const COMMANDS = Object.freeze([
@@ -26,6 +30,7 @@ const COMMANDS = Object.freeze([
   'end',
   'ensure-folder-access',
   'events',
+  'note',
 ]);
 
 function failure(error, message) {
@@ -52,11 +57,13 @@ function createServiceClient({
   pipePath = PIPE_PATH,
   createConnection = net.createConnection,
   newId = () => crypto.randomBytes(6).toString('hex'),
+  retryDelayMs = CONNECT_RETRY_DELAY_MS,
 } = {}) {
   function attempt(line, id, timeoutMs) {
     return new Promise((resolve) => {
       let settled = false;
       let socket = null;
+      let connected = false;
       const chunks = [];
       let size = 0;
 
@@ -80,7 +87,10 @@ function createServiceClient({
         return;
       }
 
-      socket.on('connect', () => socket.write(`${line}\n`));
+      socket.on('connect', () => {
+        connected = true;
+        socket.write(`${line}\n`);
+      });
       socket.on('data', (chunk) => {
         size += chunk.length;
         if (size > MAX_RESPONSE_BYTES + 1) {
@@ -92,7 +102,11 @@ function createServiceClient({
         const newline = text.indexOf('\n');
         if (newline >= 0) finish(parseResponse(text.slice(0, newline), id));
       });
-      socket.on('error', (err) => finish(describeConnectError(err)));
+      socket.on('error', (err) => {
+        const failed = describeConnectError(err);
+        const transient = !connected && (err.code === 'ENOENT' || err.code === 'EBUSY');
+        finish(transient ? { ...failed, retryable: true } : failed);
+      });
       socket.on('close', () => {
         if (settled) return;
         const text = Buffer.concat(chunks).toString('utf8').trim();
@@ -128,7 +142,16 @@ function createServiceClient({
     if (Buffer.byteLength(line, 'utf8') > MAX_REQUEST_BYTES) {
       return failure('bad-request', 'Pedido grande demais');
     }
-    return attempt(line, id, timeoutMs);
+    for (let tries = 0; ; tries += 1) {
+      const result = await attempt(line, id, timeoutMs);
+      if (!result.retryable) return result;
+      if (tries >= CONNECT_RETRIES) {
+        const final = { ...result };
+        delete final.retryable;
+        return final;
+      }
+      await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
+    }
   }
 
   return {
@@ -148,6 +171,11 @@ function createServiceClient({
     end: ({ reservationId, reason }, options = { timeoutMs: 90_000 }) =>
       request('end', { reservationId, reason }, options),
     ensureFolderAccess: (account, options) => request('ensure-folder-access', { account }, options),
+    // O diário do serviço (GOALS 19): eventos com número de sequência maior que sinceSeq.
+    events: ({ sinceSeq = 0, limit = 100 } = {}, options) =>
+      request('events', { sinceSeq, limit }, options),
+    // Registra no diário um fato que só o app conhece: quem foi aceito ou removido como gerente.
+    note: ({ type, detail }, options) => request('note', { type, detail }, options),
   };
 }
 

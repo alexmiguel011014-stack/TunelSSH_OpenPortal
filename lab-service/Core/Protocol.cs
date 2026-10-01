@@ -30,7 +30,7 @@ namespace OpenPortalLab
         public static readonly string[] Commands =
         {
             "status", "disk-info", "student-create", "student-delete", "student-set-quota",
-            "reserve", "extend", "end", "ensure-folder-access", "events",
+            "reserve", "extend", "end", "ensure-folder-access", "events", "note",
         };
 
         // Recebe uma linha de pedido e devolve a linha de resposta. Nunca lança.
@@ -137,9 +137,27 @@ namespace OpenPortalLab
                     return engine.End(reservationId, reason);
                 }
 
+                case "events":
+                {
+                    long? since = Json.Int(request, "sinceSeq");
+                    long? limit = Json.Int(request, "limit");
+                    if (request.ContainsKey("sinceSeq") && (!since.HasValue || since.Value < 0)) return Bad("sinceSeq");
+                    if (request.ContainsKey("limit") && (!limit.HasValue || limit.Value < 1 || limit.Value > Journal.MaxReadLimit)) return Bad("limit");
+                    return engine.Events(since ?? 0, (int)(limit ?? 100));
+                }
+
+                case "note":
+                {
+                    // O app registra no diário o que só ele sabe: quem foi aceito ou removido como gerente.
+                    string type = Json.Str(request, "type");
+                    string detail = Json.Str(request, "detail");
+                    if (type != "manager-enrolled" && type != "manager-removed") return Bad("type");
+                    if (string.IsNullOrWhiteSpace(detail) || detail.Length > 200) return Bad("detail");
+                    return engine.Record(type, detail);
+                }
+
                 default:
-                    // `events` chega com o GOALS 19 (diário do serviço).
-                    return Result.Fail("unsupported", "Comando ainda não disponível");
+                    return Result.Fail("unsupported", "Comando desconhecido");
             }
         }
 

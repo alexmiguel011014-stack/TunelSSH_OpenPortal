@@ -1,15 +1,18 @@
-import { useContext, useEffect, useState } from 'react';
-import { Monitor, Trash2 } from 'lucide-react';
+import { useContext, useEffect, useRef, useState } from 'react';
+import { ArrowLeft, ChevronDown, ChevronRight, Monitor, Trash2, Users } from 'lucide-react';
 import { MachineContext } from '../../App';
+import FileExplorer from '../file-transfer/FileExplorer';
 import { formatIpInput, normalizeQuickVncHost } from '../../shared/lib/vncSession';
 import {
   canOpenLabScreen,
   describeAddResult,
   describeRosterSummary,
   labOpenHint,
+  formatClock,
   labStateLabel,
   labStateTone,
 } from '../../shared/lib/lab';
+import HostStudents from './HostStudents';
 
 // Classes fixas por tom: o Tailwind só gera o que aparece escrito por inteiro.
 const TONE_CLASSES = {
@@ -51,6 +54,29 @@ export default function LabPanel() {
   const [addFeedback, setAddFeedback] = useState(null);
   const [rowFeedback, setRowFeedback] = useState(null);
   const [confirmingRemove, setConfirmingRemove] = useState(null);
+  // O PC cuja lista de alunos está aberta (um por vez) e a pasta de aluno aberta em
+  // somente leitura ("Ver pasta"): { sessionId, title }.
+  const [expandedId, setExpandedId] = useState(null);
+  const [folder, setFolder] = useState(null);
+  const folderRef = useRef(null);
+  useEffect(() => {
+    folderRef.current = folder;
+  }, [folder]);
+
+  // Sair da tela do laboratório fecha a sessão de arquivos da pasta aberta.
+  useEffect(
+    () => () => {
+      if (folderRef.current) {
+        window.electronAPI?.ftDisconnect?.(folderRef.current.sessionId)?.catch?.(() => {});
+      }
+    },
+    [],
+  );
+
+  const closeFolder = () => {
+    if (folder) window.electronAPI?.ftDisconnect?.(folder.sessionId)?.catch?.(() => {});
+    setFolder(null);
+  };
 
   useEffect(() => {
     const api = window.electronAPI;
@@ -123,6 +149,32 @@ export default function LabPanel() {
     if (addLog) addLog(`Laboratório: ${entry.name} removido da lista`);
   };
 
+  if (folder) {
+    return (
+      <div className="flex-1 flex flex-col min-h-0 bg-canvas text-text-primary">
+        <div className="flex items-center gap-3 px-4 py-2 border-b border-line-subtle bg-surface">
+          <button
+            onClick={closeFolder}
+            className="inline-flex items-center gap-1.5 text-xs text-text-secondary hover:text-text-primary transition-colors"
+          >
+            <ArrowLeft size={14} /> Voltar ao laboratório
+          </button>
+          <span className="text-xs text-text-faint truncate">{folder.title}</span>
+        </div>
+        <div className="flex-1 min-h-0">
+          <FileExplorer
+            session={{
+              sessionId: folder.sessionId,
+              readOnly: true,
+              title: folder.title,
+              onClose: closeFolder,
+            }}
+          />
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="flex-1 flex flex-col items-center bg-canvas text-text-primary p-10 overflow-auto">
       <div className="max-w-3xl w-full">
@@ -178,33 +230,41 @@ export default function LabPanel() {
             <div className="space-y-1.5">
               {roster.map((entry) => {
                 const canOpen = canOpenLabScreen(entry.state);
+                const expanded = expandedId === entry.hostId;
                 return (
-                  <div
-                    key={entry.hostId}
-                    className="flex items-center gap-2.5 px-3 py-2.5 rounded-lg border border-line-subtle bg-inset"
-                  >
-                    <Monitor size={16} className="text-text-muted shrink-0" />
-                    <div className="flex-1 min-w-0">
-                      <div className="text-sm font-medium truncate">{entry.name}</div>
-                      <div className="text-[11px] text-text-faint font-mono truncate">
-                        {entry.host}
-                        {entry.appVersion ? ` · v${entry.appVersion}` : ''}
+                  <div key={entry.hostId} className="rounded-lg border border-line-subtle bg-inset">
+                    <div className="flex items-center gap-2.5 px-3 py-2.5">
+                      <Monitor size={16} className="text-text-muted shrink-0" />
+                      <div className="flex-1 min-w-0">
+                        <div className="text-sm font-medium truncate">{entry.name}</div>
+                        <div className="text-[11px] text-text-faint font-mono truncate">
+                          {entry.host}
+                          {entry.appVersion ? ` · v${entry.appVersion}` : ''}
+                        </div>
+                        {entry.student && (
+                          <div className="text-[11px] text-text-secondary truncate">
+                            {entry.student.label}
+                            {entry.student.endsAt
+                              ? ` até ${formatClock(entry.student.endsAt)}`
+                              : ''}
+                          </div>
+                        )}
                       </div>
-                    </div>
-                    <span
-                      className={`text-[11px] px-2 py-0.5 rounded-full border whitespace-nowrap ${TONE_CLASSES[labStateTone(entry.state)]}`}
-                    >
-                      {labStateLabel(entry.state)}
-                    </span>
-                    {entry.state === 'in-use' ? (
-                      <button
-                        disabled
-                        title="Disponível com os alunos (GOALS 18)"
-                        className="px-3 py-1.5 rounded-md text-xs font-medium border border-line text-text-faint opacity-60 whitespace-nowrap"
+                      <span
+                        className={`text-[11px] px-2 py-0.5 rounded-full border whitespace-nowrap ${TONE_CLASSES[labStateTone(entry.state)]}`}
                       >
-                        Ver pasta
+                        {labStateLabel(entry.state)}
+                      </span>
+                      <button
+                        onClick={() => setExpandedId(expanded ? null : entry.hostId)}
+                        aria-expanded={expanded}
+                        title="Alunos deste PC: reservar, trocar aluno, ver a pasta e a cota"
+                        className="inline-flex items-center gap-1 px-3 py-1.5 rounded-md text-xs font-medium border border-line text-text-secondary hover:border-text-faint transition-colors whitespace-nowrap"
+                      >
+                        <Users size={13} />
+                        Alunos
+                        {expanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
                       </button>
-                    ) : (
                       <button
                         onClick={() => handleOpen(entry)}
                         disabled={!canOpen}
@@ -213,19 +273,24 @@ export default function LabPanel() {
                       >
                         Abrir tela
                       </button>
+                      <button
+                        onClick={() => handleRemove(entry)}
+                        onBlur={() => setConfirmingRemove(null)}
+                        title="Remover da lista (o PC continua aceitando você até o dono remover)"
+                        className={`p-1.5 rounded-md border bg-transparent transition-colors ${
+                          confirmingRemove === entry.hostId
+                            ? 'border-danger/50 text-danger text-xs px-2'
+                            : 'border-transparent text-text-faint hover:text-danger'
+                        }`}
+                      >
+                        {confirmingRemove === entry.hostId ? 'Confirmar?' : <Trash2 size={14} />}
+                      </button>
+                    </div>
+                    {expanded && (
+                      <div className="border-t border-line-subtle px-3 py-3">
+                        <HostStudents entry={entry} addLog={addLog} onFolder={setFolder} />
+                      </div>
                     )}
-                    <button
-                      onClick={() => handleRemove(entry)}
-                      onBlur={() => setConfirmingRemove(null)}
-                      title="Remover da lista (o PC continua aceitando você até o dono remover)"
-                      className={`p-1.5 rounded-md border bg-transparent transition-colors ${
-                        confirmingRemove === entry.hostId
-                          ? 'border-danger/50 text-danger text-xs px-2'
-                          : 'border-transparent text-text-faint hover:text-danger'
-                      }`}
-                    >
-                      {confirmingRemove === entry.hostId ? 'Confirmar?' : <Trash2 size={14} />}
-                    </button>
                   </div>
                 );
               })}

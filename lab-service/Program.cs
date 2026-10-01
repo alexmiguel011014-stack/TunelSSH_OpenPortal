@@ -34,10 +34,10 @@ namespace OpenPortalLab
                 case "--pipe-test":
                     if (args.Length < 3)
                     {
-                        Console.Error.WriteLine("Uso: --pipe-test <nome do pipe> <SID do dono | self>");
+                        Console.Error.WriteLine("Uso: --pipe-test <nome do pipe> <SID do dono | self> [segundos de vida, padrão 60]");
                         return 2;
                     }
-                    return PipeHarness.Run(args[1], args[2]);
+                    return PipeHarness.Run(args[1], args[2], args.Length > 3 ? args[3] : null);
 
                 case "--console":
                     return RunInConsole();

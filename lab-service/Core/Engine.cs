@@ -34,6 +34,8 @@ namespace OpenPortalLab
         public int MaxStudents = 100;
         public int UsageCacheMs = 30 * 1000;
         public long MaxAheadMs = 24L * 60 * 60 * 1000;
+        // Quantos dias o diário guarda (GOALS 19).
+        public int JournalRetentionDays = Journal.DefaultRetentionDays;
         // Verdadeiro nos testes: a reaplicação do acesso do dono roda na hora, não em segundo plano.
         public bool InlineCleanup = false;
     }
@@ -53,6 +55,12 @@ namespace OpenPortalLab
         private readonly EngineOptions opt;
         private readonly object gate = new object();
         private readonly LabState state;
+        private readonly Journal journal;
+        // Sessões de aluno vistas por número: o logoff chega quando a sessão já não existe, e a conta e o
+        // endereço de origem só podem ser lidos enquanto ela existia.
+        private readonly Dictionary<int, SeenSession> seenSessions = new Dictionary<int, SeenSession>();
+        private readonly object sessionGate = new object();
+        private long nextPruneAt;
         private bool endRunning;
         private long nextEndRetryAt;
         // A reserva cujo aluno foi visto com sessão DURANTE esta execução do serviço: só quem foi
@@ -63,8 +71,16 @@ namespace OpenPortalLab
         private Dictionary<string, long> usageCache = new Dictionary<string, long>();
         private long usageCacheAt = -1;
 
-        public Engine(IWindows win, IStateStore store, IClock clock, IRandom random, ILog log, EngineOptions options)
+        private sealed class SeenSession
         {
+            public SessionDetails Details;
+            public bool Connected;
+            public long LogonAt;
+        }
+
+        public Engine(IWindows win, IStateStore store, IClock clock, IRandom random, ILog log, EngineOptions options, Journal journal = null)
+        {
+            this.journal = journal;
             this.win = win;
             this.store = store;
             this.clock = clock;
@@ -85,6 +101,7 @@ namespace OpenPortalLab
         {
             string pendingEnd = null;
             string pendingReason = null;
+            PruneJournal();
             lock (gate)
             {
                 Reconcile();
@@ -182,6 +199,7 @@ namespace OpenPortalLab
                 state.Students.Add(student);
                 Save();
                 log.Info("aluno criado: " + account);
+                Note("student-added", account, clean, null, null, null, quotaGb + " GB");
                 return Result.Success(StudentView(student, null));
             }
         }
@@ -204,6 +222,7 @@ namespace OpenPortalLab
                 }
                 s.QuotaGb = (int)quotaGb;
                 Save();
+                Note("quota-changed", account, s.Label, null, null, null, quotaGb + " GB");
                 return Result.Success(StudentView(s, null));
             }
         }
@@ -234,6 +253,7 @@ namespace OpenPortalLab
                 Save();
                 usageCacheAt = -1;
                 log.Info("aluno apagado: " + account);
+                Note("student-deleted", account, s.Label, null, null, null, null);
                 return Result.Success(Data("account", account));
             }
         }
@@ -246,13 +266,13 @@ namespace OpenPortalLab
                 try
                 {
                     win.GrantOwnerRead(account, opt.OwnerSid);
+                    return Result.Success(Data("account", account, "path", win.GetProfilePath(account)));
                 }
                 catch (Exception ex)
                 {
                     log.Warn("falha ao liberar a pasta de " + account + ": " + ex.Message);
                     return Result.Fail("internal", "Não foi possível liberar a pasta");
                 }
-                return Result.Success(Data("account", account));
             }
         }
 
@@ -315,6 +335,8 @@ namespace OpenPortalLab
                 }
 
                 log.Info("reserva " + reservation.Id + " para " + account);
+                Note("reservation-start", account, student.Label, reservation.Id, null, null,
+                    "entrar em até " + (startWithinMs / 60000) + " min; sessão de " + (sessionMs / 60000) + " min");
                 return Result.Success(Data(
                     "reservationId", reservation.Id,
                     "account", account,
@@ -408,10 +430,12 @@ namespace OpenPortalLab
                     Student s = Find(account);
                     if (s != null) s.LastSessionEnd = clock.NowMs;
                     string endedReason = state.Reservation != null ? state.Reservation.EndReason : reason;
+                    string endedId = state.Reservation != null ? state.Reservation.Id : reservationId;
                     state.Reservation = null;
                     Save();
                     usageCacheAt = -1;
                     log.Info("reserva encerrada (" + (endedReason ?? reason) + "): " + account);
+                    Note("reservation-end", account, s != null ? s.Label : null, endedId, null, endedReason ?? reason, null);
                 }
 
                 if (opt.InlineCleanup) ReapplyOwnerAccess(account);
@@ -463,9 +487,134 @@ namespace OpenPortalLab
 
         // ---- Relógio --------------------------------------------------------
 
+        // ---- Diário (GOALS 19) ---------------------------------------------
+
+        // Grava um fato no diário. Uma falha do diário nunca derruba a operação que o gerou.
+        private void Note(string type, string account, string label, string reservationId, string sourceIp, string endReason, string detail)
+        {
+            if (journal == null) return;
+            try
+            {
+                journal.Append(type, account, label, reservationId, sourceIp, endReason, detail);
+            }
+            catch (Exception ex)
+            {
+                log.Warn("diário: não gravei " + type + ": " + ex.Message);
+            }
+        }
+
+        private void PruneJournal()
+        {
+            if (journal == null) return;
+            try
+            {
+                journal.Prune(opt.JournalRetentionDays);
+            }
+            catch (Exception ex)
+            {
+                log.Warn("diário: retenção falhou: " + ex.Message);
+            }
+            nextPruneAt = clock.NowMs + 24L * 3600 * 1000;
+        }
+
+        // O app registra no diário um fato que só ele conhece (veja o comando `note`). Os tipos
+        // aceitos são fixos; o texto livre é só o login do gerente, sem caracteres de controle.
+        public Result Record(string type, string detail)
+        {
+            if (journal == null) return Result.Fail("unsupported", "O diário não está ativo");
+            if (type != "manager-enrolled" && type != "manager-removed") return Result.Fail("bad-request", "Tipo de registro inválido");
+            var clean = new System.Text.StringBuilder();
+            foreach (char c in detail ?? "") clean.Append(char.IsControl(c) ? ' ' : c);
+            string text = clean.ToString().Trim();
+            if (text.Length == 0) return Result.Fail("bad-request", "Texto do registro vazio");
+            try
+            {
+                JournalEvent e = journal.Append(type, null, null, null, null, null, text);
+                return Result.Success(Data("seq", e.Seq));
+            }
+            catch (Exception ex)
+            {
+                log.Warn("diário: não gravei " + type + ": " + ex.Message);
+                return Result.Fail("internal", "Não foi possível gravar no diário");
+            }
+        }
+
+        // Consulta do app (e do gerente, pelo `lab-events`).
+        public Result Events(long sinceSeq, int limit)
+        {
+            if (journal == null) return Result.Fail("unsupported", "O diário não está ativo");
+            try
+            {
+                return Result.Success(journal.Read(sinceSeq, limit));
+            }
+            catch (Exception ex)
+            {
+                log.Warn("diário: leitura falhou: " + ex.Message);
+                return Result.Fail("internal", "Não foi possível ler o diário");
+            }
+        }
+
+        // O Windows avisou que uma sessão mudou (entrar, sair, desconectar, reconectar). Só as contas dos
+        // alunos entram no diário; o número da sessão leva ao nome da conta e ao endereço de origem
+        // enquanto a sessão existe, e a lembrança guardada serve para a saída. kind: logon | logoff |
+        // connect | disconnect. Nunca lança.
+        public void OnSessionEvent(int sessionId, string kind)
+        {
+            try
+            {
+                if (kind != "logon" && kind != "logoff" && kind != "connect" && kind != "disconnect") return;
+                SessionDetails details = null;
+                bool report = true;
+                string detail = kind;
+                lock (sessionGate)
+                {
+                    SeenSession seen;
+                    seenSessions.TryGetValue(sessionId, out seen);
+                    long now = clock.NowMs;
+                    if (kind == "logon" || kind == "connect")
+                    {
+                        // RemoteConnect logo depois de SessionLogon na mesma sessão é o mesmo fato.
+                        if (kind == "connect" && seen != null && seen.Connected) return;
+                        details = win.QuerySession(sessionId);
+                        if (details == null || string.IsNullOrEmpty(details.Account)) return;
+                        seenSessions[sessionId] = new SeenSession { Details = details, Connected = true, LogonAt = now };
+                        if (kind == "connect") detail = "reconnect";
+                    }
+                    else
+                    {
+                        if (seen != null) details = seen.Details;
+                        if (details == null)
+                        {
+                            try { details = win.QuerySession(sessionId); } catch { }
+                        }
+                        if (kind == "logoff") seenSessions.Remove(sessionId);
+                        else if (seen != null) seen.Connected = false;
+                        if (details == null) report = false;
+                    }
+                }
+                if (!report || details == null) return;
+
+                Student student;
+                string reservationId = null;
+                lock (gate)
+                {
+                    student = Find(details.Account);
+                    if (student != null && state.Reservation != null && state.Reservation.Account == student.Account) reservationId = state.Reservation.Id;
+                }
+                if (student == null) return;
+                string type = (kind == "logon" || kind == "connect") ? "session-logon" : "session-logoff";
+                Note(type, student.Account, student.Label, reservationId, details.ClientAddress, null, detail);
+            }
+            catch (Exception ex)
+            {
+                log.Warn("evento de sessão ignorado: " + ex.Message);
+            }
+        }
+
         // Chamado a cada segundo pelo serviço (e pelo teste, com o relógio falso).
         public void Tick()
         {
+            if (journal != null && clock.NowMs >= nextPruneAt) PruneJournal();
             string endId = null;
             string endReason = null;
             lock (gate)
@@ -634,6 +783,7 @@ namespace OpenPortalLab
                     { "students", students },
                     { "studentCount", state.Students.Count },
                 };
+                if (journal != null) data["lastSeq"] = journal.LastSeq;
                 Reservation r = state.Reservation;
                 if (r != null)
                 {

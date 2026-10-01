@@ -30,18 +30,41 @@ namespace OpenPortalLab
             public FakeRandom Random = new FakeRandom(7);
             public EngineOptions Options = new EngineOptions { OwnerSid = OwnerSid, InlineCleanup = true };
             public Engine Engine;
+            public MemoryJournalStorage JournalStorage;
+            public Journal Journal;
+            private readonly long journalMaxBytes;
 
-            public Rig()
+            public Rig(bool withJournal = false, long journalMaxBytes = Journal.DefaultMaxBytes)
             {
-                Engine = new Engine(Win, Store, Clock, Random, new NullLog(), Options);
+                this.journalMaxBytes = journalMaxBytes;
+                if (withJournal) JournalStorage = new MemoryJournalStorage();
+                Build();
+            }
+
+            private void Build()
+            {
+                if (JournalStorage != null) Journal = new Journal(JournalStorage, Clock, new NullLog(), journalMaxBytes);
+                Engine = new Engine(Win, Store, Clock, Random, new NullLog(), Options, Journal);
                 Engine.Start();
             }
 
             // Simula o serviço caindo e subindo de novo sobre o mesmo estado e o mesmo Windows.
             public void Restart()
             {
-                Engine = new Engine(Win, Store, Clock, Random, new NullLog(), Options);
-                Engine.Start();
+                Build();
+            }
+
+            // Os eventos do diário, do mais antigo ao mais novo.
+            public List<Dictionary<string, object>> Events(long sinceSeq = 0)
+            {
+                var result = new List<Dictionary<string, object>>();
+                foreach (object e in (List<object>)Journal.Read(sinceSeq, 500)["events"]) result.Add((Dictionary<string, object>)e);
+                return result;
+            }
+
+            public string[] Types()
+            {
+                return Events().Select(e => (string)e["type"]).ToArray();
             }
 
             public string AddStudent(string label, int quotaGb = 25)
@@ -747,8 +770,10 @@ namespace OpenPortalLab
                 var rig = new Rig();
                 string ana = rig.AddStudent("Ana");
                 rig.Win.Accounts[ana].OwnerGranted = false;
-                Ok(rig.Engine.EnsureFolderAccess(ana), "liberar");
+                Result folder = rig.Engine.EnsureFolderAccess(ana);
+                Ok(folder, "liberar");
                 Check(rig.Win.Accounts[ana].OwnerGranted, "concedeu");
+                Eq(@"C:\Users\" + ana, (string)folder.Data["path"], "a pasta do perfil vem na resposta");
                 Fails(rig.Engine.EnsureFolderAccess("naoexiste"), "not-found", "aluno inexistente");
                 rig.Win.FailOn = "GrantOwnerRead";
                 Fails(rig.Engine.EnsureFolderAccess(ana), "internal", "falha");
@@ -808,6 +833,270 @@ namespace OpenPortalLab
                 Check(during.Data.ContainsKey("stale"), "devia vir marcada como antiga");
                 slow.Wait();
                 Check(!rig.Engine.Status().Data.ContainsKey("stale"), "depois volta a ser atual");
+            });
+
+            // ---- Diário (GOALS 19) -------------------------------------------
+            add("journal: sequence numbers continue across a restart and never repeat", () =>
+            {
+                var rig = new Rig(true);
+                rig.AddStudent("Ana");
+                rig.AddStudent("Bia");
+                Eq(2L, rig.Journal.LastSeq, "duas gravações");
+                rig.Restart();
+                Eq(2L, rig.Journal.LastSeq, "a sequência volta do arquivo");
+                rig.AddStudent("Caio");
+                var events = rig.Events();
+                Eq(3, events.Count, "três eventos");
+                Eq(3L, Convert.ToInt64(events[2]["seq"]), "a terceira gravação é a 3");
+                Check(events.Select(e => Convert.ToInt64(e["seq"])).Distinct().Count() == 3, "sem número repetido");
+            });
+            add("journal: a corrupt last line is skipped, and a file cut mid-line starts the next event on a new line", () =>
+            {
+                var rig = new Rig(true);
+                rig.AddStudent("Ana");
+                rig.JournalStorage.Current.Add("{\"seq\":9,\"at\":");
+                rig.Restart();
+                Eq(1L, rig.Journal.LastSeq, "a linha quebrada não conta");
+                rig.AddStudent("Bia");
+                Eq(2L, rig.Journal.LastSeq, "a próxima grava a 2");
+                Eq(2, rig.Events().Count, "só os dois eventos bons");
+
+                // O arquivo de verdade: uma queda no meio da linha não gruda a próxima nela.
+                string dir = Path.Combine(Path.GetTempPath(), "op-journal-" + Guid.NewGuid().ToString("N"));
+                Directory.CreateDirectory(dir);
+                try
+                {
+                    string file = Path.Combine(dir, "journal.jsonl");
+                    File.WriteAllText(file, "{\"seq\":1,\"at\":5,\"type\":\"student-added\"}\n{\"seq\":2,\"at\":", new UTF8Encoding(false));
+                    var journal = new Journal(new FileJournalStorage(file), new FakeClock(), new NullLog());
+                    Eq(1L, journal.LastSeq, "a 2 estava cortada");
+                    journal.Append("quota-changed", "ana", "Ana", null, null, null, "10 GB");
+                    string[] lines = File.ReadAllLines(file);
+                    Eq(3, lines.Length, "a linha cortada, uma quebra e o evento novo");
+                    var again = new Journal(new FileJournalStorage(file), new FakeClock(), new NullLog());
+                    Eq(2L, again.LastSeq, "o evento novo é legível");
+                    Eq(2, ((List<object>)again.Read(0, 10)["events"]).Count, "dois eventos legíveis");
+                }
+                finally
+                {
+                    Directory.Delete(dir, true);
+                }
+            });
+            add("journal: rotates at the size cap, keeps counting, and reports the first sequence still available", () =>
+            {
+                var rig = new Rig(true, 400);
+                for (int i = 0; i < 12; i++) rig.AddStudent("Aluno" + i);
+                Check(rig.JournalStorage.Previous.Count > 0, "devia ter rotacionado");
+                Eq(12L, rig.Journal.LastSeq, "a sequência segue contando");
+                Dictionary<string, object> read = rig.Journal.Read(0, 500);
+                long first = Convert.ToInt64(read["firstSeq"]);
+                Check(first > 1, "o diário antigo foi descartado pela rotação (firstSeq " + first + ")");
+                var events = (List<object>)read["events"];
+                Eq(first, Convert.ToInt64(((Dictionary<string, object>)events[0])["seq"]), "a leitura começa no primeiro que existe");
+                Eq(12L, Convert.ToInt64(((Dictionary<string, object>)events[events.Count - 1])["seq"]), "e vai até o último");
+                // Contínuo, sem buraco entre os que existem.
+                for (int i = 1; i < events.Count; i++)
+                {
+                    Eq(Convert.ToInt64(((Dictionary<string, object>)events[i - 1])["seq"]) + 1, Convert.ToInt64(((Dictionary<string, object>)events[i])["seq"]), "sequência contínua");
+                }
+                rig.Restart();
+                Eq(12L, rig.Journal.LastSeq, "e depois de reiniciar");
+            });
+            add("journal: reads page by sequence number and cap at 500", () =>
+            {
+                var rig = new Rig(true);
+                for (int i = 0; i < 600; i++) rig.Journal.Append("quota-changed", "ana", "Ana", null, null, null, i + " GB");
+                var page = rig.Events(10);
+                Check(page.Count == 500, "o teto é 500 e vieram " + page.Count);
+                Eq(11L, Convert.ToInt64(page[0]["seq"]), "começa depois de sinceSeq");
+                var small = (List<object>)rig.Journal.Read(20, 5)["events"];
+                Eq(5, small.Count, "limite menor");
+                Eq(21L, Convert.ToInt64(((Dictionary<string, object>)small[0])["seq"]), "21 a 25");
+                Eq(0, ((List<object>)rig.Journal.Read(600, 10)["events"]).Count, "nada depois do último");
+                Eq(600L, Convert.ToInt64(rig.Journal.Read(0, 1)["lastSeq"]), "lastSeq");
+            });
+            add("journal: retention drops old events but never empties the journal", () =>
+            {
+                var rig = new Rig(true);
+                rig.AddStudent("Ana");
+                rig.Clock.Advance(100L * 24 * 3600 * 1000);
+                rig.AddStudent("Bia");
+                rig.Clock.Advance(100L * 24 * 3600 * 1000);
+                rig.AddStudent("Caio");
+                // Ana tem 200 dias, Bia 100, Caio 0: com 150 dias só a Ana sai.
+                Eq(1, rig.Journal.Prune(150), "um evento antigo");
+                Eq(2, rig.Events().Count, "restam dois");
+                Eq(2L, Convert.ToInt64(rig.Events()[0]["seq"]), "a Ana (seq 1) saiu");
+                // Tudo velho: o último evento fica, para a sequência não recomeçar.
+                rig.Clock.Advance(1000L * 24 * 3600 * 1000);
+                rig.Journal.Prune(30);
+                Eq(1, rig.Events().Count, "fica o último");
+                rig.Restart();
+                Eq(3L, rig.Journal.LastSeq, "a sequência continua depois do reinício");
+                rig.AddStudent("Duda");
+                Eq(4L, Convert.ToInt64(rig.Events().Last()["seq"]), "e o próximo é o 4");
+            });
+            add("journal: the engine writes what happened, with the reason a reservation ended", () =>
+            {
+                var rig = new Rig(true);
+                string ana = rig.AddStudent("Ana Souza");
+                string bia = rig.AddStudent("Bia");
+                Ok(rig.Engine.StudentSetQuota(ana, 40), "cota");
+                Dictionary<string, object> reserved = rig.Reserve(ana);
+                string firstId = (string)reserved["reservationId"];
+                rig.Win.SignIn(ana);
+                rig.Engine.Tick();
+                rig.Clock.Advance(61 * Min);
+                rig.Engine.Tick();
+                Check(rig.Reservation == null, "terminou no prazo");
+
+                Dictionary<string, object> second = rig.Reserve(bia);
+                Ok(rig.Engine.End((string)second["reservationId"], "manager-ended"), "encerrar");
+                Dictionary<string, object> third = rig.Reserve(ana);
+                Ok(rig.Engine.End((string)third["reservationId"], "manager-handover"), "troca");
+                rig.Reserve(bia, 5, 60);
+                rig.Clock.Advance(6 * Min);
+                rig.Engine.Tick();
+                Check(rig.Reservation == null, "reserva sem uso expirou");
+                rig.Reserve(ana);
+                var left = rig.Win.SignIn(ana);
+                rig.Engine.Tick();
+                rig.Win.Sessions.Remove(left);
+                rig.Clock.Advance(20 * 1000);
+                rig.Engine.Tick();
+                Check(rig.Reservation == null, "o aluno saiu");
+                Ok(rig.Engine.StudentDelete(bia), "apagar");
+
+                List<Dictionary<string, object>> events = rig.Events();
+                Eq("student-added,student-added,quota-changed,reservation-start,reservation-end,reservation-start,reservation-end,reservation-start,reservation-end,reservation-start,reservation-end,reservation-start,reservation-end,student-deleted",
+                    string.Join(",", events.Select(e => (string)e["type"])), "a ordem dos fatos");
+                Eq("deadline,manager-ended,manager-handover,unused-expired,student-left",
+                    string.Join(",", events.Where(e => (string)e["type"] == "reservation-end").Select(e => (string)e["endReason"])), "os motivos");
+                var firstEnd = events.First(e => (string)e["type"] == "reservation-end");
+                Eq(firstId, (string)firstEnd["reservationId"], "o fim leva o id da reserva");
+                Eq(ana, (string)firstEnd["account"], "e a conta");
+                Eq("Ana Souza", (string)firstEnd["label"], "e o nome");
+                var start = events.First(e => (string)e["type"] == "reservation-start");
+                Eq(firstId, (string)start["reservationId"], "o início leva o id");
+                Check(((string)start["detail"]).Contains("30") && ((string)start["detail"]).Contains("60"), "e os prazos");
+                Eq("40 GB", (string)events.First(e => (string)e["type"] == "quota-changed")["detail"], "a cota");
+            });
+            add("journal: a restart that finishes a half-done end records service-restart", () =>
+            {
+                var rig = new Rig(true);
+                string ana = rig.AddStudent("Ana");
+                rig.Reserve(ana);
+                rig.Win.SignIn(ana);
+                rig.Engine.Tick();
+                rig.Win.StubbornLogoffs = 99;
+                rig.Clock.Advance(61 * Min);
+                rig.Engine.Tick();
+                Eq("ending", rig.Reservation.State, "o logoff não passou");
+                rig.Win.StubbornLogoffs = 0;
+                // Um estado gravado sem o motivo do fim (de uma versão antiga): ao subir, o motivo é o reinício.
+                LabState saved = rig.Store.Load();
+                saved.Reservation.EndReason = null;
+                rig.Store.Save(saved);
+                rig.Restart();
+                string[] types = rig.Types();
+                Check(types.Contains("reservation-end"), "terminou ao subir");
+                Eq("service-restart", (string)rig.Events().Last(e => (string)e["type"] == "reservation-end")["endReason"], "motivo");
+            });
+            add("journal: the password never reaches the journal", () =>
+            {
+                var rig = new Rig(true);
+                string ana = rig.AddStudent("Ana");
+                rig.Reserve(ana);
+                rig.Win.SignIn(ana, "active", "100.64.0.9");
+                string password = rig.Win.Accounts[ana].Password;
+                rig.Engine.OnSessionEvent(3, "logon");
+                string all = string.Join("\n", rig.JournalStorage.Current) + string.Join("\n", rig.JournalStorage.Previous);
+                Check(all.Length > 0, "o diário tem conteúdo");
+                Check(!all.Contains(password), "a senha foi gravada");
+                Check(!all.ToLowerInvariant().Contains("password"), "a palavra password foi gravada");
+            });
+            add("session events: logon, disconnect, reconnect and logoff of a student carry the source address", () =>
+            {
+                var rig = new Rig(true);
+                string ana = rig.AddStudent("Ana");
+                Dictionary<string, object> reserved = rig.Reserve(ana);
+                SessionInfo session = rig.Win.SignIn(ana, "active", "100.64.0.9");
+                rig.Engine.OnSessionEvent(session.Id, "logon");
+                rig.Engine.OnSessionEvent(session.Id, "connect"); // o mesmo fato avisado duas vezes
+                rig.Engine.OnSessionEvent(session.Id, "disconnect");
+                rig.Engine.OnSessionEvent(session.Id, "connect");
+                rig.Win.Sessions.Remove(session); // a sessão já não existe quando o logoff chega
+                rig.Engine.OnSessionEvent(session.Id, "logoff");
+                var events = rig.Events().Where(e => ((string)e["type"]).StartsWith("session-")).ToList();
+                Eq("session-logon,session-logoff,session-logon,session-logoff", string.Join(",", events.Select(e => (string)e["type"])), "os quatro fatos");
+                Eq("logon,disconnect,reconnect,logoff", string.Join(",", events.Select(e => (string)e["detail"])), "o que cada um foi");
+                foreach (Dictionary<string, object> e in events)
+                {
+                    Eq("100.64.0.9", (string)e["sourceIp"], "o endereço do aluno vem em todos, até no logoff");
+                    Eq("ana", (string)e["account"], "conta");
+                    Eq((string)reserved["reservationId"], (string)e["reservationId"], "e a reserva em andamento");
+                }
+            });
+            add("session events: other accounts and unknown sessions are not recorded", () =>
+            {
+                var rig = new Rig(true);
+                string ana = rig.AddStudent("Ana");
+                rig.Win.AddForeignAccount("professor");
+                rig.Win.SignIn("professor");
+                rig.Engine.OnSessionEvent(3, "logon");
+                rig.Engine.OnSessionEvent(77, "logon");
+                rig.Engine.OnSessionEvent(77, "logoff");
+                rig.Engine.OnSessionEvent(3, "weird");
+                Eq(1, rig.Events().Count, "só o aluno criado");
+                // Um aluno que entra sem reserva (não devia, a conta está desabilitada) não tem id de reserva.
+                rig.Win.Accounts[ana].Enabled = true;
+                SessionInfo s = rig.Win.SignIn(ana, "active", "10.0.0.5");
+                rig.Engine.OnSessionEvent(s.Id, "logon");
+                var logon = rig.Events().Last();
+                Eq("session-logon", (string)logon["type"], "registrado");
+                Check(!logon.ContainsKey("reservationId"), "sem reserva, sem id");
+            });
+            add("note command: records only manager changes, with a clean short text", () =>
+            {
+                var rig = new Rig(true);
+                string ok = Protocol.Handle(rig.Engine, "{\"cmd\":\"note\",\"type\":\"manager-enrolled\",\"detail\":\"prof@escola.com\"}");
+                Check(ok.Contains("\"ok\":true") && ok.Contains("\"seq\":1"), "gravou: " + ok);
+                Protocol.Handle(rig.Engine, "{\"cmd\":\"note\",\"type\":\"manager-removed\",\"detail\":\"prof\\u0007@escola.com\"}");
+                var events = rig.Events();
+                Eq("manager-enrolled,manager-removed", string.Join(",", events.Select(e => (string)e["type"])), "os dois tipos");
+                Eq("prof@escola.com", (string)events[0]["detail"], "o login");
+                Eq("prof @escola.com", (string)events[1]["detail"], "controle vira espaço");
+                foreach (string bad in new[]
+                {
+                    "{\"cmd\":\"note\",\"type\":\"reservation-end\",\"detail\":\"x\"}", "{\"cmd\":\"note\",\"type\":\"student-added\",\"detail\":\"x\"}",
+                    "{\"cmd\":\"note\",\"type\":\"manager-enrolled\"}", "{\"cmd\":\"note\",\"type\":\"manager-enrolled\",\"detail\":\"   \"}",
+                    "{\"cmd\":\"note\",\"detail\":\"x\"}", "{\"cmd\":\"note\",\"type\":\"manager-enrolled\",\"detail\":\"" + new string('x', 201) + "\"}",
+                })
+                {
+                    Check(Protocol.Handle(rig.Engine, bad).Contains("bad-request"), "devia recusar " + bad.Substring(0, Math.Min(70, bad.Length)));
+                }
+                Eq(2, rig.Events().Count, "nada além dos dois foi gravado");
+                Check(Protocol.Handle(new Rig().Engine, "{\"cmd\":\"note\",\"type\":\"manager-enrolled\",\"detail\":\"x\"}").Contains("unsupported"), "sem diário");
+            });
+            add("events command: validates its fields, carries lastSeq and firstSeq, and status shows lastSeq", () =>
+            {
+                var rig = new Rig(true);
+                rig.AddStudent("Ana");
+                rig.AddStudent("Bia");
+                string ok = Protocol.Handle(rig.Engine, "{\"cmd\":\"events\",\"sinceSeq\":0,\"limit\":1}");
+                Check(ok.Contains("\"ok\":true") && ok.Contains("\"lastSeq\":2") && ok.Contains("\"firstSeq\":1"), "resposta: " + ok);
+                Check(ok.Contains("student-added") && !ok.Contains("\"seq\":2"), "uma página de um evento");
+                foreach (string bad in new[]
+                {
+                    "{\"cmd\":\"events\",\"sinceSeq\":-1}", "{\"cmd\":\"events\",\"limit\":0}", "{\"cmd\":\"events\",\"limit\":501}",
+                    "{\"cmd\":\"events\",\"sinceSeq\":\"1\"}", "{\"cmd\":\"events\",\"limit\":1.5}",
+                })
+                {
+                    Check(Protocol.Handle(rig.Engine, bad).Contains("bad-request"), "devia recusar " + bad);
+                }
+                Eq(2L, Convert.ToInt64(rig.Engine.Status().Data["lastSeq"]), "o status leva lastSeq");
+                var plain = new Rig();
+                Check(Protocol.Handle(plain.Engine, "{\"cmd\":\"events\"}").Contains("unsupported"), "sem diário, unsupported");
             });
             return t;
         }

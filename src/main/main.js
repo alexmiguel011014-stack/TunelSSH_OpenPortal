@@ -301,6 +301,23 @@ app.whenReady().then(() => {
   });
 
   const liveWindow = () => (mainWindow && !mainWindow.isDestroyed() ? mainWindow : null);
+
+  // Para onde empurrar os eventos do diário deste PC: o endereço de cada gerente, achado pelo
+  // login (guardado por um minuto, para não consultar o Tailscale a cada evento).
+  let pushAddressCache = { at: 0, addresses: [] };
+  const getPushAddresses = async () => {
+    if (Date.now() - pushAddressCache.at < 60 * 1000) return pushAddressCache.addresses;
+    const addresses = [];
+    for (const login of labStore.getLab().managers) {
+      try {
+        const ip = await resolveLoginToIp(login);
+        if (ip) addresses.push(ip);
+      } catch {}
+    }
+    pushAddressCache = { at: Date.now(), addresses: [...new Set(addresses)] };
+    return pushAddressCache.addresses;
+  };
+
   labRuntime = createLabRuntime({
     app,
     ipcMain,
@@ -316,6 +333,28 @@ app.whenReady().then(() => {
     isAllowedHost,
     hostName: () => os.hostname(),
     isPackaged: app.isPackaged,
+    // GOALS 19: quem pode empurrar um evento antigo do GOALS 4 (os logins que este app já
+    // conhece), o que fazer com um deles e como empurrar os eventos deste PC.
+    getTrustedLogins: () => {
+      const config = readConfig();
+      return [...new Set([...(config.reportTo || []), ...(config.allowedUsers || [])])];
+    },
+    onLegacyActivity: (event) => {
+      addActivityEntry(event);
+      send('activity:new', event);
+      try {
+        if (Notification.isSupported()) {
+          new Notification({
+            title: 'Nova atividade',
+            body: `${event.identity} conectou-se a ${event.machineName}`,
+          }).show();
+        }
+      } catch (err) {
+        console.error('[main] Notification error:', err.message);
+      }
+    },
+    getPushAddresses,
+    pushEvent: (ip, event) => sendActivityEvent(ip, event),
   });
 
   requestServer = new ConnectionRequestServer(
@@ -371,19 +410,10 @@ app.whenReady().then(() => {
     tunnelTokenByRequest.delete(req.requestId);
     reportSessionActivity(req);
   });
-  requestServer.on('activity-event', (event) => {
-    addActivityEntry(event);
-    send('activity:new', event);
-    try {
-      if (Notification.isSupported()) {
-        new Notification({
-          title: 'Nova atividade',
-          body: `${event.identity} conectou-se a ${event.machineName}`,
-        }).show();
-      }
-    } catch (err) {
-      console.error('[main] Notification error:', err.message);
-    }
+  // Um evento empurrado por outro PC (GOALS 4 e GOALS 19). Só é guardado se vier de quem pode:
+  // um PC da lista do laboratório com o próprio id, ou um login que este app já conhece.
+  requestServer.on('activity-event', (event, remoteAddress) => {
+    labRuntime.receiveActivity({ event, remoteAddress }).catch(() => {});
   });
 
   registerIpcHandlers(mainWindow, { accessGate });

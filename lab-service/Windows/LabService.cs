@@ -23,6 +23,7 @@ namespace OpenPortalLab
         {
             ServiceName = Name;
             CanStop = true;
+            CanHandleSessionChangeEvent = true;
             CanShutdown = true;
             AutoLog = false;
         }
@@ -74,7 +75,9 @@ namespace OpenPortalLab
 
             var windows = new WindowsApi(volume, log);
             var store = new FileStateStore(Path.Combine(DataDir, "state.json"));
-            engine = new Engine(windows, store, new SystemClock(), new SecureRandom(), log, new EngineOptions { OwnerSid = ownerSid });
+            var clock = new SystemClock();
+            var journal = new Journal(new FileJournalStorage(Path.Combine(DataDir, "journal.jsonl")), clock, log);
+            engine = new Engine(windows, store, clock, new SecureRandom(), log, new EngineOptions { OwnerSid = ownerSid }, journal);
             engine.Start();
             pipe = new PipeServer(engine, ownerSid, log);
             pipe.Start();
@@ -110,6 +113,24 @@ namespace OpenPortalLab
         protected override void OnStart(string[] args)
         {
             Boot();
+        }
+
+        // O Windows avisa quando uma sessão entra, sai, desconecta ou reconecta; o motor decide se é de um
+        // aluno e grava no diário (com o endereço de origem). Na linha de espera do serviço, sem demorar.
+        protected override void OnSessionChange(SessionChangeDescription change)
+        {
+            string kind = null;
+            switch (change.Reason)
+            {
+                case SessionChangeReason.SessionLogon: kind = "logon"; break;
+                case SessionChangeReason.SessionLogoff: kind = "logoff"; break;
+                case SessionChangeReason.RemoteConnect: kind = "connect"; break;
+                case SessionChangeReason.RemoteDisconnect: kind = "disconnect"; break;
+            }
+            if (kind == null || engine == null) return;
+            int sessionId = change.SessionId;
+            Engine target = engine;
+            ThreadPool.QueueUserWorkItem(_ => target.OnSessionEvent(sessionId, kind));
         }
 
         protected override void OnStop()

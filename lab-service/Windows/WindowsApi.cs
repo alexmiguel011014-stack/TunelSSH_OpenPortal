@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Management;
+using System.Net;
 using System.Runtime.InteropServices;
 using System.Security.AccessControl;
 using System.Security.Principal;
@@ -231,6 +232,39 @@ namespace OpenPortalLab
             return result;
         }
 
+        public SessionDetails QuerySession(int sessionId)
+        {
+            string user = QueryString(sessionId, Native.WTSUserName);
+            if (user.Length == 0) return null;
+            string domain = QueryString(sessionId, Native.WTSDomainName);
+            if (domain.Length > 0 && !string.Equals(domain, machine, StringComparison.OrdinalIgnoreCase)) return null;
+            return new SessionDetails { Account = user.ToLowerInvariant(), ClientAddress = QueryClientAddress(sessionId) };
+        }
+
+        // WTS_CLIENT_ADDRESS: AddressFamily (4 bytes) e Address[20]; o IPv4 fica nos bytes 2 a 5 de
+        // Address e o IPv6 nos bytes 2 a 17. Sessão de console não tem endereço.
+        private static string QueryClientAddress(int sessionId)
+        {
+            IntPtr buffer;
+            int bytes;
+            if (!Native.WTSQuerySessionInformation(IntPtr.Zero, sessionId, Native.WTSClientAddress, out buffer, out bytes)) return null;
+            try
+            {
+                if (bytes < 24) return null;
+                int family = Marshal.ReadInt32(buffer, 0);
+                int length = family == 2 ? 4 : family == 23 ? 16 : 0;
+                if (length == 0) return null;
+                var raw = new byte[length];
+                Marshal.Copy(IntPtr.Add(buffer, 4 + 2), raw, 0, length);
+                if (raw.All(b => b == 0)) return null;
+                return new IPAddress(raw).ToString();
+            }
+            finally
+            {
+                Native.WTSFreeMemory(buffer);
+            }
+        }
+
         public void SendMessage(int sessionId, string title, string text)
         {
             int response;
@@ -250,6 +284,14 @@ namespace OpenPortalLab
         }
 
         // ---- Pasta pessoal --------------------------------------------------
+
+        public string GetProfilePath(string account)
+        {
+            RequireAccount(account);
+            string path = ProfilePath(account);
+            if (!IsUnderUsers(path)) throw new InvalidOperationException("pasta do perfil fora de C:\\Users");
+            return path;
+        }
 
         private string ProfilePath(string account)
         {

@@ -93,8 +93,16 @@ npm run dev
 - **Iniciar com o Windows** (no app instalado) faz o PC voltar a ser gerenciado depois de reiniciar.
 - Os alunos usam o Remote Desktop do Windows, sem instalar nada. As mensagens e a confianca
   estao em `docs/ARQUITETURA_CONEXAO.md` ("Modo laboratorio") e o roteiro de teste no bloco 7
-  de `docs/BATERIA_DE_TESTES.md`. O servico que cria as contas e a cota dos alunos entra com o
-  GOALS 17 (`GOALS.md`).
+  de `docs/BATERIA_DE_TESTES.md`.
+- **Alunos (GOALS 17 e 18):** em **Configuracoes → Modo laboratorio → Habilitar neste PC** (pede
+  permissao de administrador) o PC ganha um servico que cria as contas dos alunos, a cota de disco
+  e o fim forcado da sessao. Na tela **Laboratorio**, o botao **Alunos** de cada PC reserva o PC
+  para um aluno (ou **Trocar aluno**), mostra a mensagem com usuario e senha para copiar (a senha
+  aparece uma vez so), estende ou encerra a sessao, mostra o espaco usado e **Ver pasta** abre os
+  arquivos do aluno somente para leitura.
+- **Registro de acessos (GOALS 19):** em **Atividade → Laboratorio** fica quem usou qual PC, quando
+  e de que endereco entrou, mesmo com o app do professor fechado durante a reserva. Tem filtros e
+  **Exportar CSV** (abre direto no Excel em portugues).
 
 ---
 

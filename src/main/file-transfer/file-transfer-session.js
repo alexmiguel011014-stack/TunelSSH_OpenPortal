@@ -17,9 +17,11 @@ function nextSessionId() {
   return `ft-${Date.now()}-${counter}`;
 }
 
+// Sessões somente leitura ("Ver pasta" do modo laboratório) nunca são reaproveitadas
+// por uma conexão comum ao mesmo PC: aquela precisa escrever.
 function findLiveSessionByHost(host) {
   for (const session of sessions.values()) {
-    if (session.host === host && !session.client.destroyed) return session;
+    if (session.host === host && !session.readOnly && !session.client.destroyed) return session;
   }
   return null;
 }
@@ -87,6 +89,28 @@ async function connect(host, opts = {}) {
   }
 }
 
+// GOALS 18: registra um socket que o modo laboratório já abriu e aprovou (lab-folder)
+// como uma sessão de arquivos somente leitura.
+function adopt(host, socket, { readOnly = true } = {}) {
+  const client = new FileClient(socket);
+  const sessionId = nextSessionId();
+  sessions.set(sessionId, {
+    sessionId,
+    host,
+    client,
+    vncPassword: '',
+    vncToken: '',
+    readOnly: readOnly === true,
+  });
+  socket.on('close', () => sessions.delete(sessionId));
+  socket.on('error', () => sessions.delete(sessionId));
+  return { sessionId };
+}
+
+function isReadOnly(sessionId) {
+  return sessions.get(sessionId)?.readOnly === true;
+}
+
 function getVncTunnelToken(host) {
   return findLiveSessionByHost(String(host || '').trim())?.vncToken || '';
 }
@@ -114,4 +138,12 @@ function disconnectAll() {
   for (const sessionId of [...sessions.keys()]) disconnect(sessionId);
 }
 
-module.exports = { connect, getClient, getVncTunnelToken, disconnect, disconnectAll };
+module.exports = {
+  adopt,
+  connect,
+  disconnect,
+  disconnectAll,
+  getClient,
+  getVncTunnelToken,
+  isReadOnly,
+};

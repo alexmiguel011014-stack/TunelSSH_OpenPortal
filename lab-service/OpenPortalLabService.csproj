@@ -48,6 +48,7 @@
     <Compile Include="Core\Clock.cs" />
     <Compile Include="Core\Engine.cs" />
     <Compile Include="Core\IWindows.cs" />
+    <Compile Include="Core\Journal.cs" />
     <Compile Include="Core\Json.cs" />
     <Compile Include="Core\Log.cs" />
     <Compile Include="Core\Names.cs" />

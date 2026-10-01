@@ -27,6 +27,40 @@ namespace OpenPortalLab
         }
     }
 
+    // O diário em memória: os dois "arquivos" (atual e anterior) como listas de linhas.
+    public sealed class MemoryJournalStorage : IJournalStorage
+    {
+        public List<string> Current = new List<string>();
+        public List<string> Previous = new List<string>();
+
+        public string[] ReadAll(bool previous)
+        {
+            return (previous ? Previous : Current).ToArray();
+        }
+
+        public void Append(string line)
+        {
+            Current.Add(line);
+        }
+
+        public long Size()
+        {
+            return Current.Sum(l => (long)l.Length + 1);
+        }
+
+        public void Rotate()
+        {
+            Previous = Current;
+            Current = new List<string>();
+        }
+
+        public void WriteAll(bool previous, IList<string> lines)
+        {
+            if (previous) Previous = lines.ToList();
+            else Current = lines.ToList();
+        }
+    }
+
     // Aleatório determinístico (sequência fixa) para testar a geração de senha.
     public sealed class FakeRandom : IRandom
     {
@@ -64,6 +98,7 @@ namespace OpenPortalLab
     {
         public readonly Dictionary<string, FakeAccount> Accounts = new Dictionary<string, FakeAccount>();
         public readonly List<SessionInfo> Sessions = new List<SessionInfo>();
+        public readonly Dictionary<int, SessionDetails> SessionDetailsById = new Dictionary<int, SessionDetails>();
         public readonly List<string> Calls = new List<string>();
         public readonly List<string> Messages = new List<string>();
         public string Quota = "enforce";
@@ -156,12 +191,19 @@ namespace OpenPortalLab
             return Sessions.Where(s => s.UserName == account).ToList();
         }
 
-        public SessionInfo SignIn(string account, string state = "active")
+        public SessionInfo SignIn(string account, string state = "active", string clientAddress = null)
         {
             if (!Accounts[account].Enabled) throw new InvalidOperationException("conta desabilitada não entra");
             var session = new SessionInfo { Id = nextSession++, State = state, UserName = account };
             Sessions.Add(session);
+            SessionDetailsById[session.Id] = new SessionDetails { Account = account, ClientAddress = clientAddress };
             return session;
+        }
+
+        public SessionDetails QuerySession(int sessionId)
+        {
+            SessionDetails details;
+            return Sessions.Any(s => s.Id == sessionId) && SessionDetailsById.TryGetValue(sessionId, out details) ? details : null;
         }
 
         public void SendMessage(int sessionId, string title, string text)
@@ -198,6 +240,12 @@ namespace OpenPortalLab
         {
             Record("GrantOwnerRead " + account);
             Accounts[account].OwnerGranted = true;
+        }
+
+        public string GetProfilePath(string account)
+        {
+            Record("GetProfilePath " + account);
+            return @"C:\Users\" + account;
         }
 
         public int CleanPublic(string account)

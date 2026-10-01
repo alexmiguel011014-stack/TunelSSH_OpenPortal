@@ -526,6 +526,10 @@ resposta; o PC gerenciado responde e fecha (a única exceção é `lab-folder`, 
   `bad-request`, `unsupported` (tipo desconhecido, `labProtocol` maior que o do PC, ou
   mensagem de um GOALS ainda não implementado — a resposta traz o `labProtocol` do PC para o
   gerente marcar "Incompatível"), `internal` (falha inesperada no PC; nunca carrega detalhes).
+  O GOALS 18 acrescenta `not-found` (aluno ou reserva que não existe), `full` (limite de alunos
+  do PC), `logoff-failed` (não foi possível encerrar a sessão do aluno) e `service-down` (o
+  serviço do laboratório não responde neste PC). Um `busy` de `lab-reserve` traz
+  `busyWith: { account, label, state, endsAt }`: quem está com o PC e até quando.
 - **Autorização:** toda mensagem `lab-*` exige que o remetente seja gerente, **exceto**
   `lab-enroll`. Não há senha nem segredo em nenhuma resposta, salvo a senha do aluno em
   `lab-reserve`, entregue uma única vez.
@@ -536,14 +540,14 @@ resposta; o PC gerenciado responde e fecha (a única exceção é `lab-folder`, 
 | ----------------------------- | ----------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
 | `lab-enroll` (16)             | —                                                                       | `accepted: true, hostId, hostName, appVersion` — ou `accepted: false, reason: "rejected" ou "timeout"` |
 | `lab-status` (16)             | —                                                                       | `hostId, hostName, appVersion, managed, service, state, student?, studentCount, disk?`                  |
-| `lab-students` (18)           | —                                                                       | `students: [{label, account, quotaGb, usedGb, lastSessionAt?, state}], capacity`                        |
+| `lab-students` (18)           | —                                                                       | `students: [{account, label, quotaGb, usedGb?, state, lastSessionEnd}], reservation?, quota, capacity?` |
 | `lab-student-add` (18)        | `label` (1–40 caracteres), `quotaGb` (1–2000)                           | `student`                                                                                               |
 | `lab-student-quota` (18)      | `account`, `quotaGb` (1–2000)                                           | `student`                                                                                               |
-| `lab-student-delete` (18)     | `account`                                                               | — (recusado com `busy` se o aluno está ativo)                                                           |
+| `lab-student-delete` (18)     | `account`                                                               | `account` (recusado com `busy` se o aluno está com o PC reservado)                                      |
 | `lab-reserve` (18)            | `account`, `startWithinMs` (60 s a 24 h), `sessionMs` (5 min a 12 h)    | `reservationId, account, userName, password, startBy, endsAt` (única resposta com senha)                |
-| `lab-extend` (18)             | `reservationId`, `addMs` (1 min a 12 h)                                 | `endsAt`                                                                                                |
-| `lab-end` (18)                | `reservationId`, `reason`: `manager-ended` ou `manager-handover`        | `ended: true`                                                                                           |
-| `lab-folder` (18)             | `account`                                                               | `tunnel: true`; depois da resposta o socket vira uma sessão de arquivos **somente leitura** na pasta do aluno |
+| `lab-extend` (18)             | `reservationId`, `addMs` (1 min a 12 h)                                 | `reservationId, endsAt`                                                                                 |
+| `lab-end` (18)                | `reservationId`, `reason`: `manager-ended` ou `manager-handover`        | `ended: true, reason`                                                                                   |
+| `lab-folder` (18)             | `account`                                                               | `account, label`; depois da resposta o socket vira uma sessão de arquivos **somente leitura** na pasta do aluno |
 | `lab-events` (19)             | `sinceSeq` (inteiro ≥ 0), `limit` (1–500)                               | `events: [...], lastSeq, firstSeq`                                                                      |
 
 `lab-enroll` aceito é **idempotente**: um login que já é gerente recebe `accepted: true` sem
@@ -556,7 +560,8 @@ cada recusa conta para o bloqueio do IP.
 - `hostId` (UUID criado uma vez neste PC), `hostName`, `appVersion`, `managed` (verdadeiro se
   há ao menos um gerente).
 - `service: { installed, running }` — até o GOALS 17 o serviço não está instalado.
-- `state`: `free` | `reserved` | `in-use`; até o GOALS 18 é sempre `free`.
+- `state`: `free` | `reserved` | `in-use`, como o serviço do laboratório informa (GOALS 17); uma
+  reserva que está sendo encerrada conta como `in-use`.
 - `student?: { label, since, endsAt }` — presente com `state` ≠ `free`; só rótulo e horários.
 - `studentCount`; `disk?: { totalGb, freeGb }` — preenchido a partir do GOALS 17.
 - O status é montado por uma lista de campos permitidos: nenhuma senha, token ou segredo
@@ -573,7 +578,8 @@ criar pasta). Não abre diálogo: o gerente já está autorizado.
 `session-logon`, `session-logoff`, `manager-enrolled`, `manager-removed`, `host-lost` e
 `host-back`, e os motivos de fim `student-left`, `manager-ended`, `manager-handover`,
 `deadline`, `unused-expired` e `service-restart`. Os eventos do GOALS 4 (sem `v`) continuam
-aceitos e mostrados.
+aceitos e mostrados. Detalhes, diário e regras de quem pode enviar: "Registro central de acessos
+(GOALS 19)" abaixo.
 
 **Configuração deste PC (`config.json`)**
 
@@ -627,7 +633,11 @@ a opção vem desligada por padrão.
 (GOALS 16 I8); `lab:managers` e `lab:removeManager` (cartão "Este PC é gerenciado");
 `lab:getStartWithWindows` e `lab:setStartWithWindows` ("Iniciar com o Windows");
 `lab:serviceState`, `lab:enableService` e `lab:disableService` (habilitar o serviço do laboratório neste
-PC, com UAC; um por vez). Dois
+PC, com UAC; um por vez); `lab:students`, `lab:studentAdd`, `lab:studentQuota`, `lab:studentDelete`,
+`lab:reserve`, `lab:handOver`, `lab:extend`, `lab:end` e `lab:folder` (alunos, reserva, troca de aluno
+e "Ver pasta" de um PC de laboratório, GOALS 18); `lab:logQuery`, `lab:logExport`, `lab:logRetention`
+e `lab:setLogRetention` (o registro central de acessos, GOALS 19; `lab:logChanged` avisa a tela quando
+chega evento novo). Dois
 canais só empurram dados do main para a tela: `lab:status` (a lista de PCs, quando algo que
 ela mostra muda) e `lab:hostChanged` (os gerentes deste PC ou o modo mudaram). Cada
 handler valida a entrada; nenhum devolve segredo ao renderer. `lab:open` devolve só o
@@ -651,7 +661,11 @@ cota de disco, pasta pessoal e fim forçado da sessão.
   contas, perfis e `state.json`; é recusado enquanto houver uma reserva em andamento.
 - **O pipe `\\.\pipe\OpenPortalLab`:** assíncrono, aberto só a SYSTEM e ao SID do dono, com acesso pela rede
   negado de forma explícita; além da ACL, cada pedido confere o SID de quem chamou. Uma conexão, um pedido
-  (uma linha JSON ≤ 4 KiB), uma resposta (uma linha ≤ 256 KiB). Comandos fixos, cada campo validado antes
+  (uma linha JSON ≤ 4 KiB), uma resposta (uma linha ≤ 256 KiB). O serviço mantém **quatro instâncias do
+  pipe sempre à escuta** e cria a seguinte antes de atender a que acabou de conectar; mesmo assim, o cliente
+  do app repete até três vezes uma conexão que falhou ao ABRIR (`ENOENT`/`EBUSY`, nada enviado ainda, por
+  isso até `reserve` pode ser repetido): sob uma rajada de pedidos o nome do pipe chegou a sumir por um
+  instante. Comandos fixos, cada campo validado antes
   do motor: o texto do pedido nunca vira nome de conta, caminho ou argumento de comando.
 
 | Comando                | Campos                                              | Resposta                                                            |
@@ -664,8 +678,9 @@ cota de disco, pasta pessoal e fim forçado da sessão.
 | `reserve`              | `account`, `startWithinMs`, `sessionMs`             | `reservationId`, `userName`, `password` (só aqui), `startBy`, `endsAt` |
 | `extend`               | `reservationId`, `addMs`                            | `endsAt`                                                            |
 | `end`                  | `reservationId`, `reason` (`manager-ended` / `manager-handover`) | `ended`                                                |
-| `ensure-folder-access` | `account`                                           | `account`                                                           |
-| `events`               | —                                                   | `unsupported` até o GOALS 19                                        |
+| `ensure-folder-access` | `account`                                           | `account`, `path` (a pasta de perfil)                               |
+| `events`               | `sinceSeq` (≥ 0), `limit` (1–500)                   | `events[]`, `lastSeq`, `firstSeq` (o diário, veja GOALS 19)         |
+| `note`                 | `type` (`manager-enrolled` / `manager-removed`), `detail` | `seq` (o app registra quem foi aceito ou removido como gerente) |
 
 - **Contas de aluno:** usuário comum, no grupo "Remote Desktop Users" (achado pelo SID), nunca administrador,
   senha obrigatória, **desabilitada** enquanto não houver reserva. O nome vem do nome de exibição (ASCII
@@ -695,7 +710,8 @@ cota de disco, pasta pessoal e fim forçado da sessão.
   passam do livre menos a reserva). É uma recomendação e um aviso, nunca um bloqueio.
 - **Testes e diagnóstico (sem alterar o Windows):** `OpenPortalLabService.exe --selftest` roda o motor contra
   um Windows falso e imprime um JSON (o `npm test` e o CI chamam isso); `--probe` só lê o estado real;
-  `--pipe-test <nome> self` sobe o pipe de verdade sobre o Windows falso (o teste do app fala com ele);
+  `--pipe-test <nome> self [segundos]` sobe o pipe de verdade sobre o Windows falso (o teste do app fala com
+  ele; vive 60 s se ninguém fechar a entrada, ou o tempo pedido);
   `node scripts/lab-pipe.js <comando> '<json>'` fala com o serviço instalado. O registro do serviço fica em
   `%ProgramData%\OpenPortal\lab\service.log`.
 - **Observações do teste real (G17-V1):** desabilitar uma conta não derruba a sessão aberta; o limite de
@@ -703,6 +719,112 @@ cota de disco, pasta pessoal e fim forçado da sessão.
   aviso só aparece quando enviada sem esperar a resposta; uma conta desabilitada ou inexistente mostra o erro
   genérico "erro de autenticação... a senha pode ter expirado" — por isso a mensagem de credenciais (GOALS 18)
   explica que esse erro, depois do horário, significa acesso encerrado.
+
+**Alunos, reserva, troca de aluno e pasta (GOALS 18)**
+
+Tudo o que o professor faz sobre um PC de laboratório passa pelas mensagens `lab-*` acima: o PC gerenciado
+valida a autorização do gerente (login verificado, na lista `lab.managers`), valida cada campo e repassa ao
+serviço pelo pipe local. Nenhuma ação funciona sem o serviço rodando (`service-down`).
+
+- **Tela:** Laboratório → botão **Alunos** de um PC abre, no próprio cartão, a reserva em andamento (com
+  **Estender** e **Encerrar agora**), a caixa de capacidade do disco, a lista de alunos (nome, conta, uso
+  de disco em barra contra a cota, último uso e estado) e **Adicionar aluno** (cota de 25 GB sugerida). Cada
+  aluno tem **Reservar** (ou **Trocar aluno**, se o PC já está reservado), **Ver pasta**, **Cota** e
+  **Apagar**. A lista se atualiza a cada 10 s e quando o estado do PC muda.
+- **Caixa de capacidade:** mostra quantos alunos cabem na cota padrão, o espaço livre e a soma das cotas; em
+  tom de aviso quando `tight` e de alerta quando `over`, e diz quando a cota de disco do PC está desligada ou
+  só contando. É um aviso, nunca um bloqueio.
+- **Nunca dois ao mesmo tempo, de ponta a ponta:** `lab-reserve` num PC com aluno ativo responde `busy` com
+  `busyWith` (quem e até quando). **Trocar aluno** é uma ação só no gerente: consulta a reserva atual
+  (`lab-students`), `lab-end` com `manager-handover` (aviso, logoff e conferência, até cerca de um minuto) e
+  **só então** `lab-reserve` para o próximo. Se o encerramento falhar, nada é reservado e a tela diz isso;
+  se a reserva sumiu sozinha entre a consulta e o pedido (`not-found`), segue. Um clique duplo não vira
+  dois pedidos: cada PC aceita uma ação que muda algo por vez.
+- **Prazos de espera:** consulta de alunos 8 s, reserva 25 s, estender 15 s, cota 40 s, criar aluno 70 s,
+  encerrar 100 s, apagar aluno 130 s e abrir a pasta 135 s (o serviço reaplica o acesso do dono à pasta antes
+  de abri-la, e uma pasta grande demora).
+- **Credenciais (senha uma vez só):** depois de reservar, a janela "Acesso do aluno" mostra a mensagem pronta
+  — nome e IP do PC, usuário, senha, até que horas o aluno pode entrar, quanto a sessão dura (o relógio só
+  começa na primeira entrada; o horário de término é o máximo), o aviso da instituição (editável, padrão "O
+  professor pode ver a sua pasta pessoal neste PC.") e a explicação de que, depois do término, o erro
+  genérico "erro de autenticação... a senha pode ter expirado" do Windows significa acesso encerrado. A
+  senha vive só na memória da janela: não vai para o histórico, o log, o `config.json` nem o
+  `localStorage` (só o texto do aviso é guardado) e some quando a janela fecha. O `lab-status`, o `lab-students`
+  e os registros do PC nunca a repetem; só a resposta de `lab-reserve` (e a troca de aluno, que termina nela)
+  a carrega.
+- **Ver pasta:** `lab-folder` é respondida só a gerente, sem diálogo. O PC pede ao serviço a pasta de perfil
+  do aluno (`ensure-folder-access` devolve `path`), confere que é uma pasta direta de `C:\Users` (nunca
+  `Public`, `Default` ou outro lugar) e, depois da resposta de sucesso, a **mesma conexão** vira uma sessão de
+  arquivos (`FileAgentSession`) com raiz nessa pasta e `readOnly`: lista, consulta e baixa; `mkdir`, `put`,
+  `rename` e `delete` são recusados no agente e também antes, no main do gerente. Em somente leitura o agente
+  confere também o caminho **real** (um atalho/junção dentro da pasta do aluno não leva para fora dela). O
+  gerente abre a tela de Arquivos (a mesma de sempre) dentro da tela do Laboratório, com os botões de alterar
+  escondidos e sem soltar arquivos no painel remoto. A sessão é fechada ao voltar ao Laboratório e nunca é
+  reaproveitada por uma conexão comum ao mesmo PC. Não aparece o aviso "alguém está conectado" no PC.
+- **Apagar aluno:** a confirmação mostra o tamanho dos arquivos ("Apagar Ana e 4,2 GB de arquivos?") e o que
+  será removido; o serviço recusa (`busy`) enquanto a reserva é do aluno, e o botão fica desabilitado.
+
+**Registro central de acessos (GOALS 19)**
+
+O professor precisa saber quem usou qual PC, quando e de onde entrou, mesmo que o app dele estivesse
+fechado enquanto a reserva acontecia. O push do GOALS 4 só dispara quando uma sessão de arquivos fecha e
+qualquer nó do Tailscale podia plantar um registro; por isso o PC guarda o próprio diário, empurra ao vivo
+e o gerente sempre consegue recuperar tudo por número de sequência.
+
+- **Diário do serviço** (`journal.jsonl` em `%ProgramData%\OpenPortal\lab\`, pasta que só SYSTEM e
+  administradores abrem): só acrescenta, uma linha JSON por fato, com um número de sequência (`seq`) que
+  **nunca volta atrás** (vem do arquivo depois de um reinício e atravessa as rotações). O fato é gravado
+  **antes** de qualquer aviso. Limite de 20 MB: ao passar, o arquivo vira `journal.jsonl.1` e começa outro
+  (o `.1` anterior some). Retenção de 180 dias, aplicada ao subir e uma vez por dia; nunca esvazia o
+  diário (o último evento fica, para a sequência não recomeçar). Uma linha cortada por uma queda é
+  ignorada e a seguinte começa em linha nova. `firstSeq` diz o evento mais antigo que ainda existe.
+- **O que é registrado:** o serviço grava `student-added`, `student-deleted`, `quota-changed`,
+  `reservation-start` (com os prazos), `reservation-end` (com o motivo: `student-left`, `manager-ended`,
+  `manager-handover`, `deadline`, `unused-expired`, `service-restart`) e as entradas e saídas
+  (`session-logon` / `session-logoff`, com `detail` `logon`, `reconnect`, `logoff` ou `disconnect`). O app
+  acrescenta `manager-enrolled` e `manager-removed` pelo comando `note`. A senha do aluno nunca entra.
+- **Entradas e saídas:** o serviço recebe do Windows os avisos de mudança de sessão
+  (`SERVICE_ACCEPT_SESSIONCHANGE`: entrar, sair, desconectar, reconectar), lê a conta e o **endereço IP do
+  cliente RDP** (`WTSClientAddress`) enquanto a sessão existe e guarda a lembrança, porque no logoff a sessão
+  já não pode ser consultada. Só contas de aluno viram evento, e cada um leva o id da reserva em andamento.
+  Os eventos 21 a 25 do `TerminalServices-LocalSessionManager` do Windows servem de conferência manual, não
+  de fonte. "Quem" é o aluno que o professor reservou; o endereço de cada entrada aparece ao lado, então uma
+  senha passada adiante aparece como um endereço inesperado.
+- **Mensagem `lab-events`** `{ sinceSeq, limit ≤ 500 }` → `{ events[], lastSeq, firstSeq }`, só para gerente.
+  O status (`lab-status`) leva `lastSeq`, então o gerente sabe a cada consulta se está atrasado.
+- **Ao vivo:** o app do PC olha o diário a cada 2 s e empurra cada evento novo a cada gerente (o endereço vem
+  do login pelo Tailscale), com a mesma mensagem `activity-event` do GOALS 4, melhor esforço. O push só
+  adianta o que a consulta entregaria em até 10 s.
+- **Quem pode empurrar para um gerente:** um evento v2 só é guardado se vier do **endereço de um PC da lista**
+  (`lab.roster`) **e** o `hostId` do evento for o desse PC; um PC nunca entrega `host-lost` / `host-back`.
+  Um evento do GOALS 4 (sem `v`) só vale se o login do Tailscale de quem enviou estiver em `reportTo` ou
+  `allowedUsers` deste app. O resto é descartado, contado e anotado no registro (uma linha por origem e
+  motivo a cada 30 s).
+- **Consulta por sequência:** a cada consulta de status o gerente compara o `lastSeq` do PC com o **cursor**
+  daquele PC (o maior número até onde a sequência está completa, contando as lacunas já registradas) e pede
+  `lab-events` de lá, em páginas de 500, até alcançar. Funde por `(hostId, seq)`: o mesmo evento por push e
+  por consulta entra uma vez, e um push à frente de um buraco não esconde o buraco. Se o diário do PC passou
+  da posição do gerente (rotação ou retenção do PC) a lacuna é registrada (`rotated`); um buraco no meio é
+  `missing`; um diário que recomeçou do zero é `reset` (os números repetidos não podem ser juntados).
+- **Arquivo do gerente** (`userData/lab-log.jsonl`): uma linha por evento (`kind: event`), por lacuna
+  (`kind: gap`) e por cursor (`kind: cursor`), com índice em memória por aluno, PC e data. Retenção de 180
+  dias por padrão (Atividade → Laboratório → "Guardar o registro por... dias", 1 a 3650), aplicada ao abrir e a
+  cada dia; antes de apagar, o cursor de cada PC é gravado, e cada PC mantém ao menos o último evento.
+- **PC sem resposta:** durante uma reserva em andamento (`reserved` ou `in-use`), 3 consultas seguidas sem
+  resposta (30 s) registram `host-lost` (o cartão do PC mostra o aviso) e a primeira resposta seguinte registra
+  `host-back`. Esses dois eventos são do **próprio gerente** (sequência 0, sem diário de PC).
+- **Tela:** Atividade → aba "Laboratório" (só com o modo laboratório ligado): filtros de aluno, PC, período
+  (datas no horário local, inclusivas) e tipo; lista de reservas (aluno, PC, início → fim, duração, como
+  acabou, entradas e endereços) e linha do tempo; a gaveta de uma reserva mostra as entradas e saídas com o
+  endereço e destaca quando há mais de um endereço; lacunas aparecem num aviso recolhido.
+- **Exportar CSV:** separador `;`, BOM UTF-8 (os acentos abrem certo no Excel em português), quebra de linha
+  CRLF, uma coluna de hora local e uma em UTC, colunas `Data e hora (local)`, `Data e hora (UTC)`, `PC`,
+  `Aluno`, `Conta`, `Evento`, `Código`, `Motivo do fim`, `Endereço de origem`, `Reserva`, `Detalhe`,
+  `Sequência`, `Recebido em (local)`. Nomes com `;`, aspas ou quebra de linha vão entre aspas (aspas
+  dobradas), e um texto que começaria com `=`, `+`, `-` ou `@` ganha um apóstrofo, para a planilha não o
+  executar como fórmula. O arquivo respeita os filtros da tela.
+- **Relógios:** `at` é o relógio do PC; o gerente guarda também `receivedAt`. Os eventos `host-lost` e
+  `host-back` usam o relógio do gerente.
 
 **Fora do escopo:** monitoramento de apps e downloads; bloqueio de área de transferência ou
 de unidades no RDP; alunos trocando de PC; armazenamento central de arquivos; fila de

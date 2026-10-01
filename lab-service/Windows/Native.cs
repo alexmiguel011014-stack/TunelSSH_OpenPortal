@@ -85,6 +85,7 @@ namespace OpenPortalLab
 
         public const int WTSUserName = 5;
         public const int WTSDomainName = 7;
+        public const int WTSClientAddress = 14;
 
         [StructLayout(LayoutKind.Sequential)]
         public struct WTS_SESSION_INFO

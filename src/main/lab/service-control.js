@@ -185,6 +185,7 @@ function createServiceControl({
         state: mapServiceState(status.state),
         studentCount: status.studentCount,
       };
+      if (Number.isSafeInteger(status.lastSeq)) input.lastSeq = status.lastSeq;
       const reservation = status.reservation;
       if (reservation && input.state !== 'free') {
         input.student = {

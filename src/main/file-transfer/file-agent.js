@@ -17,6 +17,16 @@ const {
 
 const CHUNK_SIZE = 64 * 1024;
 
+// Comandos que mudam algo no disco: uma sessão somente leitura (GOALS 18, "Ver
+// pasta" do gerente) recusa todos.
+const MUTATING_COMMANDS = new Set(['mkdir', 'delete', 'rename', 'put']);
+const READ_ONLY_MESSAGE = 'Esta pasta é somente leitura';
+
+function isInside(root, target) {
+  const rel = path.relative(root, target);
+  return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+}
+
 function resolveNative(root, virtualPath) {
   const clean = String(virtualPath || '/').replace(/\\/g, '/');
   const parts = clean.split('/').filter((p) => p && p !== '.');
@@ -34,9 +44,12 @@ function toVirtual(root, nativePath) {
 }
 
 class FileAgentSession {
-  constructor(socket, root) {
+  // readOnly: só lista, consulta e baixa; nada é criado, gravado, apagado ou
+  // renomeado, e nenhum link (junção ou atalho simbólico) leva para fora da raiz.
+  constructor(socket, root, { readOnly = false } = {}) {
     this.socket = socket;
     this.root = root || os.homedir();
+    this.readOnly = readOnly === true;
     this.uploads = new Map(); // channelId -> { stream }
     // GOALS 4: contagem simples de arquivos que efetivamente terminaram de
     // ir/vir nesta sessão (envio + recebimento) — lida por
@@ -63,6 +76,8 @@ class FileAgentSession {
       return;
     }
 
+    if (this.readOnly) return;
+
     if (type === FRAME_BINARY) {
       const up = this.uploads.get(channelId);
       if (!up) return;
@@ -85,11 +100,28 @@ class FileAgentSession {
     }
   }
 
+  // O caminho nativo de um caminho virtual. Em sessão somente leitura, confere
+  // também o caminho REAL: um link dentro da pasta não pode levar para fora dela.
+  async nativePathOf(virtualPath) {
+    const nativePath = resolveNative(this.root, virtualPath);
+    if (!this.readOnly) return nativePath;
+    const [realRoot, realTarget] = await Promise.all([
+      fs.promises.realpath(this.root),
+      fs.promises.realpath(nativePath),
+    ]);
+    if (!isInside(realRoot, realTarget)) throw new Error('Caminho fora da raiz permitida');
+    return nativePath;
+  }
+
   async handleCommand(channelId, msg) {
     try {
+      if (this.readOnly && MUTATING_COMMANDS.has(msg.cmd)) {
+        this.send(encodeJson(channelId, { ok: false, error: READ_ONLY_MESSAGE }));
+        return;
+      }
       switch (msg.cmd) {
         case 'list': {
-          const nativeDir = resolveNative(this.root, msg.path);
+          const nativeDir = await this.nativePathOf(msg.path);
           const entries = await fs.promises.readdir(nativeDir, {
             withFileTypes: true,
           });
@@ -117,7 +149,7 @@ class FileAgentSession {
         }
 
         case 'stat': {
-          const nativePath = resolveNative(this.root, msg.path);
+          const nativePath = await this.nativePathOf(msg.path);
           const st = await fs.promises.stat(nativePath);
           this.send(
             encodeJson(channelId, {
@@ -160,7 +192,7 @@ class FileAgentSession {
         }
 
         case 'get': {
-          const nativePath = resolveNative(this.root, msg.path);
+          const nativePath = await this.nativePathOf(msg.path);
           const st = await fs.promises.stat(nativePath);
           this.send(
             encodeJson(channelId, {

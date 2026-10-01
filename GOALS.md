@@ -2280,47 +2280,90 @@ folder for her next turn; the teacher can look at them any time.
 
 ### Implementation
 
-- [ ] **G18-I1 — Network messages:** `lab-students`, `lab-student-add`, `lab-student-quota`,
+- [x] **G18-I1 — Network messages:** `lab-students`, `lab-student-add`, `lab-student-quota`,
       `lab-student-delete`, `lab-reserve`, `lab-extend`, `lab-end` and `lab-folder` in the protocol module and host
       dispatch, each authorized by `managers`, validated (display name 1 to 40 characters without
       control characters, quota 1 to 2000 GB, bounded durations) and passed to the service client.
       The password appears only in the `lab-reserve` response, never in `lab-status`, never in a log.
-      Done when: tests prove authorization, validation, and the password's absence from logs.
-- [ ] **G18-I2 — Never two at once, end to end:** a reserve on a PC with an active student answers
+      Done when: tests prove authorization, validation, and the password's absence from logs. **Done
+      2026-10-01:** the host answers all eight messages through the service pipe (`host.js`); the
+      answers are built from allow-lists (`protocol.js`), the new error codes are `not-found`, `full`,
+      `logoff-failed` and `service-down`, and a `busy` reserve carries `busyWith`. `host-service.test.js`
+      covers a stranger being refused before the service is touched, every validation limit, and the
+      password appearing in no answer but `lab-reserve` and in no log line; `lab-students-e2e.test.js`
+      runs it over real sockets.
+- [x] **G18-I2 — Never two at once, end to end:** a reserve on a PC with an active student answers
       `busy` with who and until when; "Trocar aluno" is one manager action that ends the active
       session (with the warning) and then reserves, and does not reserve if the end failed. Done when:
       tests cover busy, a successful hand-over and a hand-over where the logoff fails (nothing is
-      reserved and the manager sees why).
-- [ ] **G18-I3 — Students list per PC:** for each PC a list with name, quota, used space (bar), last
+      reserved and the manager sees why). **Done 2026-10-01:** `handOver` in `manager.js` lists, ends
+      (`manager-handover`) and only then reserves; one change at a time per PC. Covered in
+      `manager-actions.test.js` and, over real sockets with a fake service that follows the engine's
+      rules, in `lab-students-e2e.test.js` (busy with who and until when, a failed logoff, a good
+      hand-over with a new password and the old one gone).
+- [x] **G18-I3 — Students list per PC:** for each PC a list with name, quota, used space (bar), last
       session and state (Livre, Reservado, Em uso), plus a capacity box — recommended number of
       students, the sum of quotas against the free space — in a warning tone when `tight` or `over`;
       "Adicionar aluno" (name, quota with 25 GB preset) and "Alterar cota". Done when: with seeded
-      data the numbers and warnings match the G17-I9 function.
+      data the numbers and warnings match the G17-I9 function. **Done 2026-10-01:** "Alunos" on each PC
+      card (`HostStudents.jsx`); the capacity box (`describeCapacity`) shows what the service's
+      `disk-info` returned (it does not recompute it), in a warning tone for `tight` and an alert tone
+      for `over`; checked in the browser with seeded data (list, bar, states, add, quota).
 - [ ] **G18-I4 — Reserve, extend, end:** dialogs where the teacher chooses the validity (quick
       choices of 30, 60 and 120 minutes plus a custom value) and the time allowed to start (default 30
       minutes), "Estender" and "Encerrar agora". Done when: a manager runs the scenario above on a real
-      PC with one action each.
-- [ ] **G18-I5 — Credential message:** a copy button that builds the text — PC name, IP, user name,
+      PC with one action each. **Status 2026-10-01:** the dialogs are built and were driven twice: in
+      the browser against a mock, and in the real Electron app through the DevTools Protocol against
+      the real host and manager code and the real service executable (`--pipe-test`, a fake Windows
+      underneath, a simulated "PC B" on this PC, an isolated `--user-data-dir`): add two students,
+      reserve, copy the credentials (the password was gone from the page after closing), hand over
+      (new password), extend, end now. The run on a real PC is G18-T2 steps 19 to 28.
+- [x] **G18-I5 — Credential message:** a copy button that builds the text — PC name, IP, user name,
       password, start-by time, session-until time — and a notice line ("O professor pode ver a sua
       pasta pessoal neste PC"), editable by the institution, and a line saying that the generic Windows
       sign-in error ("authentication error ... the password may have expired") after the end time means
       the access has ended (seen in G17-V1). The password is shown once, kept in
       renderer memory only and cleared when the dialog closes. Done when: a test covers the text and
-      that the password is not persisted anywhere.
+      that the password is not persisted anywhere. **Done 2026-10-01:** `buildCredentialMessage` (tested
+      line by line); the password lives only in the dialog's state, the editable notice is the only
+      thing saved (`localStorage`), and in the browser the password was gone from the page and from
+      `localStorage` after the dialog closed.
 - [ ] **G18-I6 — Folder view for the manager:** "Ver pasta" opens the Arquivos tab on that PC with the
       student's profile folder as root, read-only (list and download). `FileAgentSession` gets a
       `readOnly` option that refuses put, delete, rename and mkdir; `lab-folder` is answered only for a
       manager, with no dialog. Done when: tests show every mutating operation is refused and paths
       cannot leave the root; on a real PC the manager lists and downloads a file the student created.
+      **Status 2026-10-01:** `FileAgentSession` takes `{ readOnly }` and refuses put, mkdir, rename and
+      delete (and ignores upload frames); in that mode it also resolves real paths, so a junction inside
+      the student's folder cannot lead out of it. `lab-folder` upgrades the same connection after the
+      answer, with no dialog and no "alguém está conectado" banner; a read-only session is never reused by
+      a normal connection, and `ft:mkdir/delete/rename/uploadBatch` refuse it in the main process too.
+      It was also opened from the real app against the simulated PC B (the student's files listed,
+      "Somente leitura" shown, the session closed when going back).
+      `file-agent-readonly.test.js` and, over real sockets, `lab-students-e2e.test.js` cover list,
+      download, every refused change and the paths that cannot leave the root. The real-PC run is
+      G18-T2 step 24.
 - [ ] **G18-I7 — Delete student:** a confirmation that shows the folder size ("Apagar Ana e 4,2 GB de
       arquivos?"), then `lab-student-delete`; refused while the student is active; the freed space
       shows in the capacity box. Done when: tests cover the refusal and the confirmation text; on a
-      real PC the account, the folder and the quota entry are gone.
+      real PC the account, the folder and the quota entry are gone. **Status 2026-10-01:** the
+      confirmation text (`deleteConfirmText`) and the refusal while the student is reserved (the
+      service's `busy`, and the button disabled) are tested; the real removal is G18-T2 step 28 and
+      G17-T2 step 18.
 
 ### Regression test
 
-- [ ] **G18-T1 — Suites:** all of the above in `npm test`; `npm run lint` at 0 errors. Done when:
-      both pass.
+- [x] **G18-T1 — Suites:** all of the above in `npm test`; `npm run lint` at 0 errors. Done when:
+      both pass. **Done 2026-10-01:** 662 JS tests (six full runs in a row) and 48 service self-test
+      cases pass; lint at 0 errors (9 warnings, the same as before). Running the suite many times
+      found a real bug in the pipe server, fixed here: it created the next pipe instance only after
+      serving the current one, so under load a client could find no pipe at all (`service-down`);
+      the next instance is now created before the accepted one is served, with a regression test.
+      Driving the real app found the same gap again under a burst of requests, so the service now keeps
+      four listening instances at all times and the app's pipe client retries a connection that failed
+      to open (`ENOENT`/`EBUSY`, nothing sent yet, so even `reserve` is safe to repeat), also tested.
+      (`--pipe-test` also takes an optional lifetime in seconds; its 60 s default had looked like a
+      crashing service during the long app run.)
 - [ ] **G18-T2 — Two-PC acceptance `(manual)`:** the full scenario on PC B with students Ana and João,
       driven from PC A's screens and a Windows RDP client: reserve Ana, sign in as Ana, download a file;
       try to reserve João while Ana is active (`busy`); hand over: Ana is warned and logged off, João
@@ -2331,8 +2374,11 @@ folder for her next turn; the teacher can look at them any time.
 
 ### Registration
 
-- [ ] **G18-R1 — Docs:** the messages, the flows and the screens in `docs/ARQUITETURA_CONEXAO.md` and
-      block 7 of `docs/BATERIA_DE_TESTES.md`. Done when: both mention them, checked directly.
+- [x] **G18-R1 — Docs:** the messages, the flows and the screens in `docs/ARQUITETURA_CONEXAO.md` and
+      block 7 of `docs/BATERIA_DE_TESTES.md`. Done when: both mention them, checked directly. **Done
+      2026-10-01:** "Alunos, reserva, troca de aluno e pasta (GOALS 18)" in
+      `docs/ARQUITETURA_CONEXAO.md` (with the corrected message table and error codes) and steps 19 to
+      28 in block 7 of `docs/BATERIA_DE_TESTES.md`.
 
 ---
 
@@ -2364,51 +2410,86 @@ plus the manager's `receivedAt`.
 
 ### Implementation
 
-- [ ] **G19-I1 — Event schema v2:** `{v: 2, hostId, hostName, seq, at, type, student?: {label,
+- [x] **G19-I1 — Event schema v2:** `{v: 2, hostId, hostName, seq, at, type, student?: {label,
       account}, reservationId?, sourceIp?, endReason?, detail?}` with types `student-added`,
       `student-deleted`, `quota-changed`, `reservation-start`, `reservation-end`, `session-logon`,
       `session-logoff`, `manager-enrolled`, `manager-removed`, `host-lost`, `host-back`; the end
       reasons are `student-left`, `manager-ended`, `manager-handover`, `deadline`, `unused-expired` and
       `service-restart`. GOALS 4 events (no `v`) are still accepted and shown. Done when: tests accept
-      both shapes and reject malformed events.
-- [ ] **G19-I2 — Service journal:** append-only `%ProgramData%\OpenPortal\lab\journal.jsonl` with a
+      both shapes and reject malformed events. **Done 2026-10-01:** `src/main/lab/events.js`
+      (`validateEvent` returns only the known fields; a PC can never deliver `host-lost`/`host-back`,
+      which only the manager creates, with sequence 0); `events.test.js` (47 cases).
+- [x] **G19-I2 — Service journal:** append-only `%ProgramData%\OpenPortal\lab\journal.jsonl` with a
       persistent `seq`, a size cap (20 MB, then rotated to `.1`) and a retention period, written
       before anything is pushed; the student cannot reach it. Done when: tests cover `seq` continuity
-      across a restart, rotation, and a corrupt last line being skipped.
+      across a restart, rotation, and a corrupt last line being skipped. **Done 2026-10-01:**
+      `lab-service/Core/Journal.cs` (`IJournalStorage`, file and memory), written before any push; the
+      15 new self-test cases (60 in all) cover those three, retention that never empties the journal,
+      paging up to 500, what each engine action records with its reason, the password never being
+      written, and the `events` / `note` commands; `lab-service-pipe.test.js` reads the journal through
+      the real pipe. The service's data folder is closed to students (G17-I1).
 - [ ] **G19-I3 — Windows session events:** the service records a `session-logon`, `session-logoff`,
       disconnect and reconnect for the lab accounts from the service's own session-change
       notifications, asking Windows for the client address of the session; the TerminalServices
       events 21 to 25 are a cross-check described in the docs, not the source. Done when: tests cover
       the mapping with a fake Windows layer; on a real PC a sign-in shows the account, time and
-      address of PC A.
-- [ ] **G19-I4 — Authenticated receiver:** the manager accepts `activity-event` and v2 events only
+      address of PC A. **Status 2026-10-01:** `LabService.OnSessionChange` forwards logon, logoff,
+      remote connect and disconnect; `Engine.OnSessionEvent` keeps the account and address of each
+      session (`WTSClientAddress`, read while the session exists, because at logoff it is gone), records
+      only lab students, adds the reservation id and treats a connect right after a logon as one fact.
+      Self-tests and the real-pipe test cover logon, disconnect, reconnect, logoff, other accounts and
+      unknown sessions. Reading the real address is G19-T2 steps 29 and 30.
+- [x] **G19-I4 — Authenticated receiver:** the manager accepts `activity-event` and v2 events only
       from a roster PC (`remoteAddress` in the roster and the event's `hostId` matching that entry)
       or, for legacy GOALS 4 use, from a login in `reportTo`; everything else is dropped and counted
       in the log. Done when: a forged event from an unlisted IP, and one from a roster IP with another
-      `hostId`, are both not stored.
-- [ ] **G19-I5 — Catch-up by sequence:** the status poll carries the PC's `lastSeq`; the manager asks
+      `hostId`, are both not stored. **Done 2026-10-01:** `activity-receiver.js`; the server now hands the
+      real socket address with every `activity-event`. For GOALS 4 events "a login in `reportTo`" is read
+      as `reportTo` or `allowedUsers` of the receiving app (a reporter is normally a PC already
+      approved there); a stranger's login, an unconfirmed identity and malformed events are dropped.
+      `activity-receiver.test.js` and, over real sockets, `lab-events-e2e.test.js` cover both forgeries.
+- [x] **G19-I5 — Catch-up by sequence:** the status poll carries the PC's `lastSeq`; the manager asks
       `lab-events {sinceSeq, limit ≤ 500}` until it is level and merges idempotently on
       `(hostId, seq)`. Done when: tests cover a gap after the manager was offline, the same event
       arriving by push and by pull, and a journal that rotated past the manager's position (recorded
-      as a gap).
-- [ ] **G19-I6 — Manager store, retention and export:** `userData/lab-log.jsonl` with an in-memory
+      as a gap). **Done 2026-10-01:** `lab-status` carries `lastSeq`; the manager keeps a per-PC cursor
+      (the highest number up to which the sequence is complete, gaps included) and asks `lab-events`
+      from there in pages of 500, in the background so the PC list is never delayed; a push ahead of a
+      hole does not hide the hole. The live push is `journal-feed.js` (the app polls its own service
+      every 2 s). Covered by `manager-events.test.js` (17), `journal-feed.test.js` (8) and the
+      real-sockets `lab-events-e2e.test.js`, which includes a reservation that ran with the manager
+      app closed.
+- [x] **G19-I6 — Manager store, retention and export:** `userData/lab-log.jsonl` with an in-memory
       index by student, PC and date; retention (default 180 days) applied at start and daily; CSV
       export with `;` as separator and a UTF-8 BOM so it opens correctly in a pt-BR spreadsheet, with
       local-time and UTC columns. Done when: tests cover retention, the header, and the quoting of
-      names that contain `;` or quotes.
-- [ ] **G19-I7 — Host lost and back:** during an active reservation, 3 missed polls (30 s) record
+      names that contain `;` or quotes. **Done 2026-10-01:** `event-log.js` and `buildCsv` in
+      `events.js`; retention (default 180 days, 1 to 3650, saved in `lab.logRetentionDays` and changed
+      only through its own channel) is applied at start and daily, keeps each PC's cursor and its last
+      event; the CSV also guards against formulas (`=`, `+`, `-`, `@`). Opening the file in a
+      spreadsheet is part of G19-I8.
+- [x] **G19-I7 — Host lost and back:** during an active reservation, 3 missed polls (30 s) record
       `host-lost` and the PC shows "Sem resposta"; the next answer records `host-back`. Done when: a
-      fake-clock test covers it.
+      fake-clock test covers it. **Done 2026-10-01:** in `manager.js`; the snapshot carries `lost`.
+      `manager-events.test.js` covers it (once per loss, silent for a free PC, a blip of one or two
+      misses, a second loss) and `lab-events-e2e.test.js` closes and reopens a real PC server. The
+      screen's "Sem resposta" label is shown in the activity tab as the event.
 - [ ] **G19-I8 — Activity screen for the lab:** `ActivityPanel` gains filters (student, PC, date
       range, type), a detail drawer per reservation (student, account, start, end, duration, reason,
       sign-in times and addresses), an "Exportar CSV" button and the retention setting; GOALS 4 entries
       keep showing. Done when: with seeded data the filters return the expected rows and the exported
-      file shows accents correctly in a spreadsheet.
+      file shows accents correctly in a spreadsheet. **Status 2026-10-01:** Atividade has a
+      "Sessões" tab (the GOALS 4 feed, unchanged) and a "Laboratório" tab (only with lab mode on).
+      Driven in the real Electron app against a simulated PC B with the real service: 13 real events
+      arrived by catch-up, the filters returned the expected rows, the drawer showed two source
+      addresses with a warning, the export came back with the BOM and the right columns. Only opening
+      the CSV in a spreadsheet remains (G19-T2 step 32).
 
 ### Regression test
 
-- [ ] **G19-T1 — Suites:** all of the above in `npm test`; `npm run lint` at 0 errors. Done when:
-      both pass.
+- [x] **G19-T1 — Suites:** all of the above in `npm test`; `npm run lint` at 0 errors. Done when:
+      both pass. **Done 2026-10-01:** 796 JS tests (three full runs in a row) and 60 service
+      self-test cases; lint at 0 errors (the same 9 warnings as before).
 - [ ] **G19-T2 — Two-PC acceptance `(manual)`:** run a reservation on B with A's manager app closed
       while it runs, then open it: the whole reservation appears (student, start, sign-in address, end,
       reason). Stop B's app mid-reservation: A records `host-lost` and later `host-back`. Done when:
@@ -2416,9 +2497,11 @@ plus the manager's `receivedAt`.
 
 ### Registration
 
-- [ ] **G19-R1 — Docs:** event schema, journal, retention, export format and the forged-event rule in
+- [x] **G19-R1 — Docs:** event schema, journal, retention, export format and the forged-event rule in
       `docs/ARQUITETURA_CONEXAO.md`; the two-PC steps in block 7 of `docs/BATERIA_DE_TESTES.md`.
-      Done when: both mention them, checked directly.
+      Done when: both mention them, checked directly. **Done 2026-10-01:** "Registro central de
+      acessos (GOALS 19)" in the architecture doc (and the `events` / `note` pipe commands) and steps
+      29 to 33 in block 7 of the battery.
 
 ---
 

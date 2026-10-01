@@ -22,8 +22,11 @@ namespace OpenPortalLab
         private readonly string ownerSid;
         private readonly ILog log;
         private readonly string pipeName;
+        // Vários ouvintes sempre prontos: com um só, uma rajada de pedidos deixava o pipe sem
+        // nenhuma instância livre por um instante (o cliente recebia "pipe não encontrado").
+        private const int Listeners = 4;
         private CancellationTokenSource cancel;
-        private Task loop;
+        private Task[] loops;
 
         // `pipeName` só muda no teste do pipe (--pipe-test); o serviço usa o padrão.
         public PipeServer(Engine engine, string ownerSid, ILog log, string pipeName = PipeName)
@@ -37,17 +40,34 @@ namespace OpenPortalLab
         public void Start()
         {
             cancel = new CancellationTokenSource();
-            // A primeira instância nasce já, antes de Start() voltar: quem sobe o serviço (ou o
+            CancellationToken token = cancel.Token;
+            // As primeiras instâncias nascem já, antes de Start() voltar: quem sobe o serviço (ou o
             // teste) pode confiar que o pipe existe.
-            NamedPipeServerStream first = Create();
-            loop = Task.Run(() => AcceptLoop(first, cancel.Token));
+            var started = new System.Collections.Generic.List<Task>();
+            for (int i = 0; i < Listeners; i++)
+            {
+                NamedPipeServerStream first;
+                try
+                {
+                    first = Create();
+                }
+                catch (UnauthorizedAccessException)
+                {
+                    // Só acontece no teste do pipe com um dono diferente de quem o criou: a conta que
+                    // cria não tem leitura nem escrita para abrir outras instâncias. Segue com as que há.
+                    if (i == 0) throw;
+                    break;
+                }
+                started.Add(Task.Run(() => AcceptLoop(first, token)));
+            }
+            loops = started.ToArray();
         }
 
         public void Stop()
         {
             if (cancel == null) return;
             cancel.Cancel();
-            try { if (loop != null) loop.Wait(3000); } catch { }
+            try { if (loops != null) Task.WaitAll(loops, 3000); } catch { }
         }
 
         private NamedPipeServerStream Create()
@@ -85,6 +105,11 @@ namespace OpenPortalLab
                     await pipe.WaitForConnectionAsync(token).ConfigureAwait(false);
                     NamedPipeServerStream accepted = pipe;
                     pipe = null;
+                    // A próxima instância nasce ANTES de atender esta: se o cliente terminasse (e a
+                    // instância fosse fechada) antes de a seguinte existir, o nome do pipe sumiria por
+                    // um instante e o cliente seguinte levaria "pipe não encontrado". Visto sob carga.
+                    try { first = Create(); }
+                    catch { accepted.Dispose(); throw; }
                     var ignored = Task.Run(() => Serve(accepted));
                 }
                 catch (OperationCanceledException)
@@ -99,6 +124,7 @@ namespace OpenPortalLab
                     try { await Task.Delay(500, token).ConfigureAwait(false); } catch (OperationCanceledException) { break; }
                 }
             }
+            if (first != null) first.Dispose();
         }
 
         private async Task Serve(NamedPipeServerStream pipe)

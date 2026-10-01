@@ -12,6 +12,15 @@
 
 const MAX_MANAGERS = 20;
 const MAX_ROSTER = 50;
+// Quantos dias o registro de acessos guarda (GOALS 19).
+const DEFAULT_LOG_RETENTION_DAYS = 180;
+const MIN_LOG_RETENTION_DAYS = 1;
+const MAX_LOG_RETENTION_DAYS = 3650;
+
+function clampRetentionDays(value) {
+  if (!Number.isFinite(value)) return DEFAULT_LOG_RETENTION_DAYS;
+  return Math.min(MAX_LOG_RETENTION_DAYS, Math.max(MIN_LOG_RETENTION_DAYS, Math.round(value)));
+}
 
 // eslint-disable-next-line no-control-regex
 const CONTROL_CHARS = /[\u0000-\u001f\u007f-\u009f]/g;
@@ -81,13 +90,19 @@ function readLab(config) {
     managed: managers.length > 0,
     mode: lab.mode === true,
     roster: sanitizeRoster(lab.roster),
+    logRetentionDays: clampRetentionDays(lab.logRetentionDays),
   };
 }
 
 // O que vai para o disco: só as chaves que existem de verdade (`managed` é
 // derivado e não se guarda).
 function toStoredLab(lab) {
-  return { mode: lab.mode, managers: lab.managers, roster: lab.roster };
+  return {
+    mode: lab.mode,
+    managers: lab.managers,
+    roster: lab.roster,
+    logRetentionDays: lab.logRetentionDays,
+  };
 }
 
 // O renderer só pode mudar `lab.mode`. Tudo o mais vem do que já está no disco,
@@ -184,9 +199,13 @@ function isLabModeOn(config) {
 }
 
 module.exports = {
+  DEFAULT_LOG_RETENTION_DAYS,
+  MAX_LOG_RETENTION_DAYS,
+  MIN_LOG_RETENTION_DAYS,
   MAX_MANAGERS,
   MAX_ROSTER,
   addManager,
+  clampRetentionDays,
   effectiveAllowedUsers,
   effectiveReportTo,
   guardLabKeys,

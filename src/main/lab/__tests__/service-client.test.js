@@ -77,6 +77,7 @@ describe('service pipe client', () => {
       'end',
       'ensure-folder-access',
       'events',
+      'note',
     ]);
   });
 
@@ -190,6 +191,84 @@ describe('service pipe client', () => {
     };
     const client = createServiceClient({ createConnection });
     expect(await client.status()).toMatchObject({ ok: false, error: expected });
+  });
+
+  describe('a pipe that vanishes for an instant under a burst of requests', () => {
+    // O pipe some entre uma instância fechada e a seguinte nascer: o erro vem ao ABRIR a
+    // conexão, antes de qualquer byte, então repetir é seguro (até para `reserve`).
+    function flakyConnection(failures, code = 'ENOENT') {
+      const realPath = { value: null };
+      let attempts = 0;
+      const createConnection = (pipePath) => {
+        attempts += 1;
+        if (attempts <= failures) {
+          const socket = new net.Socket();
+          setImmediate(() => socket.emit('error', Object.assign(new Error(code), { code })));
+          return socket;
+        }
+        return net.createConnection(realPath.value || pipePath);
+      };
+      return { createConnection, realPath, attempts: () => attempts };
+    }
+
+    it('tries again when the pipe is not found while connecting', async () => {
+      const pipePath = await fakePipe(replying(() => ({ ok: true, state: 'free' })));
+      const flaky = flakyConnection(2);
+      flaky.realPath.value = pipePath;
+      const client = createServiceClient({
+        pipePath,
+        createConnection: flaky.createConnection,
+        retryDelayMs: 1,
+      });
+      expect(await client.status()).toEqual({ ok: true, state: 'free' });
+      expect(flaky.attempts()).toBe(3);
+    });
+
+    it('also retries a busy pipe, and gives up after a few attempts with the plain error', async () => {
+      const flaky = flakyConnection(99, 'EBUSY');
+      const client = createServiceClient({
+        createConnection: flaky.createConnection,
+        retryDelayMs: 1,
+      });
+      const result = await client.status();
+      expect(result).toMatchObject({ ok: false, error: 'unreachable' });
+      expect(result).not.toHaveProperty('retryable');
+      expect(flaky.attempts()).toBe(4);
+
+      const gone = flakyConnection(99, 'ENOENT');
+      const lost = await createServiceClient({
+        createConnection: gone.createConnection,
+        retryDelayMs: 1,
+      }).status();
+      expect(lost).toMatchObject({ ok: false, error: 'service-down' });
+      expect(lost).not.toHaveProperty('retryable');
+    });
+
+    it('never repeats a request after the connection was made', async () => {
+      let connections = 0;
+      const pipePath = await fakePipe((socket) => {
+        connections += 1;
+        socket.on('data', () => socket.destroy());
+      });
+      const client = createServiceClient({ pipePath, retryDelayMs: 1 });
+      const result = await client.reserve({
+        account: 'ana',
+        startWithinMs: 1_800_000,
+        sessionMs: 3_600_000,
+      });
+      expect(result).toMatchObject({ ok: false });
+      expect(connections).toBe(1);
+    });
+
+    it('does not retry errors that are not about the pipe being missing', async () => {
+      const flaky = flakyConnection(99, 'EACCES');
+      const client = createServiceClient({
+        createConnection: flaky.createConnection,
+        retryDelayMs: 1,
+      });
+      expect(await client.status()).toMatchObject({ ok: false, error: 'unauthorized' });
+      expect(flaky.attempts()).toBe(1);
+    });
   });
 
   it('does not connect at all for an unknown command or an oversize request', async () => {

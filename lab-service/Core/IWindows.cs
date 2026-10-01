@@ -10,6 +10,14 @@ namespace OpenPortalLab
         public string UserName;
     }
 
+    // Quem é e de onde vem uma sessão: a conta (minúscula, sem domínio) e o endereço IP do cliente
+    // RDP (nulo no console local).
+    public sealed class SessionDetails
+    {
+        public string Account;
+        public string ClientAddress;
+    }
+
     public sealed class DiskInfo
     {
         public double TotalGb;
@@ -43,6 +51,8 @@ namespace OpenPortalLab
 
         // Sessões.
         List<SessionInfo> GetSessions(string account);
+        // Dados de uma sessão pelo número, ou nulo se ela não existe (ou ainda não tem usuário).
+        SessionDetails QuerySession(int sessionId);
         void SendMessage(int sessionId, string title, string text);
         bool Logoff(int sessionId);
 
@@ -50,6 +60,9 @@ namespace OpenPortalLab
         void EnsureProfile(string account);
         void DeleteProfile(string account);
         void GrantOwnerRead(string account, string ownerSid);
+        // A pasta do perfil (C:\Users\<conta>, ou o nome que o Windows escolheu), para o
+        // gerente abrir somente leitura.
+        string GetProfilePath(string account);
         // Apaga o que a conta deixou em C:\Users\Public. Devolve quantos itens.
         int CleanPublic(string account);
 

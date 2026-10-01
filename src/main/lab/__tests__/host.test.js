@@ -251,17 +251,17 @@ describe('lab host: bad input and unsupported messages', () => {
     });
   });
 
-  it('a manager asking for a later-GOALS message gets unsupported, a stranger gets unauthorized', async () => {
+  it('without the lab service, a manager asking for the journal gets service-down and a stranger unauthorized', async () => {
     const { host } = setup({
       managers: [PROF],
       identities: { [MANAGER_IP]: PROF, [STRANGER_IP]: 'aluno@escola.com' },
     });
-    const students = JSON.stringify({ type: 'lab-students', labProtocol: 1 });
-    expect(await ask(host, students, MANAGER_IP)).toMatchObject({
-      error: 'unsupported',
-      request: 'lab-students',
+    const events = JSON.stringify({ type: 'lab-events', labProtocol: 1, sinceSeq: 0, limit: 10 });
+    expect(await ask(host, events, MANAGER_IP)).toMatchObject({
+      error: 'service-down',
+      request: 'lab-events',
     });
-    expect(await ask(host, students, STRANGER_IP)).toMatchObject({
+    expect(await ask(host, events, STRANGER_IP)).toMatchObject({
       error: 'unauthorized',
     });
   });

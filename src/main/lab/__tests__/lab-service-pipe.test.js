@@ -19,6 +19,33 @@ const canRun = process.platform === 'win32' && Boolean(exe);
 
 const running = [];
 
+// Os comandos de teste do pipe (veja PipeHarness.cs): uma linha para o pipe, uma linha de resposta.
+const answers = new WeakMap();
+function command(child, line) {
+  let queue = answers.get(child);
+  if (!queue) {
+    queue = { lines: [], waiting: [], buffer: '' };
+    answers.set(child, queue);
+    child.stdout.on('data', (chunk) => {
+      queue.buffer += chunk;
+      let newline;
+      while ((newline = queue.buffer.indexOf('\n')) >= 0) {
+        const text = queue.buffer.slice(0, newline).trim();
+        queue.buffer = queue.buffer.slice(newline + 1);
+        if (text === 'READY' || text === '') continue;
+        const waiter = queue.waiting.shift();
+        if (waiter) waiter(text);
+        else queue.lines.push(text);
+      }
+    });
+  }
+  return new Promise((resolve) => {
+    if (queue.lines.length) resolve(queue.lines.shift());
+    else queue.waiting.push(resolve);
+    child.stdin.write(`${line}\n`);
+  });
+}
+
 function startHarness(owner) {
   const name = `openportal-pipe-test-${crypto.randomBytes(5).toString('hex')}`;
   const child = spawn(exe, ['--pipe-test', name, owner], {
@@ -140,7 +167,10 @@ describe.skipIf(!canRun)('lab service pipe (real pipe, fake Windows)', () => {
       ok: true,
       quotaGb: 40,
     });
-    expect(await client.ensureFolderAccess('ana')).toMatchObject({ ok: true });
+    expect(await client.ensureFolderAccess('ana')).toMatchObject({
+      ok: true,
+      path: 'C:\\Users\\ana',
+    });
     expect(await client.studentDelete('ana')).toMatchObject({ ok: true });
     expect(await client.studentDelete('ana')).toMatchObject({
       ok: false,
@@ -166,9 +196,85 @@ describe.skipIf(!canRun)('lab service pipe (real pipe, fake Windows)', () => {
       ok: false,
       error: 'bad-request',
     });
-    expect(await client.request('events', {})).toMatchObject({
-      ok: false,
-      error: 'unsupported',
+    for (const bad of [{ limit: 0 }, { limit: 501 }, { sinceSeq: -1 }, { sinceSeq: 'x' }]) {
+      expect(await client.request('events', bad)).toMatchObject({
+        ok: false,
+        error: 'bad-request',
+      });
+    }
+  });
+
+  it('keeps a journal: sequence numbers, the reason a reservation ended, and the student address', async () => {
+    const { child, pipePath, ready } = startHarness('self');
+    await ready;
+    const client = createServiceClient({ pipePath });
+    expect(await client.events({ sinceSeq: 0, limit: 10 })).toMatchObject({
+      ok: true,
+      events: [],
+      lastSeq: 0,
+      firstSeq: 0,
+    });
+    expect(await client.status()).toMatchObject({ ok: true, lastSeq: 0 });
+
+    const ana = await client.studentCreate({ label: 'Ana', quotaGb: 1 });
+    expect(ana.ok).toBe(true);
+    const reserved = await client.reserve({
+      account: 'ana',
+      startWithinMs: 30 * 60_000,
+      sessionMs: 60 * 60_000,
+    });
+    // Uma sessão da Ana entra por RDP vindo de 100.64.0.9 (comando de teste do pipe).
+    const session = await command(child, 'signin ana 100.64.0.9');
+    expect(session).toMatch(/^SESSION \d+$/);
+    expect(await command(child, 'disconnect ' + session.split(' ')[1])).toBe('OK');
+    expect(await command(child, 'reconnect ' + session.split(' ')[1])).toBe('OK');
+    expect(await command(child, 'tick')).toBe('OK');
+    expect(
+      await client.end({ reservationId: reserved.reservationId, reason: 'manager-ended' }),
+    ).toMatchObject({ ok: true });
+
+    const journal = await client.events({ sinceSeq: 0, limit: 100 });
+    expect(journal.events.map((event) => event.type)).toEqual([
+      'student-added',
+      'reservation-start',
+      'session-logon',
+      'session-logoff',
+      'session-logon',
+      'reservation-end',
+    ]);
+    expect(journal.events.map((event) => event.seq)).toEqual([1, 2, 3, 4, 5, 6]);
+    expect(journal.lastSeq).toBe(6);
+    const logon = journal.events[2];
+    expect(logon).toMatchObject({
+      account: 'ana',
+      reservationId: reserved.reservationId,
+      sourceIp: '100.64.0.9',
+      detail: 'logon',
+    });
+    expect(journal.events[4].detail).toBe('reconnect');
+    expect(journal.events[5]).toMatchObject({ endReason: 'manager-ended' });
+    // Paginar por número de sequência.
+    expect(
+      (await client.events({ sinceSeq: 4, limit: 10 })).events.map((event) => event.seq),
+    ).toEqual([5, 6]);
+    expect(JSON.stringify(journal)).not.toMatch(/password/i);
+    expect(await client.status()).toMatchObject({ ok: true, lastSeq: 6 });
+
+    // O prazo passa: o relógio do pipe de teste adianta e o fim por prazo é registrado.
+    const next = await client.reserve({
+      account: 'ana',
+      startWithinMs: 30 * 60_000,
+      sessionMs: 5 * 60_000,
+    });
+    expect(await command(child, 'signin ana 100.64.0.9')).toMatch(/^SESSION/);
+    expect(await command(child, 'tick')).toBe('OK');
+    expect(await command(child, 'advance ' + 6 * 60_000)).toBe('OK');
+    expect(await command(child, 'tick')).toBe('OK');
+    const after = await client.events({ sinceSeq: 6, limit: 100 });
+    expect(after.events.at(-1)).toMatchObject({
+      type: 'reservation-end',
+      endReason: 'deadline',
+      reservationId: next.reservationId,
     });
   });
 
@@ -196,6 +302,16 @@ describe.skipIf(!canRun)('lab service pipe (real pipe, fake Windows)', () => {
     const client = createServiceClient({ pipePath });
     const answers = await Promise.all(Array.from({ length: 20 }, () => client.status()));
     expect(answers.every((answer) => answer.ok === true)).toBe(true);
+  });
+
+  it('never loses the pipe name between two requests (the next instance exists before the first is served)', async () => {
+    const { pipePath, ready } = startHarness('self');
+    await ready;
+    const client = createServiceClient({ pipePath });
+    for (let i = 0; i < 150; i += 1) {
+      const answer = await client.status();
+      expect(answer.ok, `pedido ${i}: ${JSON.stringify(answer)}`).toBe(true);
+    }
   });
 
   it('keeps an account other than the owner out of the pipe', async () => {

@@ -6,6 +6,8 @@
 // módulo só monta, lê e valida as mensagens — sem rede, sem Electron, sem
 // exceções para entrada ruim (a porta é alcançável por qualquer peer).
 
+const events = require('./events');
+
 const LAB_PROTOCOL = 1;
 const MAX_REQUEST_BYTES = 4 * 1024;
 const MAX_RESPONSE_BYTES = 256 * 1024;
@@ -17,6 +19,11 @@ const ERROR_CODES = Object.freeze([
   'bad-request',
   'unsupported',
   'internal',
+  // GOALS 18: o que o serviço do laboratório recusa ou não consegue fazer.
+  'not-found',
+  'full',
+  'logoff-failed',
+  'service-down',
 ]);
 
 const MINUTE = 60 * 1000;
@@ -66,7 +73,25 @@ const REQUEST_FIELDS = Object.freeze({
 
 // O que este build responde de fato; o resto é `unsupported` até o GOALS dono
 // da mensagem chegar.
-const IMPLEMENTED_TYPES = Object.freeze(new Set(['lab-enroll', 'lab-status']));
+const IMPLEMENTED_TYPES = Object.freeze(
+  new Set([
+    'lab-enroll',
+    'lab-status',
+    'lab-students',
+    'lab-student-add',
+    'lab-student-quota',
+    'lab-student-delete',
+    'lab-reserve',
+    'lab-extend',
+    'lab-end',
+    'lab-folder',
+    'lab-events',
+  ]),
+);
+
+// Marca, numa resposta de `lab-folder`, que a conexão deve virar uma sessão de
+// arquivos somente leitura na pasta indicada. Chave Symbol: não vai para o JSON.
+const FILE_SESSION = Symbol.for('openportal.lab.fileSession');
 
 function isPlainObject(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -187,14 +212,17 @@ function buildSuccess(requestType, fields = {}) {
   };
 }
 
-function buildError(requestType, error, message) {
+// `busyWith`: quem está com o PC quando a recusa é `busy` (nome, estado e fim).
+function buildError(requestType, error, message, { busyWith } = {}) {
   const code = ERROR_CODES.includes(error) ? error : 'internal';
+  const who = busyWith ? busyPayload(busyWith) : null;
   return {
     type: 'lab-response',
     request: requestType,
     ok: false,
     error: code,
     ...(message ? { message: String(message) } : {}),
+    ...(who ? { busyWith: who } : {}),
     labProtocol: LAB_PROTOCOL,
   };
 }
@@ -282,6 +310,8 @@ function statusPayload(input = {}) {
     },
     state,
     studentCount: cleanCount(source.studentCount),
+    // O número do último evento do diário do PC: o gerente sabe se está atrasado (GOALS 19).
+    lastSeq: cleanCount(source.lastSeq),
   };
   if (isPlainObject(source.student) && state !== 'free') {
     payload.student = {
@@ -298,8 +328,176 @@ function statusPayload(input = {}) {
   return payload;
 }
 
+// ---- GOALS 18: alunos, reserva e credenciais --------------------------------
+// Listas de permitidos também aqui: o PC gerenciado monta a resposta a partir do
+// que o serviço devolve, e o gerente lê a resposta de um PC que não é de confiança.
+
+const STUDENT_STATES = ['free', 'reserved', 'in-use', 'ending'];
+const RESERVATION_STATES = ['reserved', 'in-use', 'ending'];
+const QUOTA_STATES = ['off', 'track', 'enforce', 'unknown'];
+const CAPACITY_STATUS = ['ok', 'tight', 'over'];
+const MAX_STUDENTS_LISTED = 100;
+const GB = 1024 * 1024 * 1024;
+
+function cleanChoice(value, allowed, fallback) {
+  return allowed.includes(value) ? value : fallback;
+}
+
+function cleanAccount(value) {
+  return typeof value === 'string' && ACCOUNT_PATTERN.test(value) ? value : '';
+}
+
+function cleanReservationId(value) {
+  return typeof value === 'string' && RESERVATION_ID_PATTERN.test(value) ? value : '';
+}
+
+function bytesToGb(bytes) {
+  return typeof bytes === 'number' && Number.isFinite(bytes) && bytes >= 0
+    ? Math.round((bytes / GB) * 100) / 100
+    : null;
+}
+
+function cleanGb2(value) {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0
+    ? Math.round(value * 100) / 100
+    : null;
+}
+
+function studentPayload(input) {
+  const source = isPlainObject(input) ? input : {};
+  const usedGb =
+    source.usedBytes !== undefined ? bytesToGb(source.usedBytes) : cleanGb2(source.usedGb);
+  const quota = source.quotaGb;
+  const student = {
+    account: cleanAccount(source.account),
+    label: cleanText(source.label, 40),
+    quotaGb: Number.isSafeInteger(quota) && quota >= 1 && quota <= 2000 ? quota : 0,
+    state: cleanChoice(source.state, STUDENT_STATES, 'free'),
+    lastSessionEnd: cleanCount(source.lastSessionEnd),
+  };
+  if (usedGb !== null) student.usedGb = usedGb;
+  return student;
+}
+
+function reservationPayload(input) {
+  if (!isPlainObject(input)) return null;
+  const id = cleanReservationId(input.id);
+  const account = cleanAccount(input.account);
+  if (!id || !account) return null;
+  return {
+    id,
+    account,
+    label: cleanText(input.label, 40),
+    state: cleanChoice(input.state, RESERVATION_STATES, 'reserved'),
+    startBy: cleanCount(input.startBy),
+    endsAt: cleanCount(input.endsAt),
+    createdAt: cleanCount(input.createdAt),
+    firstLogonAt: cleanCount(input.firstLogonAt),
+  };
+}
+
+function capacityPayload(input) {
+  if (!isPlainObject(input)) return null;
+  const totalGb = cleanGb(input.totalGb);
+  const freeGb = cleanGb(input.freeGb);
+  if (totalGb === null || freeGb === null) return null;
+  return {
+    totalGb,
+    freeGb,
+    reserveGb: cleanGb(input.reserveGb) ?? 0,
+    quotaGb: cleanGb(input.quotaGb) ?? 0,
+    recommended: cleanCount(input.recommended),
+    assignedGb: cleanGb(input.assignedGb) ?? 0,
+    usedByStudentsGb: cleanGb(input.usedByStudentsGb) ?? 0,
+    status: cleanChoice(input.status, CAPACITY_STATUS, 'ok'),
+  };
+}
+
+// Resposta de `lab-students`: os alunos do PC, a reserva em andamento, o estado
+// da cota e a caixa de capacidade do disco.
+function studentsPayload(input) {
+  const source = isPlainObject(input) ? input : {};
+  const list = Array.isArray(source.students) ? source.students : [];
+  const payload = {
+    students: list
+      .slice(0, MAX_STUDENTS_LISTED)
+      .map(studentPayload)
+      .filter((student) => student.account),
+    quota: cleanChoice(source.quota, QUOTA_STATES, 'unknown'),
+  };
+  const reservation = reservationPayload(source.reservation);
+  if (reservation) payload.reservation = reservation;
+  const capacity = capacityPayload(source.capacity);
+  if (capacity) payload.capacity = capacity;
+  return payload;
+}
+
+// Resposta de `lab-reserve`: a ÚNICA mensagem que carrega a senha do aluno. Devolve
+// null quando algo não tem a forma esperada (a senha vem do serviço, nunca é
+// inventada nem arrumada aqui).
+function credentialsPayload(input) {
+  if (!isPlainObject(input)) return null;
+  const reservationId = cleanReservationId(input.reservationId);
+  const account = cleanAccount(input.account);
+  const userName = cleanText(input.userName, 80);
+  const { password } = input;
+  const passwordOk =
+    typeof password === 'string' && password.length >= 8 && /^[\x21-\x7e]{8,64}$/.test(password);
+  if (!reservationId || !account || !userName || !passwordOk) return null;
+  return {
+    reservationId,
+    account,
+    userName,
+    password,
+    startBy: cleanCount(input.startBy),
+    endsAt: cleanCount(input.endsAt),
+  };
+}
+
+function extendPayload(input) {
+  if (!isPlainObject(input)) return null;
+  const reservationId = cleanReservationId(input.reservationId);
+  if (!reservationId) return null;
+  return { reservationId, endsAt: cleanCount(input.endsAt) };
+}
+
+// Resposta de `lab-events`: só eventos v2 válidos (o gerente confere de novo ao receber) e que
+// caibam no limite da resposta. `lastSeq` e `firstSeq` dizem até onde o diário vai e de onde ele
+// ainda tem (o que ficou antes foi apagado pela rotação ou pela retenção).
+function eventsPayload(input, { maxBytes = 200 * 1024 } = {}) {
+  const source = isPlainObject(input) ? input : {};
+  const list = Array.isArray(source.events) ? source.events : [];
+  const accepted = [];
+  let size = 2;
+  for (const raw of list) {
+    const checked = events.validateEvent(raw);
+    if (!checked.ok) continue;
+    const bytes = Buffer.byteLength(JSON.stringify(checked.event), 'utf8') + 1;
+    if (size + bytes > maxBytes) break;
+    accepted.push(checked.event);
+    size += bytes;
+  }
+  return {
+    events: accepted,
+    lastSeq: cleanCount(source.lastSeq),
+    firstSeq: cleanCount(source.firstSeq),
+  };
+}
+
+// Quem está com o PC, devolvido junto de uma recusa `busy`.
+function busyPayload(input) {
+  const source = isPlainObject(input) ? input : {};
+  return {
+    account: cleanAccount(source.account),
+    label: cleanText(source.label, 40),
+    state: cleanChoice(source.state, RESERVATION_STATES, 'reserved'),
+    endsAt: cleanCount(source.endsAt),
+  };
+}
+
 module.exports = {
   ERROR_CODES,
+  FILE_SESSION,
   IMPLEMENTED_TYPES,
   LAB_PROTOCOL,
   MAX_REQUEST_BYTES,
@@ -308,8 +506,14 @@ module.exports = {
   buildError,
   buildRequest,
   buildSuccess,
+  busyPayload,
+  credentialsPayload,
+  eventsPayload,
+  extendPayload,
   parseRequest,
   parseResponse,
   serializeResponse,
   statusPayload,
+  studentPayload,
+  studentsPayload,
 };

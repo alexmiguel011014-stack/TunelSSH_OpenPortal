@@ -55,9 +55,13 @@ class ConnectionRequestServer extends EventEmitter {
       // arquivos (ver file-agent.js / protocol.js). Isso evita abrir uma
       // porta TCP nova (e a regra de firewall que ela exigiria): reaproveita
       // esta conexão, que o Windows já deixa passar.
-      const upgradeToFileSession = (req) => {
+      //
+      // GOALS 18: a visão de pasta do gerente ("Ver pasta", lab-folder) usa o mesmo
+      // transporte, mas numa pasta de aluno, somente leitura e sem anunciar "alguém
+      // está conectado" (não é uma sessão de tela).
+      const upgradeToFileSession = (req, { root, readOnly = false, announce = true } = {}) => {
         socket.removeListener('data', dataHandler);
-        const session = new FileAgentSession(socket, os.homedir());
+        const session = new FileAgentSession(socket, root || os.homedir(), { readOnly });
         const decoder = new FrameDecoder();
         socket.on('data', (chunk) => {
           const frames = decoder.push(chunk);
@@ -65,7 +69,7 @@ class ConnectionRequestServer extends EventEmitter {
             session.handleFrame(frame).catch(() => {});
           }
         });
-        this.emit('file-session-open', req);
+        if (announce) this.emit('file-session-open', req);
         let closed = false;
         const onFileSessionEnd = () => {
           if (closed) return;
@@ -74,7 +78,7 @@ class ConnectionRequestServer extends EventEmitter {
           // movidos na sessão — ver file-agent.js's filesTransferred.
           req.filesTransferred = session.filesTransferred;
           session.destroy();
-          this.emit('file-session-close', req);
+          if (announce) this.emit('file-session-close', req);
         };
         socket.on('close', onFileSessionEnd);
         socket.on('error', onFileSessionEnd);
@@ -98,7 +102,7 @@ class ConnectionRequestServer extends EventEmitter {
 
         if (typeof msg.type === 'string' && msg.type.startsWith('lab-')) {
           socket.removeListener('data', dataHandler);
-          this.handleLab(socket, buffer, pendingDecision.signal);
+          this.handleLab(socket, buffer, pendingDecision.signal, upgradeToFileSession);
         } else if (msg.type === 'connect-request') {
           const wantsTunnel = msg.capability === 'tunnel';
           const req = {
@@ -150,7 +154,9 @@ class ConnectionRequestServer extends EventEmitter {
           // Fire-and-forget (GOALS 4): sem resposta esperada, nunca abre
           // sessão de arquivos nem interfere num connect-request em curso
           // na mesma porta.
-          this.emit('activity-event', msg.event);
+          // O endereço real do socket vai junto: quem recebe decide se confia em quem enviou
+          // (GOALS 19); o conteúdo do evento sozinho não prova nada.
+          this.emit('activity-event', msg.event, socket.remoteAddress || '');
           if (!socket.destroyed) socket.end();
         } else {
           if (!socket.destroyed) {
@@ -190,7 +196,7 @@ class ConnectionRequestServer extends EventEmitter {
   // GOALS 16: uma mensagem `lab-*` por conexão. O host decide tudo (identidade,
   // autorização, limites); aqui só se entrega o pedido cru com o endereço real
   // do socket e se devolve a resposta. Sem resposta (quem pediu desistiu), fecha.
-  async handleLab(socket, input, signal) {
+  async handleLab(socket, input, signal, upgradeToFileSession = null) {
     const respondWith = (response) => {
       if (socket.destroyed) return;
       socket.end(labProtocol.serializeResponse(response));
@@ -207,8 +213,22 @@ class ConnectionRequestServer extends EventEmitter {
         remoteAddress: socket.remoteAddress || '',
         signal,
       });
-      if (response) respondWith(response);
-      else socket.destroy();
+      if (!response) {
+        socket.destroy();
+        return;
+      }
+      // lab-folder: depois da resposta, esta conexão passa a ser a sessão de arquivos
+      // (somente leitura) da pasta do aluno que o host indicou.
+      const folder = response.ok ? response[labProtocol.FILE_SESSION] : null;
+      if (folder && upgradeToFileSession && !socket.destroyed) {
+        socket.write(labProtocol.serializeResponse(response));
+        upgradeToFileSession(
+          { requestId: 'lab-folder', remoteAddress: socket.remoteAddress || '' },
+          { root: folder.root, readOnly: true, announce: false },
+        );
+        return;
+      }
+      respondWith(response);
     } catch {
       respondWith(labProtocol.buildError(undefined, 'internal', 'Falha ao atender o pedido'));
     }
