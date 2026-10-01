@@ -65,6 +65,13 @@
           "**/*",
           "!*.pdb"
         ]
+      },
+      {
+        "from": "lab-service/bin/Release",
+        "to": "lab-service",
+        "filter": [
+          "OpenPortalLabService.exe"
+        ]
       }
     ],
     "win": {

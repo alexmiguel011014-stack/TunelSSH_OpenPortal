@@ -73,6 +73,20 @@ jobs:
           msbuild sidecar/OpenPortalRdpSidecar.csproj -restore -p:Configuration=Release -v:m -nologo
           if (-not (Test-Path sidecar/bin/Release/OpenPortalRdpSidecar.exe)) { throw 'A sidecar RDP nao foi compilada' }
 
+      # O servico do modo laboratorio (C#/.NET 4.8, GOALS 17) tambem vai no
+      # instalador por extraResources. Os testes do servico rodam dentro do proprio
+      # executavel (--selftest, contra um Windows falso) e quebram o build se falharem.
+      - name: Build lab service (Release) and run its self-test
+        shell: pwsh
+        run: |
+          msbuild lab-service/OpenPortalLabService.csproj -restore -p:Configuration=Release -v:m -nologo
+          if (-not (Test-Path lab-service/bin/Release/OpenPortalLabService.exe)) { throw 'O servico do laboratorio nao foi compilado' }
+          $json = & lab-service/bin/Release/OpenPortalLabService.exe --selftest
+          $result = $json | ConvertFrom-Json
+          $result.results | Where-Object { -not $_.ok } | ForEach-Object { Write-Host "FALHOU: $($_.name) -> $($_.detail)" }
+          Write-Host "Testes do servico: $($result.total - $result.failed) de $($result.total) passaram"
+          if (-not $result.ok) { throw 'Testes do servico do laboratorio falharam' }
+
       - name: Generate self-signed code-signing cert
         shell: pwsh
         run: |

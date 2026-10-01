@@ -1902,7 +1902,7 @@ RDP track (GOALS 5–7: a native Windows component and many real-device rounds),
 
 ### Decisions
 
-- [ ] **G16-D1 — How students reach the lab PCs `(manual)`:** students use only the Windows Remote
+- [x] **G16-D1 — How students reach the lab PCs `(manual)`:** students use only the Windows Remote
       Desktop, so what matters is a network path to port 3389; the managers' channel to the PCs
       (port 18902) keeps using Tailscale. Choose one. (A) Students are users of the teacher's
       tailnet: verified Tailscale login per person, one paid seat per student beyond the free 6. (B)
@@ -1941,8 +1941,9 @@ RDP track (GOALS 5–7: a native Windows component and many real-device rounds),
       devices, but it needs a server to run on); ZeroTier's free plan (10 devices, 1 network) is too
       small. The service and the accounts stay the same in every case. **Status 2026-09-30:** the
       user said yes to the recommendation: B for students at home and E for students on site. The
-      choice is written in `docs/ARQUITETURA_CONEXAO.md` (2026-09-30); this box stays open until
-      G17-I2 uses the firewall scope.
+      choice is written in `docs/ARQUITETURA_CONEXAO.md` (2026-09-30); G17-I2 now uses the
+      firewall scope (the Tailscale range by default, plus the local subnet with "students on the
+      same network"), and the box was checked on 2026-10-01.
 - [x] **G16-D2 — How a lab PC comes back after a restart `(manual)`:** the app has to be running in
       the owner's Windows session to manage the PC, and after a restart nobody is signed in. Choose:
       (1) a dedicated standard account (for example `openportal-host`) with automatic sign-in set up
@@ -2151,57 +2152,90 @@ Depends on GOALS 16 (managers and the app-side authorization). **Design.**
       task and the disk quota switched on (it was off before) stay until someone runs
       `lab-v1.ps1 cleanup -DisableQuota` with administrator rights (housekeeping, not part of the
       plan).
-- [ ] **G17-I1 — Service project and packaging:** `lab-service/` with the skeleton, built in
+- [x] **G17-I1 — Service project and packaging:** `lab-service/` with the skeleton, built in
       `nightly.yml` and locally like the sidecar, shipped through `extraResources`, not registered by
       default. Done when: the nightly build produces the exe and an unpacked local build contains it,
-      checked the way G13 checked the sidecar.
-- [ ] **G17-I2 — Enable and disable lab mode on a PC:** a "Habilitar modo laboratório" action (UAC,
+      checked the way G13 checked the sidecar. **Done 2026-10-01:** `lab-service/` builds with MSBuild
+      (Debug and Release); an unpacked `electron-builder --dir` build contains
+      `resources/lab-service/OpenPortalLabService.exe`, and its `--selftest` passes from there;
+      `nightly.yml` builds it and runs the self-test before packaging (the first proof in CI is the
+      next master build, G15-T2).
+- [x] **G17-I2 — Enable and disable lab mode on a PC:** a "Habilitar modo laboratório" action (UAC,
       the same elevated runner as RDP provisioning, nothing secret on a command line) that registers
       and starts the service with the owner SID (passed by the app, which knows its own user), enables
       RDP hosting if it is not (existing provisioning, with the firewall scope chosen in G16-D1), and
       switches on NTFS quota tracking and enforcement on the profile volume. "Desabilitar" stops and
       removes the service but keeps the students' data. A read-only check reports each part like
       `checkRdpHostingState`. Done when: tests cover script building (SID-based group, no secret in
-      the command line) and the check reports each part.
-- [ ] **G17-I3 — Local pipe API:** the server in the service and the client in
+      the command line) and the check reports each part. **Done 2026-10-01:** `lab-provisioning.js`
+      builds the elevated scripts (copy to Program Files with a closed ACL, SID-based RDP group,
+      firewall scope from G16-D1, quota track and enforce, a service that restarts itself); the
+      state check reports the service, Remote Desktop hosting, the pipe and the quota; the screen
+      has "Habilitar neste PC", "Reaplicar" and "Desabilitar" (refused during a reservation). The
+      tests parse the scripts with PowerShell without running them; the real run is G17-T2 step 8.
+- [x] **G17-I3 — Local pipe API:** the server in the service and the client in
       `src/main/lab/service-client.js`: owner-SID-only access, a per-request SID check, JSON lines,
       size limits, timeouts and error codes. Done when: tests with a fake pipe cover framing, limits
-      and timeouts, and a check shows an account other than the owner cannot connect.
-- [ ] **G17-I4 — Student accounts:** `student-create {label, quotaGb}` (name derivation and
+      and timeouts, and a check shows an account other than the owner cannot connect. **Done
+      2026-10-01:** `service-client.js` and the C# `PipeServer` (asynchronous, ACL for SYSTEM and the
+      owner, network access denied, a per-request SID check). `--pipe-test` raises the real pipe over
+      a fake Windows, so the app client talks to it for real; with another owner SID configured the
+      caller is refused (`unauthorized`). The same check against the installed SYSTEM service is
+      G17-T2 step 17.
+- [x] **G17-I4 — Student accounts:** `student-create {label, quotaGb}` (name derivation and
       collisions, standard user, RDP group by SID, disabled, profile created, quota set) and
       `student-delete` (log off if needed, delete the account, delete the profile folder, remove the
       quota entry; refused while a reservation is active). Done when: tests cover name derivation,
-      collisions and validation; real-PC checks follow G17-V1.
+      collisions and validation; real-PC checks follow G17-V1. **Done 2026-10-01** against the fake
+      Windows (create with rollback, collisions with Windows accounts and other students, delete
+      refused during a reservation); the real calls (NetApi32, `CreateProfile`, `icacls`, `fsutil`)
+      run in G17-T2 steps 9 and 18.
 - [ ] **G17-I5 — Disk quota:** default 25 GB, changeable per student, warning at 90%, usage per
       student; command building and output parsing in pure functions. Done when: tests cover both;
-      on a real PC a write beyond the limit fails.
-- [ ] **G17-I6 — Reservation engine:** `reserve {student, startWithinMs, sessionMs}` refuses while
+      on a real PC a write beyond the limit fails. **Status 2026-10-01:** command building and WMI
+      reading are pure functions with tests (`Quota.cs`); the write refused beyond the limit, and
+      what `student-delete` does to the quota entry (Windows has no command to remove it), are
+      G17-T2 steps 11 and 18.
+- [x] **G17-I6 — Reservation engine:** `reserve {student, startWithinMs, sessionMs}` refuses while
       another student is active (`busy`), disables every other student account, sets a new random
       password, enables the account, persists the deadlines and returns the password once; `extend`;
       an unused reservation expires; everything is persisted and re-applied at service start. Done
       when: fake-clock tests cover reserve, busy, expiry before the first sign-in, extension, a
-      restart in the middle, and that only one account is ever enabled.
+      restart in the middle, and that only one account is ever enabled. **Done 2026-10-01:** the
+      session clock starts at the first sign-in (before it, `endsAt` is the latest possible end); a
+      student seen leaving frees the PC after 15 s, but a reboot, where nobody left, does not: the
+      student can sign back in until the deadline.
 - [ ] **G17-I7 — Forced end:** the warning, the logoff of every session of the account, then the
       disable, on the deadline, on a manual end and on a hand-over; it checks that no session of the
       account is left. Done when: tests cover the sequence and timers with a fake Windows layer; on a
       real PC a student sitting in a session is logged off at the deadline and cannot sign in again.
+      **Status 2026-10-01:** the sequence and the timers are covered with the fake Windows (one
+      warning five minutes before, warn → disable → logoff → check, a stubborn session keeps the
+      reservation "ending" and the clock retries, a restart finishes it); the real logoff at the
+      deadline is G17-T2 steps 14 to 16.
 - [ ] **G17-I8 — Personal folder privacy and manager access:** `ensure-folder-access` gives the owner
       SID read access to the student's profile (inherited) and is re-applied after each session; the
       end-of-session cleanup of `C:\Users\Public`. Done when: on a real PC student A cannot open
       student B's folder, the app's account can read both, and a file left in Public is gone after the
-      session.
-- [ ] **G17-I9 — Disk info and capacity:** `disk-info` returns total, free and used-by-students for
+      session. **Status 2026-10-01:** `ensure-folder-access`, the owner's read grant (`icacls`,
+      reapplied after every session) and the Public cleanup (only what the student owns, never
+      through a link) are implemented and tested against the fake; privacy between two real
+      accounts and the real cleanup are G17-T2 steps 11, 13 and 15.
+- [x] **G17-I9 — Disk info and capacity:** `disk-info` returns total, free and used-by-students for
       the volume that holds `C:\Users`; a pure function computes the recommendation
       `floor((free − reserve) ÷ quota)` with a reserve of the larger of 20% of the disk and 20 GB,
       editable, plus the sum of the assigned quotas and a status (`ok`, `tight`, `over`). Done when:
       table-driven tests give 5 students for a 250 GB disk with 70 GB in use and 28 for a 1 TB disk
       (taken as 1000 GB) with 100 GB in use, at 25 GB each, and `over` when the quotas exceed what is
-      free minus the reserve.
+      free minus the reserve. **Done 2026-10-01** (`Capacity.cs`, answered by `disk-info`).
 
 ### Regression test
 
-- [ ] **G17-T1 — Suites:** all of the above in `npm test` with fake pipes, clocks and a fake Windows
-      layer; the service builds in CI; `npm run lint` at 0 errors. Done when: all three pass.
+- [x] **G17-T1 — Suites:** all of the above in `npm test` with fake pipes, clocks and a fake Windows
+      layer; the service builds in CI; `npm run lint` at 0 errors. Done when: all three pass. **Done
+      2026-10-01:** 48 service self-test cases (run by `npm test` on Windows and by the nightly job),
+      524 JS tests, lint 0 errors. `rdp-sidecar-binary.test.js` ("reproduces the stall") failed once
+      in eight full runs under load; it is an older timing test and not part of this series.
 - [ ] **G17-T2 — Two-PC acceptance `(manual)`:** on PC B, enable lab mode (UAC), add two students
       and reserve one through the pipe client or the screens of GOALS 18: sign in by RDP from PC A,
       download a file, see the quota refuse a write beyond the limit, see the warning and the logoff
@@ -2213,9 +2247,11 @@ Depends on GOALS 16 (managers and the app-side authorization). **Design.**
 
 ### Registration
 
-- [ ] **G17-R1 — Docs:** the service, its pipe, what needs administrator rights and why, the quota,
+- [x] **G17-R1 — Docs:** the service, its pipe, what needs administrator rights and why, the quota,
       the personal folder and its privacy, and the two-PC steps in `docs/ARQUITETURA_CONEXAO.md` and
-      block 7 of `docs/BATERIA_DE_TESTES.md`. Done when: both mention them, checked directly.
+      block 7 of `docs/BATERIA_DE_TESTES.md`. Done when: both mention them, checked directly. **Done
+      2026-10-01:** "Serviço do laboratório (GOALS 17)" in `docs/ARQUITETURA_CONEXAO.md` and steps 8
+      to 18 of block 7 in `docs/BATERIA_DE_TESTES.md`.
 
 ---
 

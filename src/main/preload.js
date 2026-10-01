@@ -66,6 +66,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
   getStartWithWindows: () => ipcRenderer.invoke('lab:getStartWithWindows'),
   setStartWithWindows: (enabled) => ipcRenderer.invoke('lab:setStartWithWindows', enabled),
+  getLabServiceState: () => ipcRenderer.invoke('lab:serviceState'),
+  enableLabService: (options) => ipcRenderer.invoke('lab:enableService', options),
+  disableLabService: () => ipcRenderer.invoke('lab:disableService'),
 
   getVersion: () => ipcRenderer.invoke('app:version'),
 

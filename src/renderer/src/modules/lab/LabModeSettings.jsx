@@ -1,6 +1,6 @@
-import { useContext, useEffect, useState } from 'react';
+import { useCallback, useContext, useEffect, useState } from 'react';
 import { MachineContext } from '../../App';
-import { isLabModeOn } from '../../shared/lib/lab';
+import { describeServiceState, isLabModeOn } from '../../shared/lib/lab';
 
 function Toggle({ on, onClick, disabled, children }) {
   return (
@@ -15,6 +15,104 @@ function Toggle({ on, onClick, disabled, children }) {
     >
       {children}
     </button>
+  );
+}
+
+// Habilita (com UAC) o serviço que cria as contas dos alunos, a cota de disco e os
+// prazos neste PC (GOALS 17). Só faz sentido nos PCs onde os alunos vão entrar.
+function ServiceSection() {
+  const { addLog } = useContext(MachineContext);
+  const [state, setState] = useState(null);
+  const [studentsOnSite, setStudentsOnSite] = useState(false);
+  const [working, setWorking] = useState(false);
+  const [message, setMessage] = useState(null);
+
+  const refresh = useCallback(() => {
+    window.electronAPI
+      ?.getLabServiceState?.()
+      .then(setState)
+      .catch(() => setState(null));
+  }, []);
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
+
+  const run = async (action, doing, done) => {
+    setWorking(true);
+    setMessage({ kind: 'info', text: doing });
+    try {
+      const result = await action();
+      setMessage(
+        result?.ok
+          ? { kind: 'info', text: done }
+          : { kind: 'error', text: result?.message || 'Não foi possível concluir' },
+      );
+      if (addLog) addLog(`Laboratório: ${result?.ok ? done : result?.message || 'falhou'}`);
+    } catch (err) {
+      setMessage({ kind: 'error', text: err.message });
+    } finally {
+      setWorking(false);
+      refresh();
+    }
+  };
+
+  const installed = state?.installed === true;
+  return (
+    <div className="mt-4 pt-4 border-t border-line-subtle">
+      <h4 className="text-sm font-medium text-text-secondary mb-1">Alunos neste PC</h4>
+      <p className="text-xs text-text-faint mb-2">
+        Habilita o serviço do laboratório (pede permissão de administrador): ele cria as contas dos
+        alunos, limita o disco de cada um e encerra a sessão no prazo. Faça isso só nos PCs onde os
+        alunos vão entrar. Estado: <strong>{describeServiceState(state)}</strong>
+      </p>
+      <label className="flex items-center gap-2 text-xs text-text-secondary mb-3">
+        <input
+          type="checkbox"
+          checked={studentsOnSite}
+          onChange={(e) => setStudentsOnSite(e.target.checked)}
+          disabled={working}
+        />
+        Os alunos estão na mesma rede deste PC (sala de aula): libera a porta do Remote Desktop
+        também para a rede local
+      </label>
+      <div className="flex items-center gap-2">
+        <button
+          onClick={() =>
+            run(
+              () => window.electronAPI.enableLabService({ studentsOnSite }),
+              'Aguardando a permissão de administrador...',
+              'Modo laboratório habilitado neste PC',
+            )
+          }
+          disabled={working}
+          className="px-4 py-2 text-sm rounded-lg border border-line text-text-secondary hover:border-accent hover:text-accent transition-colors disabled:opacity-50"
+        >
+          {installed ? 'Reaplicar' : 'Habilitar neste PC'}
+        </button>
+        {installed && (
+          <button
+            onClick={() =>
+              run(
+                () => window.electronAPI.disableLabService(),
+                'Aguardando a permissão de administrador...',
+                'Modo laboratório desabilitado neste PC (as contas dos alunos ficam, desativadas)',
+              )
+            }
+            disabled={working}
+            className="px-4 py-2 text-sm rounded-lg border border-danger/40 text-danger hover:opacity-80 transition-opacity disabled:opacity-50"
+          >
+            Desabilitar
+          </button>
+        )}
+      </div>
+      {message && (
+        <p
+          className={`text-xs mt-2 ${message.kind === 'error' ? 'text-danger' : 'text-text-secondary'}`}
+        >
+          {message.text}
+        </p>
+      )}
+    </div>
   );
 }
 
@@ -94,6 +192,7 @@ export default function LabModeSettings() {
           </p>
         </div>
       )}
+      {labOn && <ServiceSection />}
       {error && <p className="text-xs text-danger mt-2">{error}</p>}
     </div>
   );

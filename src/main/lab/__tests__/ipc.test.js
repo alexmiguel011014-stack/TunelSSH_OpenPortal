@@ -34,7 +34,12 @@ const entry = (state, extra = {}) => ({
   ...extra,
 });
 
-function handlersFor({ snapshot = [], store = memoryStore(), startWithWindows } = {}) {
+function handlersFor({
+  snapshot = [],
+  store = memoryStore(),
+  startWithWindows,
+  serviceControl,
+} = {}) {
   const manager = {
     snapshot: vi.fn(() => snapshot),
     enroll: vi.fn(async () => ({ ok: true })),
@@ -47,6 +52,11 @@ function handlersFor({ snapshot = [], store = memoryStore(), startWithWindows } 
     startWithWindows: startWithWindows ?? {
       get: () => ({ supported: false, enabled: false }),
       set: vi.fn(),
+    },
+    serviceControl: serviceControl ?? {
+      getState: vi.fn(async () => ({ installed: false, running: false })),
+      enable: vi.fn(async () => ({ ok: true })),
+      disable: vi.fn(async () => ({ ok: true })),
     },
     onHostChanged,
   });
@@ -75,6 +85,9 @@ describe('lab IPC surface', () => {
         'lab:hostChanged',
         'lab:getStartWithWindows',
         'lab:setStartWithWindows',
+        'lab:serviceState',
+        'lab:enableService',
+        'lab:disableService',
       ].sort(),
     );
     expect(new Set(Object.values(CHANNELS)).size).toBe(Object.values(CHANNELS).length);

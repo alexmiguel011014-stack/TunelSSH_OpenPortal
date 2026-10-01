@@ -3,6 +3,7 @@ import {
   LAB_STATE_LABELS,
   canOpenLabScreen,
   describeAddResult,
+  describeServiceState,
   describeManagers,
   describeRosterSummary,
   isLabModeOn,
@@ -101,6 +102,36 @@ describe('lab mode and summaries', () => {
       text: 'A pessoa no PC recusou o pedido',
     });
     expect(describeAddResult(undefined).kind).toBe('error');
+  });
+
+  it('describes the lab service on this PC', () => {
+    expect(describeServiceState(null)).toBe('Consultando...');
+    expect(describeServiceState({ installed: false })).toBe('Não habilitado neste PC');
+    expect(describeServiceState({ installed: true, running: false })).toBe('Instalado, mas parado');
+    expect(describeServiceState({ installed: true, running: true, reachable: false })).toBe(
+      'Rodando, mas não respondeu',
+    );
+    expect(
+      describeServiceState({ installed: true, running: true, reachable: true, studentCount: 1 }),
+    ).toBe('Funcionando · 1 aluno');
+    expect(
+      describeServiceState({
+        installed: true,
+        running: true,
+        reachable: true,
+        studentCount: 3,
+        quota: 'off',
+      }),
+    ).toBe('Funcionando · 3 alunos · cota de disco desligada');
+    expect(
+      describeServiceState({
+        installed: true,
+        running: true,
+        reachable: true,
+        studentCount: 0,
+        rdpHosting: false,
+      }),
+    ).toBe('Funcionando · 0 alunos · Remote Desktop desligado');
   });
 
   it('describes who manages the PC', () => {

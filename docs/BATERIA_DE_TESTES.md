@@ -138,7 +138,52 @@ aluno, cota, reservas, registro de acessos) entram neste mesmo bloco quando fore
    (decisão G16-D2). Reinicie o PC B.
    Esperado: sem ninguém mexer, o PC B volta e o PC A o mostra como **Livre**.
 
-Fecha: G16-T2, G16-I9 e G16-I11 (e, junto com o GOALS 17, G16-D1).
+### Serviço do laboratório e contas de aluno (GOALS 17, G17-T2)
+
+Antes de começar, no PC B: o app instalado ou aberto pelo `ABRIR_APP.bat` da pasta do branch, e o
+`lab-service/bin/Release/OpenPortalLabService.exe` compilado (`MSBuild lab-service/OpenPortalLabService.csproj
+-p:Configuration=Release`). Os comandos `node scripts/lab-pipe.js ...` rodam no PC B, na conta que roda o
+OpenPortal, dentro da pasta do projeto. Use cota de 1 GB para o teste ser rápido.
+
+8. No PC B, em **Configurações → Modo laboratório → Alunos neste PC**, clique em **Habilitar neste PC** e
+   aprove o pedido do Windows (UAC). Marque "Os alunos estão na mesma rede" só se for o caso.
+   Esperado: o estado muda para **Funcionando · 0 alunos**; `sc query OpenPortalLab` mostra RUNNING; o PC A
+   continua vendo o PC B como Livre.
+9. `node scripts/lab-pipe.js student-create '{"label":"Ana","quotaGb":1}'` e o mesmo para `João`.
+   Esperado: as contas `ana` e `joao` existem, **desativadas** (`net user ana`), e as pastas `C:\Users\ana` e
+   `C:\Users\joao` já existem. `node scripts/lab-pipe.js disk-info` mostra a recomendação de quantos alunos cabem.
+10. `node scripts/lab-pipe.js reserve '{"account":"ana","startWithinMs":600000,"sessionMs":3600000}'`: anote
+    `userName` e `password`. No PC A, `mstsc /v:<IP do PC B>` e entre com esse usuário e senha.
+    Esperado: a sessão abre; `node scripts/lab-pipe.js status` no PC B mostra o PC **em uso** pela Ana.
+11. Na sessão da Ana: copie para Documentos um arquivo maior que 1 GB (ou baixe um) e deixe um arquivo em
+    `C:\Users\Public`. Tente abrir `C:\Users\joao`.
+    Esperado: o Windows recusa a gravação acima do limite; `C:\Users\joao` dá acesso negado.
+12. Com a Ana ativa, rode `reserve` para o João.
+    Esperado: erro `busy`, dizendo que a Ana está com o PC e até quando; a conta `joao` continua desativada.
+13. Na conta do dono do app no PC B (outra sessão do Windows, ou depois de a Ana sair), abra `C:\Users\ana`.
+    Esperado: lê os arquivos (a leitura do dono é do serviço), mas não consegue gravar.
+14. **Prazo:** encerre a sessão da Ana (`end` com `manager-ended`) e reserve de novo com
+    `"startWithinMs":600000,"sessionMs":360000` (6 minutos). Entre pelo PC A.
+    Esperado: cerca de 1 minuto depois da entrada aparece o aviso "termina em 1 minuto(s)"; no fim a sessão é
+    **encerrada** (não apenas desconectada); entrar de novo mostra o erro genérico de autenticação; o arquivo
+    que ela deixou em `C:\Users\Public` sumiu.
+15. **Troca de aluno:** reserve para a Ana, entre, e depois `end` com `manager-handover` e `reserve` para o João.
+    Esperado: a Ana recebe o aviso e é desconectada; o João recebe uma senha nova; a senha da Ana não entra
+    mais; a Ana não lê a pasta do João e o João não lê a da Ana.
+16. **Reinício no meio:** reserve (60 min), entre, e reinicie o PC B.
+    Esperado: depois que o PC B volta, o serviço está rodando, a reserva continua (`status`) e o aluno consegue
+    entrar de novo com a mesma senha até o prazo; no prazo o serviço encerra e desativa a conta.
+17. **Pipe fechado a outras contas:** numa conta comum diferente da do app, rode `node scripts/lab-pipe.js status`.
+    Esperado: erro `unauthorized`.
+18. `node scripts/lab-pipe.js student-delete '{"account":"joao"}'` e, depois, **Desabilitar** nas Configurações
+    (primeiro com uma reserva ativa, depois sem). Esperado: a conta, a pasta e a entrada de cota do `joao`
+    somem; desabilitar é recusado com reserva ativa; sem reserva o UAC abre, o serviço é removido e as contas
+    que restaram ficam desativadas, com os dados.
+
+Anote o que a cota e o `student-delete` fizeram de verdade (o Windows não tem um comando para apagar a entrada
+de cota de um usuário), e o conteúdo de `C:\ProgramData\OpenPortal\lab\service.log` se algo falhar.
+
+Fecha: G16-T2, G16-I9 e G16-I11 (passos 1 a 7) e G17-T2 (passos 8 a 18); o passo 8, com a opção de rede escolhida, fecha também o G16-D1.
 
 ## Fora desta bateria
 

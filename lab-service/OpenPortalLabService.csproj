@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Serviço do modo laboratório (GOALS 17). Mesmo formato clássico do sidecar RDP
+  (sidecar/OpenPortalRdpSidecar.csproj): .NET Framework 4.8, sem pacote NuGet, e
+  o MSBuild das Build Tools do Visual Studio. Executável de console de propósito:
+  roda como serviço do Windows (LocalSystem) e também nos modos selftest, probe e
+  console, chamados pelo terminal.
+-->
+<Project ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup>
+    <Configuration Condition=" '$(Configuration)' == '' ">Debug</Configuration>
+    <Platform Condition=" '$(Platform)' == '' ">AnyCPU</Platform>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>OpenPortalLab</RootNamespace>
+    <AssemblyName>OpenPortalLabService</AssemblyName>
+    <TargetFrameworkVersion>v4.8</TargetFrameworkVersion>
+    <FileAlignment>512</FileAlignment>
+    <Deterministic>true</Deterministic>
+    <LangVersion>7.3</LangVersion>
+  </PropertyGroup>
+  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' ">
+    <DebugSymbols>true</DebugSymbols>
+    <DebugType>full</DebugType>
+    <Optimize>false</Optimize>
+    <OutputPath>bin\Debug\</OutputPath>
+    <DefineConstants>DEBUG;TRACE</DefineConstants>
+    <ErrorReport>prompt</ErrorReport>
+    <WarningLevel>4</WarningLevel>
+  </PropertyGroup>
+  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Release|AnyCPU' ">
+    <Optimize>true</Optimize>
+    <OutputPath>bin\Release\</OutputPath>
+    <DefineConstants>TRACE</DefineConstants>
+    <ErrorReport>prompt</ErrorReport>
+    <WarningLevel>4</WarningLevel>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="System" />
+    <Reference Include="System.Core" />
+    <Reference Include="System.Management" />
+    <Reference Include="System.ServiceProcess" />
+    <!-- JavaScriptSerializer: mesmo parser JSON simples do sidecar. -->
+    <Reference Include="System.Web.Extensions" />
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Include="Program.cs" />
+    <Compile Include="Core\Capacity.cs" />
+    <Compile Include="Core\Clock.cs" />
+    <Compile Include="Core\Engine.cs" />
+    <Compile Include="Core\IWindows.cs" />
+    <Compile Include="Core\Json.cs" />
+    <Compile Include="Core\Log.cs" />
+    <Compile Include="Core\Names.cs" />
+    <Compile Include="Core\Passwords.cs" />
+    <Compile Include="Core\Quota.cs" />
+    <Compile Include="Core\Protocol.cs" />
+    <Compile Include="Core\State.cs" />
+    <Compile Include="Windows\LabService.cs" />
+    <Compile Include="Windows\Native.cs" />
+    <Compile Include="Windows\PipeServer.cs" />
+    <Compile Include="Windows\WindowsApi.cs" />
+    <Compile Include="Tests\FakeWindows.cs" />
+    <Compile Include="Tests\PipeHarness.cs" />
+    <Compile Include="Tests\SelfTest.cs" />
+  </ItemGroup>
+  <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
+</Project>

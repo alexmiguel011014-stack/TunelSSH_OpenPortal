@@ -625,12 +625,84 @@ a opção vem desligada por padrão.
 
 `lab:roster`, `lab:add`, `lab:remove`, `lab:status` (assinatura de eventos), `lab:open`
 (GOALS 16 I8); `lab:managers` e `lab:removeManager` (cartão "Este PC é gerenciado");
-`lab:getStartWithWindows` e `lab:setStartWithWindows` ("Iniciar com o Windows"). Dois
+`lab:getStartWithWindows` e `lab:setStartWithWindows` ("Iniciar com o Windows");
+`lab:serviceState`, `lab:enableService` e `lab:disableService` (habilitar o serviço do laboratório neste
+PC, com UAC; um por vez). Dois
 canais só empurram dados do main para a tela: `lab:status` (a lista de PCs, quando algo que
 ela mostra muda) e `lab:hostChanged` (os gerentes deste PC ou o modo mudaram). Cada
 handler valida a entrada; nenhum devolve segredo ao renderer. `lab:open` devolve só o
 necessário para pedir acesso pelo fluxo normal (nome, IP e porta) e recusa PC em uso,
 Offline, Incompatível ou Sem acesso.
+
+**Serviço do laboratório (GOALS 17)**
+
+Um serviço do Windows em C# (`lab-service/`, .NET Framework 4.8, `OpenPortalLabService.exe`) que roda
+como LocalSystem **só nos PCs onde o dono ligou o modo laboratório** e **nunca escuta na rede**: fala
+apenas com o app, por um pipe local. Ele faz tudo o que pede direitos de administrador: contas de aluno,
+cota de disco, pasta pessoal e fim forçado da sessão.
+
+- **Habilitar / desabilitar:** Configurações → Modo laboratório → "Habilitar neste PC" (UAC). O script
+  elevado copia o executável para `C:\Program Files\OpenPortal Lab\` (pasta que só administradores
+  alteram: um serviço LocalSystem nunca roda de uma pasta onde um usuário comum possa trocá-lo), grava
+  `%ProgramData%\OpenPortal\lab\service.json` (SID do dono e volume), liga a hospedagem RDP com o escopo de
+  firewall escolhido (G16-D1: faixa do Tailscale; com "alunos na mesma rede", também a sub-rede local),
+  liga a cota de disco do volume (`fsutil quota track` e `enforce`) e registra o serviço (reinício
+  automático se cair). "Desabilitar" para e remove o serviço, **desativa** as contas dos alunos e **mantém**
+  contas, perfis e `state.json`; é recusado enquanto houver uma reserva em andamento.
+- **O pipe `\\.\pipe\OpenPortalLab`:** assíncrono, aberto só a SYSTEM e ao SID do dono, com acesso pela rede
+  negado de forma explícita; além da ACL, cada pedido confere o SID de quem chamou. Uma conexão, um pedido
+  (uma linha JSON ≤ 4 KiB), uma resposta (uma linha ≤ 256 KiB). Comandos fixos, cada campo validado antes
+  do motor: o texto do pedido nunca vira nome de conta, caminho ou argumento de comando.
+
+| Comando                | Campos                                              | Resposta                                                            |
+| ---------------------- | --------------------------------------------------- | ------------------------------------------------------------------- |
+| `status`               | —                                                   | `state`, `students[]`, `studentCount`, `reservation?`, `quota`, `disk` |
+| `disk-info`            | `reserveGb?`, `quotaGb?`                            | total, livre, ocupado pelos alunos, `recommended`, `assignedGb`, `status` |
+| `student-create`       | `label` (1–40), `quotaGb` (1–2000)                  | `account`, `label`, `quotaGb`, `state`                              |
+| `student-delete`       | `account`                                           | `account` (recusado com `busy` se a reserva é dele)                 |
+| `student-set-quota`    | `account`, `quotaGb`                                | o aluno                                                             |
+| `reserve`              | `account`, `startWithinMs`, `sessionMs`             | `reservationId`, `userName`, `password` (só aqui), `startBy`, `endsAt` |
+| `extend`               | `reservationId`, `addMs`                            | `endsAt`                                                            |
+| `end`                  | `reservationId`, `reason` (`manager-ended` / `manager-handover`) | `ended`                                                |
+| `ensure-folder-access` | `account`                                           | `account`                                                           |
+| `events`               | —                                                   | `unsupported` até o GOALS 19                                        |
+
+- **Contas de aluno:** usuário comum, no grupo "Remote Desktop Users" (achado pelo SID), nunca administrador,
+  senha obrigatória, **desabilitada** enquanto não houver reserva. O nome vem do nome de exibição (ASCII
+  minúsculo, até 12 caracteres, único, nunca igual a uma conta que já existe). O serviço só mexe em contas que
+  ele mesmo criou (a lista está em `state.json`).
+- **Cota:** NTFS por usuário, no volume dos perfis, 25 GB por padrão, aviso em 90 %. A cota cobre tudo que a
+  conta possui no volume, não uma pasta. O serviço não liga a cota sozinho: se ela estiver desligada, criar
+  aluno falha de forma visível. O estado aparece em `status.quota`.
+- **Reserva (nunca dois ao mesmo tempo):** `reserve` recusa com `busy` (dizendo quem e até quando) se já há
+  reserva; senão desabilita qualquer outra conta de aluno, troca a senha por uma aleatória de 16 caracteres,
+  habilita a conta e devolve a senha **uma única vez** (ela não é gravada nem aparece em `status`, log ou
+  `lab-status`). O prazo para começar (`startWithinMs`) é contado desde a reserva; a duração (`sessionMs`)
+  conta desde a **primeira entrada** do aluno. Antes da entrada, `endsAt` é o último fim possível.
+- **Fim da sessão:** aviso (caixa de mensagem na sessão do aluno) 5 minutos antes; no prazo, em "Encerrar
+  agora", na troca de aluno, quando o aluno sai (após 15 s) ou quando a reserva não foi usada: aviso (nas
+  trocas manuais), conta desabilitada, **logoff** de todas as sessões da conta (desconectar não basta: a mesma
+  conta voltaria à sessão), conferência de que não sobrou sessão e só então a reserva acaba. Se uma sessão
+  não sai, a reserva fica "encerrando" e o relógio tenta de novo a cada 10 s; `lab-reserve` não passa por
+  cima. Os prazos sobrevivem a um reinício do serviço (estado em `state.json`).
+- **Pasta pessoal e privacidade:** é a pasta de perfil do Windows da conta, criada pelo serviço ao adicionar o
+  aluno. O Windows a mantém privada (dono, SYSTEM e administradores); o serviço acrescenta **leitura** para o
+  SID do dono do app (é assim que o gerente vê os arquivos) e a reaplica ao fim de cada sessão, porque o aluno
+  é dono do que cria e poderia retirá-la. Ao fim da sessão o serviço apaga o que o aluno deixou em
+  `C:\Users\Public`, sem nunca atravessar um ponto de reparse (junção/link) e só o que pertence a ele.
+- **Capacidade:** `floor((livre − reserva) ÷ cota)`, reserva = o maior entre 20 % do disco e 20 GB
+  (editável); `status` `ok` / `tight` (não cabe mais um aluno na cota padrão) / `over` (as cotas somadas
+  passam do livre menos a reserva). É uma recomendação e um aviso, nunca um bloqueio.
+- **Testes e diagnóstico (sem alterar o Windows):** `OpenPortalLabService.exe --selftest` roda o motor contra
+  um Windows falso e imprime um JSON (o `npm test` e o CI chamam isso); `--probe` só lê o estado real;
+  `--pipe-test <nome> self` sobe o pipe de verdade sobre o Windows falso (o teste do app fala com ele);
+  `node scripts/lab-pipe.js <comando> '<json>'` fala com o serviço instalado. O registro do serviço fica em
+  `%ProgramData%\OpenPortal\lab\service.log`.
+- **Observações do teste real (G17-V1):** desabilitar uma conta não derruba a sessão aberta; o limite de
+  tempo por usuário (ADSI) não existe para contas locais, então o relógio é do próprio serviço; a caixa de
+  aviso só aparece quando enviada sem esperar a resposta; uma conta desabilitada ou inexistente mostra o erro
+  genérico "erro de autenticação... a senha pode ter expirado" — por isso a mensagem de credenciais (GOALS 18)
+  explica que esse erro, depois do horário, significa acesso encerrado.
 
 **Fora do escopo:** monitoramento de apps e downloads; bloqueio de área de transferência ou
 de unidades no RDP; alunos trocando de PC; armazenamento central de arquivos; fila de

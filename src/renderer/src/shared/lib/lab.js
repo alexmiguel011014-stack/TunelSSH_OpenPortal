@@ -96,6 +96,19 @@ export function describeAddResult(result) {
   };
 }
 
+// Estado do serviço do laboratório neste PC (Configurações → Modo laboratório).
+export function describeServiceState(state) {
+  if (!state) return 'Consultando...';
+  if (!state.installed) return 'Não habilitado neste PC';
+  if (!state.running) return 'Instalado, mas parado';
+  if (!state.reachable) return 'Rodando, mas não respondeu';
+  const count = state.studentCount || 0;
+  const students = count === 1 ? '1 aluno' : `${count} alunos`;
+  const quota = state.quota === 'off' ? ' · cota de disco desligada' : '';
+  const rdp = state.rdpHosting === false ? ' · Remote Desktop desligado' : '';
+  return `Funcionando · ${students}${quota}${rdp}`;
+}
+
 // Lista de gerentes para o cartão "Este PC é gerenciado".
 export function describeManagers(managers) {
   const list = Array.isArray(managers) ? managers : [];

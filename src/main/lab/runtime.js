@@ -12,6 +12,9 @@ const { createLabHost } = require('./host');
 const { CHANNELS, createLabIpcHandlers, registerLabIpc } = require('./ipc');
 const { createStartWithWindows } = require('./login-item');
 const { createLabManager } = require('./manager');
+const { createServiceClient } = require('./service-client');
+const { createServiceControl, resolveServiceExe } = require('./service-control');
+const labProvisioning = require('../system/lab-provisioning');
 
 function createLabRuntime({
   app,
@@ -25,6 +28,12 @@ function createLabRuntime({
   hostName,
   sendRequest = sendLabRequest,
   isPackaged = false,
+  serviceControl = createServiceControl({
+    client: createServiceClient(),
+    provisioning: labProvisioning,
+    serviceSource: resolveServiceExe(),
+    log: (message) => console.log(`[lab] ${message}`),
+  }),
   log = (message) => console.log(`[lab] ${message}`),
 }) {
   const send = (channel, data) => {
@@ -44,6 +53,8 @@ function createLabRuntime({
     store,
     askEnrollment: createEnrollmentDialog({ showDialog, drawAttention }),
     info: { hostName, appVersion: () => app.getVersion() },
+    // O que o serviço sabe (estado do PC, aluno, disco) entra no lab-status.
+    getStatusInput: () => serviceControl.hostStatusInput(),
     onEnrolled: notifyHostChanged,
     log,
   });
@@ -60,6 +71,7 @@ function createLabRuntime({
     manager,
     store,
     startWithWindows: createStartWithWindows({ app, isPackaged }),
+    serviceControl,
     onHostChanged: notifyHostChanged,
   });
   registerLabIpc({ ipcMain, handlers });

@@ -75,10 +75,15 @@ function createLabHost(deps) {
     };
   }
 
-  function status() {
+  async function status() {
+    // O serviço pode estar parado ou lento: isso nunca impede o PC de responder.
+    let fromService = {};
+    try {
+      fromService = (await getStatusInput()) || {};
+    } catch {}
     // Lista de permitidos: o que o serviço/GOALS 18 devolver além disto não passa.
     const payload = protocol.statusPayload({
-      ...getStatusInput(),
+      ...fromService,
       ...hostIdentity(),
       managed: store.getLab().managed,
     });
@@ -203,7 +208,7 @@ function createLabHost(deps) {
           'Recurso ainda não disponível neste PC',
         );
       }
-      if (request.type === 'lab-status') return status();
+      if (request.type === 'lab-status') return await status();
       return protocol.buildError(
         request.type,
         'unsupported',

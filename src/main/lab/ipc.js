@@ -16,6 +16,9 @@ const CHANNELS = Object.freeze({
   hostChanged: 'lab:hostChanged', // main → renderer: gerentes ou modo mudaram
   getStartWithWindows: 'lab:getStartWithWindows',
   setStartWithWindows: 'lab:setStartWithWindows',
+  serviceState: 'lab:serviceState',
+  enableService: 'lab:enableService',
+  disableService: 'lab:disableService',
 });
 
 // Os canais que o renderer chama (invoke); os outros só empurram dados.
@@ -28,6 +31,9 @@ const INVOKE_CHANNELS = Object.freeze([
   CHANNELS.removeManager,
   CHANNELS.getStartWithWindows,
   CHANNELS.setStartWithWindows,
+  CHANNELS.serviceState,
+  CHANNELS.enableService,
+  CHANNELS.disableService,
 ]);
 const PUSH_CHANNELS = Object.freeze([CHANNELS.status, CHANNELS.hostChanged]);
 
@@ -55,7 +61,27 @@ function hostState(store) {
   return { mode: lab.mode, managed: lab.managed, managers: lab.managers };
 }
 
-function createLabIpcHandlers({ manager, store, startWithWindows, onHostChanged = () => {} }) {
+function createLabIpcHandlers({
+  manager,
+  store,
+  startWithWindows,
+  serviceControl,
+  onHostChanged = () => {},
+}) {
+  // Ligar ou desligar abre um pedido de administrador (UAC): um por vez.
+  let changingService = false;
+  const exclusive = async (operation) => {
+    if (changingService) {
+      return { ok: false, error: 'busy', message: 'Há outra alteração em andamento' };
+    }
+    changingService = true;
+    try {
+      return await operation();
+    } finally {
+      changingService = false;
+    }
+  };
+
   return {
     [CHANNELS.roster]: () => manager.snapshot(),
 
@@ -109,6 +135,18 @@ function createLabIpcHandlers({ manager, store, startWithWindows, onHostChanged 
       if (typeof enabled !== 'boolean') return badRequest();
       return startWithWindows.set(enabled);
     },
+
+    [CHANNELS.serviceState]: () => serviceControl.getState(),
+
+    [CHANNELS.enableService]: (options) => {
+      if (options !== undefined && options !== null && typeof options !== 'object')
+        return badRequest();
+      const studentsOnSite = options?.studentsOnSite;
+      if (studentsOnSite !== undefined && typeof studentsOnSite !== 'boolean') return badRequest();
+      return exclusive(() => serviceControl.enable({ studentsOnSite: studentsOnSite === true }));
+    },
+
+    [CHANNELS.disableService]: () => exclusive(() => serviceControl.disable()),
   };
 }
 
