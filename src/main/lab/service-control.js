@@ -7,7 +7,9 @@
 // PowerShell, UAC nem do serviço.
 
 const fs = require('fs');
-const path = require('path');
+// O serviço só existe no Windows: os caminhos são sempre de Windows, também nos testes que
+// rodam em Linux (CI).
+const path = require('path').win32;
 
 const SERVICE_EXE = 'OpenPortalLabService.exe';
 const READY_TIMEOUT_MS = 20_000;
