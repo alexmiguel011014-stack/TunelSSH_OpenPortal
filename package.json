@@ -8,7 +8,7 @@
     "dev:renderer": "vite --config src/renderer/vite.config.js --host 127.0.0.1",
     "dev:electron": "cross-env NODE_ENV=development electron .",
     "dev:electron:watch": "nodemon --watch src/main --ext js,json --exec \"cross-env NODE_ENV=development electron .\"",
-    "build": "vite build --config src/renderer/vite.config.js",
+    "build": "node scripts/write-auth-config.js && vite build --config src/renderer/vite.config.js",
     "pack": "npm run build && electron-builder --dir",
     "dist": "npm run build && electron-builder",
     "lint": "eslint .",
@@ -18,11 +18,13 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.118.0",
     "electron-updater": "^6.8.9",
     "lucide-react": "^1.31.0",
     "ws": "^8.18.0"
   },
   "devDependencies": {
+    "@electric-sql/pglite": "^0.5.11",
     "@eslint/js": "^9.39.5",
     "@vitejs/plugin-react": "^4.3.0",
     "autoprefixer": "^10.4.20",

@@ -15,6 +15,10 @@ Thumbs.db
 resources/cert.pfx
 resources/cert.cer
 
+# Contas (GOALS 20): endereço e chave pública do Supabase deste build, gerados por
+# scripts/write-auth-config.js a partir de SUPABASE_URL / SUPABASE_PUBLISHABLE_KEY
+src/main/auth/auth-config.json
+
 # Token economy (base_project)
 external/
 

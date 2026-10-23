@@ -1,6 +1,7 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App';
+import AuthGate from './modules/auth/AuthGate';
 import './tokens.css';
 import './index.css';
 
@@ -31,7 +32,9 @@ window.addEventListener('unhandledrejection', (e) => {
 try {
   ReactDOM.createRoot(root).render(
     <React.StrictMode>
-      <App />
+      <AuthGate>
+        <App />
+      </AuthGate>
     </React.StrictMode>
   );
 } catch (err) {

@@ -254,6 +254,65 @@ PC A (`tailscale ip -4`).
 Fecha: G19-T2 (passos 29 a 33), G19-I3 (a entrada real com o endereço do PC A) e G19-I8 (o CSV abre certo na
 planilha).
 
+## 8. Contas e Meu acesso (GOALS 20 e 21, G20-T2 e G21-T2)
+
+Precisa do projeto Supabase pronto (`docs/SUPABASE.md`, passos 1 a 4), do app **instalado** de um build
+gerado com `SUPABASE_URL` e `SUPABASE_PUBLISHABLE_KEY`, de um e-mail do Gmail e de um terceiro Windows (ou
+um segundo usuário do Windows no PC A) para o aluno. Os passos 1 a 14 fecham o G20-T2; os 15 a 22, o G21-T2.
+
+1. **Aluno:** na tela de entrada clique em **Criar conta**, escolha **Aluno**, use o e-mail do Gmail e uma
+   senha com letras e números. Esperado: chega um código de 6 números na **caixa de entrada** (não no spam)
+   em até 1 minuto; digitar o código entra no app na tela **Meu acesso**; a barra lateral mostra o nome e
+   "Aluno" e **não** mostra Atividade, Laboratório, Arquivos nem a lista de PCs.
+2. Sair (ícone ao lado do nome) e **Entrar** com a conta; depois com a senha errada e com um e-mail que
+   não existe. Esperado: as duas recusas mostram exatamente "E-mail ou senha incorretos."
+3. **Esqueci minha senha** com o e-mail do aluno. Esperado: chega um código; com o código e uma senha
+   nova entra no app; sair e entrar com a senha nova funciona, com a antiga não.
+4. **Professor:** crie outra conta escolhendo **Professor**. Esperado: entra como aluno, com o aviso "aguardando
+   aprovação" e o papel "Professor — aguardando aprovação".
+5. Com a sua conta já promovida (SUPABASE.md, passo 4), abra **Aprovações**. Esperado: o pedido do passo 4
+   aparece com nome e e-mail e a barra lateral mostra o contador. **Aprovar** pede confirmação na linha.
+6. Esperado em até 1 minuto, **sem reabrir o app**: a conta pendente do passo 4 vira **Professor** e passa a
+   ver Atividade, Arquivos e Laboratório.
+7. Peça outro cadastro de professor e use **Recusar**. Esperado: a conta continua aluno e o pedido some.
+8. **Sem conta:** na tela de entrada use "Usar sem conta (só este PC)". Esperado: só **Início** e
+   **Configurações**; a tela inicial mostra o cartão deste PC e a nota "sem conta".
+9. **Reinício:** feche e abra o app com a sessão do professor. Esperado: entra direto, sem pedir a senha.
+10. **Sem rede:** desligue a internet (sem fechar o Tailscale) e reabra o app. Esperado: abre em até uns 10 s
+    com o papel de antes e o aviso "Sem conexão com o servidor de contas"; ao religar a internet o aviso some
+    em até 1 minuto.
+11. **Segredo no disco:** abra `%APPDATA%\openportal-remote\auth-session.json` num editor. Esperado: não há
+    nenhum token legível (só texto cifrado).
+12. **Um PC de laboratório continua hospedando:** com o PC B em "Usar sem conta" (ou parado na tela de
+    entrada), o PC A ainda o vê como **Livre**, abre a tela dele e reserva alunos.
+13. **Painel do Supabase:** em **Authentication → Users** estão as contas; em **Table Editor → profiles** cada
+    uma com o papel certo. Em **Advisors → Security Advisor**: nenhum aviso de RLS.
+14. **Keep-alive:** em **Actions → Supabase keep-alive → Run workflow**. Esperado: termina verde.
+
+Fecha: G20-T2 (passos 1 a 13), G20-K1 (passo 14), G20-P1, G20-P2 e G20-S3 (a base toda dos passos acima).
+
+15. No PC A (professor), em **Laboratório → Alunos** do PC B, clique em **Vincular conta** no aluno Ana e
+    escolha a conta de aluno do passo 1. Esperado: a linha da Ana mostra o e-mail e "Trocar conta" e
+    "Desvincular". A conta de um aluno de que o professor ainda não tem o e-mail aparece pela busca por nome.
+16. No terceiro Windows, entre no app com a conta da Ana. Esperado: **Meu acesso** diz "Nenhum acesso
+    liberado agora. Peça ao professor."
+17. No PC A, **Reservar** o PC B para a Ana. Esperado: a janela das credenciais mostra "Enviado para o app de
+    Ana" e o **Meu acesso** da Ana mostra o cartão em poucos segundos, com PC, endereço, usuário, a senha
+    oculta e os horários.
+18. No app da Ana, **Abrir Área de Trabalho Remota**. Esperado: o `mstsc.exe` abre com o endereço e o usuário
+    já preenchidos e **sem** senha; **Copiar senha** e colar no Windows entra no PC B; um minuto depois da
+    cópia a área de transferência já não tem a senha.
+19. No PC A, **Estender** a sessão. Esperado: o horário "Válido até" da Ana muda em poucos segundos.
+20. **Trocar aluno** para o João (vinculado a outra conta de aluno). Esperado: o cartão da Ana some e o do
+    João aparece, cada um só no app do dono; a senha de antes não entra mais.
+21. Deixe o tempo do João acabar (ou use **Encerrar agora**). Esperado: o cartão some no horário; em
+    **Table Editor → lab_handovers** a linha some em até 10 minutos (a limpeza do pg_cron) ou na hora do
+    encerramento. Nenhuma linha antiga com senha sobra.
+22. No PC A, sem acesso ao Supabase (desligue a internet só nele), reserve o PC para a Ana. Esperado: a
+    reserva funciona e a janela diz "Não foi enviado ao app do aluno (…) — use Copiar mensagem".
+
+Fecha: G21-T2 (passos 15 a 22).
+
 ## Fora desta bateria
 
 - **GOALS 3** precisa de três logins Tailscale diferentes e dois PCs.

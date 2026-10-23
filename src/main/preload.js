@@ -90,6 +90,39 @@ contextBridge.exposeInMainWorld('electronAPI', {
     return () => ipcRenderer.removeListener('lab:logChanged', handler);
   },
 
+  // Contas (GOALS 20) — o estado vem do processo principal; nenhuma função devolve token.
+  getAuthState: () => ipcRenderer.invoke('auth:getState'),
+  onAuthState: (callback) => {
+    const handler = (_, state) => callback(state);
+    ipcRenderer.on('auth:state', handler);
+    return () => ipcRenderer.removeListener('auth:state', handler);
+  },
+  authSignUp: (payload) => ipcRenderer.invoke('auth:signUp', payload),
+  authVerifyCode: (payload) => ipcRenderer.invoke('auth:verifyCode', payload),
+  authResendCode: (payload) => ipcRenderer.invoke('auth:resendCode', payload),
+  authSignIn: (payload) => ipcRenderer.invoke('auth:signIn', payload),
+  authSignOut: () => ipcRenderer.invoke('auth:signOut'),
+  authResetRequest: (payload) => ipcRenderer.invoke('auth:resetRequest', payload),
+  authResetConfirm: (payload) => ipcRenderer.invoke('auth:resetConfirm', payload),
+  authUseWithoutAccount: () => ipcRenderer.invoke('auth:noAccount'),
+  getTeacherRequests: () => ipcRenderer.invoke('auth:teacherRequests'),
+  decideTeacherRequest: (payload) => ipcRenderer.invoke('auth:decideTeacher', payload),
+
+  // "Meu acesso" e vínculos aluno–conta (GOALS 21). Só `getMyAccess` e o evento trazem a senha do
+  // aluno, e só para o próprio aluno; "Copiar senha" e "Abrir" passam pelo processo principal.
+  searchStudentAccounts: (query) => ipcRenderer.invoke('access:searchStudents', query),
+  getLabLinks: (hostId) => ipcRenderer.invoke('access:links', hostId),
+  linkLabStudent: (payload) => ipcRenderer.invoke('access:link', payload),
+  unlinkLabStudent: (payload) => ipcRenderer.invoke('access:unlink', payload),
+  getMyAccess: () => ipcRenderer.invoke('access:mine'),
+  onMyAccessChanged: (callback) => {
+    const handler = (_, access) => callback(access);
+    ipcRenderer.on('access:mineChanged', handler);
+    return () => ipcRenderer.removeListener('access:mineChanged', handler);
+  },
+  openMyAccessRdp: () => ipcRenderer.invoke('access:openRdp'),
+  copyMyAccessPassword: () => ipcRenderer.invoke('access:copyPassword'),
+
   getVersion: () => ipcRenderer.invoke('app:version'),
 
   // Server/Agent status

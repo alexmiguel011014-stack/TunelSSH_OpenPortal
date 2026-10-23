@@ -8,6 +8,11 @@ import FileExplorer from './modules/file-transfer/FileExplorer';
 import ActivityPanel from './modules/activity/ActivityPanel';
 import Dashboard from './modules/dashboard/Dashboard';
 import LabPanel from './modules/lab/LabPanel';
+import AccountBanner from './modules/auth/AccountBanner';
+import ApprovalsPanel from './modules/auth/ApprovalsPanel';
+import { useAuth } from './modules/auth/AuthContext';
+import MyAccessPanel from './modules/access/MyAccessPanel';
+import { canSee, landingScreen } from './shared/lib/accounts';
 import { isLabModeOn } from './shared/lib/lab';
 import {
   connectMachineEntry,
@@ -49,6 +54,8 @@ function genId(existingMachines) {
 }
 
 export default function App() {
+  // Quem entrou (GOALS 20): decide quais telas existem. O AuthGate só monta o App depois disso.
+  const { account } = useAuth();
   const [machines, setMachines] = useState(DEFAULT_MACHINES);
   // Mapa de máquinas conectadas (id -> { machine, ftSessionId }). Trocar de
   // foco não mexe aqui — só desconectar remove uma entrada. Ver
@@ -60,6 +67,9 @@ export default function App() {
   const [showFiles, setShowFiles] = useState(false);
   const [showActivity, setShowActivity] = useState(false);
   const [showLab, setShowLab] = useState(false);
+  const [showApprovals, setShowApprovals] = useState(false);
+  // O aluno abre em "Meu acesso" (GOALS 21); os outros na tela inicial.
+  const [showAccess, setShowAccess] = useState(() => landingScreen(account) === 'access');
   // Modo laboratório (GOALS 16): { mode, managed, managers } deste PC.
   const [labHost, setLabHost] = useState({ mode: false, managed: false, managers: [] });
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -144,7 +154,9 @@ export default function App() {
 
   const labMode = isLabModeOn(labHost);
   // Com o modo laboratório desligado a tela não aparece, mesmo que tenha ficado aberta.
-  const labVisible = showLab && labMode;
+  const labVisible = showLab && labMode && canSee(account, 'lab');
+  const approvalsVisible = showApprovals && canSee(account, 'approvals');
+  const accessVisible = showAccess && canSee(account, 'access');
 
   useEffect(() => {
     const handleTransportStatus = (status) => {
@@ -251,6 +263,8 @@ export default function App() {
         setShowConfig(false);
         setShowFiles(false);
         setShowLab(false);
+        setShowApprovals(false);
+        setShowAccess(false);
         setFocusedMachineId(machine.id);
         return { ok: true };
       }
@@ -258,6 +272,8 @@ export default function App() {
         setShowConfig(false);
         setShowFiles(false);
         setShowLab(false);
+        setShowApprovals(false);
+        setShowAccess(false);
       }
       setStatuses((prev) => ({ ...prev, [machine.id]: 'requesting-access' }));
       addLog(`Solicitando conexão a ${machine.name} (${machine.host})...`);
@@ -315,6 +331,8 @@ export default function App() {
         setShowConfig(false);
         setShowFiles(false);
         setShowLab(false);
+        setShowApprovals(false);
+        setShowAccess(false);
         setStatuses((prev) => ({ ...prev, [machine.id]: 'opening-vnc' }));
         setConnectedMachines((prev) =>
           connectMachineEntry(prev, machine, {
@@ -462,6 +480,10 @@ export default function App() {
     setShowActivity,
     showLab: labVisible,
     setShowLab,
+    showApprovals: approvalsVisible,
+    setShowApprovals,
+    showAccess: accessVisible,
+    setShowAccess,
     labHost,
     setLabHost,
     labMode,
@@ -486,6 +508,7 @@ export default function App() {
       <div className="flex h-screen w-screen relative overflow-hidden">
         <Sidebar />
         <main className="flex-1 flex flex-col overflow-hidden relative">
+          <AccountBanner />
           {/* Uma instância de RemoteViewer por máquina conectada, sempre
               montada — só a focada (e só quando não estamos em
               Config/Arquivos/Atividade) fica visível. Isso evita derrubar a
@@ -493,7 +516,13 @@ export default function App() {
               docs/ARQUITETURA_CONEXAO.md). */}
           {Object.entries(connectedMachines).map(([id, entry]) => {
             const isFocusedAndVisible =
-              !showConfig && !showFiles && !showActivity && !labVisible && id === focusedMachineId;
+              !showConfig &&
+              !showFiles &&
+              !showActivity &&
+              !labVisible &&
+              !approvalsVisible &&
+              !accessVisible &&
+              id === focusedMachineId;
             return (
               <div
                 key={id}
@@ -524,6 +553,10 @@ export default function App() {
             <ActivityPanel />
           ) : labVisible ? (
             <LabPanel />
+          ) : approvalsVisible ? (
+            <ApprovalsPanel />
+          ) : accessVisible ? (
+            <MyAccessPanel />
           ) : !focusedMachineId ? (
             <Dashboard />
           ) : null}

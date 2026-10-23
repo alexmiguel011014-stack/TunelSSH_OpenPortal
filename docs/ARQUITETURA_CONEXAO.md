@@ -831,6 +831,120 @@ de unidades no RDP; alunos trocando de PC; armazenamento central de arquivos; fi
 espera; mais de um aluno ativo por PC; discos virtuais; domínio Windows; PCs com Windows
 Home (não hospedam RDP).
 
+### Contas (GOALS 20)
+
+Entrar e Criar conta com **aluno** e **professor**, no Supabase. Passo a passo para ligar:
+`docs/SUPABASE.md`. Código: `src/main/auth/` (processo principal), `src/renderer/src/modules/auth/`
+(telas) e `supabase/` (banco e e-mails).
+
+**Modelo de confiança.**
+
+- **O papel não é a fronteira do laboratório.** Os pedidos `lab-*` continuam autorizados por
+  `tailscale whois` e pela lista de gerentes de cada PC (GOALS 16). Quem desmontar o app e se declarar
+  professor não gerencia nenhum PC cujo dono nunca aceitou o login Tailscale dele.
+- **A fronteira dos dados é a segurança por linha (RLS) do Supabase.** Um aluno lê só o próprio perfil;
+  um professor lê todos; só `approve_teacher()` e `refuse_teacher()`, chamadas por um professor, mudam
+  um papel. O app manda `{ full_name, wants_teacher }` e **nunca** um papel: um gatilho cria todo perfil
+  como `aluno` e só registra o pedido de professor. Provado em `supabase/tests/accounts.test.js`.
+- **Hospedar este PC nunca depende de login.** O Supabase só é falado pelo processo principal;
+  portas, aprovações e o serviço do laboratório seguem como estavam, com ou sem alguém na tela de entrada.
+
+**O que cada um vê.**
+
+| Tela                                                      | Sem conta | Aluno | Professor pendente | Professor |
+| --------------------------------------------------------- | --------- | ----- | ------------------ | --------- |
+| Início ("Este PC": hospedagem, gerentes, senha de acesso) | sim       | sim   | sim                | sim       |
+| Meu acesso (GOALS 21)                                     | –         | sim   | sim                | –         |
+| Conectar, PCs salvos, Arquivos, Atividade                 | –         | –     | –                  | sim       |
+| Laboratório (com o modo laboratório ligado)               | –         | –     | –                  | sim       |
+| Aprovações                                                | –         | –     | –                  | sim       |
+| Configurações                                             | sim       | sim   | sim                | sim       |
+
+O aluno abre em **Meu acesso**. "Usar sem conta (só este PC)" existe porque um PC de laboratório liga
+sozinho (G16-D2) e precisa continuar hospedando sem ninguém na tela. **Um build sem contas** (sem
+`SUPABASE_URL`) abre como antes das contas: todas as telas de antes, sem login (`legacy` em
+`src/renderer/src/shared/lib/accounts.js`).
+
+**Onde ficam as coisas.**
+
+- **O supabase-js só roda no processo principal.** A tela recebe `{ status, profile, purpose, email,
+  needsResend, noAccount, notice }` e nunca um token; o CSP da tela continua sem `https:`.
+- **A sessão** fica em `userData/auth-session.json`, cifrada com o cofre do sistema (`safeStorage`, DPAPI
+  no Windows). Sem o cofre, a sessão fica só na memória (entra-se de novo a cada abertura) e **nenhum**
+  arquivo é escrito; um arquivo ilegível vale como "sem sessão". O perfil mais recente vai junto, cifrado.
+- **O endereço do projeto e a chave pública** vêm de `src/main/auth/auth-config.json`, gerado por
+  `scripts/write-auth-config.js` no `npm run build` (em desenvolvimento, do ambiente ou do `.env`). A
+  validação recusa a chave secreta e endereços que não sejam `https://<projeto>.supabase.co`.
+
+**Fluxos.** Todos por **código de 6 números** enviado por e-mail (sem links, sem redirecionamento):
+
+- _Criar conta:_ nome, e-mail, senha (8 a 72 caracteres, com letras e números) e "Eu sou: Aluno /
+  Professor" → `signUp` → tela do código → `verifyOtp` (`type: 'email'`) → entra. Professor entra como
+  aluno com o pedido pendente e um aviso.
+- _Entrar:_ e-mail e senha. "E-mail ou senha incorretos" vale para os dois erros. E-mail não confirmado
+  leva à tela do código. Nenhuma mensagem diz se um e-mail tem conta.
+- _Esqueci minha senha:_ código por e-mail → `verifyOtp` (`type: 'recovery'`) → `updateUser` → entra.
+- _Aprovações:_ um professor aprova ou recusa (com confirmação na linha); o contador aparece na barra
+  lateral. O professor pendente vê a aprovação em até 1 minuto, sem reabrir o app.
+- _Sem rede ou projeto pausado:_ com sessão e perfil guardados há menos de 7 dias o app abre em modo
+  **offline** com o papel de antes e um aviso, e tenta voltar a cada minuto. Isso é seguro porque o papel
+  não é a fronteira do laboratório.
+
+**Canais IPC** (`src/main/auth/ipc.js`; o preload expõe exatamente estes): `auth:getState`,
+`auth:state` (empurrado), `auth:signUp`, `auth:verifyCode`, `auth:resendCode`, `auth:signIn`,
+`auth:signOut`, `auth:resetRequest`, `auth:resetConfirm`, `auth:noAccount`, `auth:teacherRequests`,
+`auth:decideTeacher`. Cada um valida a entrada de novo (e-mail até 254 caracteres, senha de 8 a 72,
+código `^\d{6}$`, nome de 1 a 80 sem caracteres de controle, UUID nas decisões).
+
+**Fora do escopo:** login com Google ou Microsoft; captcha; dois fatores; verificar o token do Supabase nos
+PCs do laboratório para autorizar `lab-*` por conta em vez de login Tailscale; apagar a conta ou trocar o
+e-mail pelo app; rebaixar um professor pelo app.
+
+### Meu acesso (GOALS 21)
+
+O aluno com conta recebe, no próprio aplicativo, o PC do laboratório que o professor liberou. Quem não
+tem o app continua com a mensagem copiada do GOALS 18 (G16-D1: o aluno entra pelo Remote Desktop do
+Windows). Código: `src/main/access/` e `src/main/lab/handover-publisher.js`.
+
+**Tabelas** (`supabase/migrations/*_lab_handovers.sql`):
+
+- `lab_student_links (host_id, windows_account, student_id, label, …)`: qual conta do app é qual conta do
+  Windows em qual PC. Só professor lê e escreve. Um aluno por conta do Windows e uma conta por aluno, em
+  cada PC.
+- `lab_handovers (student_id, created_by, host_*, windows_user, password, start_by, ends_at, …)`: o
+  acesso. O aluno lê **só o próprio e enquanto `ends_at` não passou**; só professor cria (em nome dele, para
+  um aluno), muda `ends_at` e apaga. A senha nunca muda depois de publicada.
+
+**A senha só existe no Supabase enquanto o acesso vale.** Encerrar ou trocar de aluno apaga a linha na
+hora; a política do aluno deixa de mostrá-la no instante de `ends_at`; `purge_expired_handovers()`, agendada
+no `pg_cron` a cada 10 minutos, apaga o que venceu. O diário do GOALS 19, e não esta tabela, é o registro de
+quem usou o quê. Em trânsito vai por TLS, e só os professores e o aluno dono a leem.
+
+**Publicação.** No app do professor, `handover-publisher.js` roda depois de `lab:reserve`,
+`lab:handOver`, `lab:extend` e `lab:end` darem certo (é onde a senha existe). Apaga o acesso anterior do
+PC e grava o novo; a resposta da ação ganha `published: { status, message }` (`sent`, `skipped` por falta de
+vínculo, `failed` com o motivo). **Uma falha ali nunca desfaz nem trava a ação do laboratório:** a janela
+diz "Não foi enviado… use Copiar mensagem". Sem professor conectado (ou sem contas no build) nada é
+publicado e a tela não diz nada.
+
+**Tela do aluno.** `access:mine` lê o acesso; o processo principal assina as mudanças em tempo real da
+tabela, relê a cada minuto e ao voltar para a janela, e empurra `access:mineChanged`. O cartão mostra PC,
+endereço, usuário, senha oculta ("Mostrar"), "Comece até" e "Válido até" com o tempo que falta, e some no
+horário de término pelo relógio da tela. A senha fica só em memória: nunca em `localStorage`, nunca em log.
+
+**Abrir e copiar.** `access:openRdp` grava um `.rdp` temporário com **só o endereço e o usuário**
+(validados: valores com quebra de linha ou caracteres estranhos recusam o pedido) e abre `mstsc.exe` com uma
+lista de argumentos, sem shell; o arquivo é apagado em 1 minuto. O endereço e o usuário saem do que o
+processo principal leu, nunca do que a tela manda. `access:copyPassword` copia pelo processo principal e
+**limpa a área de transferência em 1 minuto**, se ela ainda tiver a senha.
+
+**Canais IPC** (`src/main/access/ipc.js`): `access:searchStudents`, `access:links`, `access:link`,
+`access:unlink`, `access:mine`, `access:mineChanged` (empurrado), `access:openRdp`, `access:copyPassword`.
+Os canais `access:getLocal`, `access:rotate` e `access:changed` da tela inicial são outros e não mudam.
+
+**Fora do escopo:** o visualizador RDP embutido do GOALS 2 para alunos; convites do Tailscale pelo app;
+avisos fora do aplicativo; alunos em macOS ou celular (usam a mensagem copiada).
+
 ---
 
 ## 3. Comparação Lado-a-Lado

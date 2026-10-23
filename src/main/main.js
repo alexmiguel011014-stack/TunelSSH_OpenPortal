@@ -5,6 +5,8 @@ const {
   globalShortcut,
   Notification,
   powerMonitor,
+  safeStorage,
+  clipboard,
 } = require('electron');
 const os = require('os');
 const { initLogging } = require('./logging');
@@ -43,6 +45,8 @@ const { sendTelegramAlert } = require('./activity/telegram');
 const { isAllowedHost } = require('./connection/net-guard');
 const { effectiveAllowedUsers, effectiveReportTo } = require('./lab/lab-config');
 const { createLabRuntime } = require('./lab/runtime');
+const { createAuthRuntime } = require('./auth/runtime');
+const { createAccessRuntime } = require('./access/runtime');
 
 initLogging();
 
@@ -50,6 +54,10 @@ let mainWindow = null;
 let wss = null;
 let requestServer = null;
 let updater = null;
+// Contas com Supabase (GOALS 20): sessão, perfil (aluno ou professor) e canais IPC (auth/runtime.js).
+let authRuntime = null;
+// "Meu acesso" e os vínculos aluno-conta (GOALS 21): ver access/runtime.js.
+let accessRuntime = null;
 // Modo laboratório (GOALS 16): host, gerente e canais IPC (ver lab/runtime.js).
 let labRuntime = null;
 // Senha de acesso exibida na tela inicial (ver session-password.js).
@@ -302,6 +310,18 @@ app.whenReady().then(() => {
 
   const liveWindow = () => (mainWindow && !mainWindow.isDestroyed() ? mainWindow : null);
 
+  // As contas só decidem o que a tela mostra: hospedar este PC (portas, aprovações, serviço do
+  // laboratório) nunca depende de alguém ter entrado.
+  authRuntime = createAuthRuntime({ app, ipcMain, safeStorage, getMainWindow: liveWindow });
+  authRuntime.start();
+  accessRuntime = createAccessRuntime({
+    ipcMain,
+    authService: authRuntime.service,
+    getMainWindow: liveWindow,
+    clipboard,
+  });
+  accessRuntime.start();
+
   // Para onde empurrar os eventos do diário deste PC: o endereço de cada gerente, achado pelo
   // login (guardado por um minuto, para não consultar o Tailscale a cada evento).
   let pushAddressCache = { at: 0, addresses: [] };
@@ -355,6 +375,8 @@ app.whenReady().then(() => {
     },
     getPushAddresses,
     pushEvent: (ip, event) => sendActivityEvent(ip, event),
+    // O acesso liberado a um aluno com conta vai também para o app dele (GOALS 21).
+    handovers: accessRuntime.handovers,
   });
 
   requestServer = new ConnectionRequestServer(
@@ -493,6 +515,8 @@ app.on('window-all-closed', () => {
   if (wss) wss.close();
   if (requestServer) requestServer.stop();
   if (labRuntime) labRuntime.stop();
+  if (accessRuntime) accessRuntime.stop();
+  if (authRuntime) authRuntime.stop();
   if (updater) updater.stop();
   if (process.platform !== 'darwin') app.quit();
 });

@@ -135,6 +135,7 @@ function createLabIpcHandlers({
   manager,
   store,
   eventLog = null,
+  handovers = null,
   startWithWindows,
   serviceControl,
   onHostChanged = () => {},
@@ -151,6 +152,19 @@ function createLabIpcHandlers({
       return await operation();
     } finally {
       changingService = false;
+    }
+  };
+
+  // Depois de reservar, estender ou encerrar, o app do professor avisa o app do aluno (GOALS 21,
+  // handover-publisher.js). A resposta ganha `published` ({ status, message }) só quando há algo a
+  // dizer; uma falha ali nunca muda o resultado da ação do laboratório.
+  const withPublication = async (result, publish) => {
+    if (!handovers) return result;
+    try {
+      const published = await publish(result);
+      return published ? { ...result, published } : result;
+    } catch {
+      return result;
     }
   };
 
@@ -250,38 +264,45 @@ function createLabIpcHandlers({
       return manager.deleteStudent(payload.hostId, payload.account);
     },
 
-    [CHANNELS.reserve]: (payload) => {
+    [CHANNELS.reserve]: async (payload) => {
       if (!isPlain(payload) || !isId(payload.hostId) || !isAccount(payload.account)) {
         return badRequest();
       }
-      return manager.reserve(
+      const result = await manager.reserve(
         payload.hostId,
         pick(payload, ['account', 'startWithinMs', 'sessionMs']),
       );
+      return withPublication(result, (done) => handovers.afterReserve(payload.hostId, done));
     },
 
-    [CHANNELS.handOver]: (payload) => {
+    [CHANNELS.handOver]: async (payload) => {
       if (!isPlain(payload) || !isId(payload.hostId) || !isAccount(payload.account)) {
         return badRequest();
       }
-      return manager.handOver(
+      const result = await manager.handOver(
         payload.hostId,
         pick(payload, ['account', 'startWithinMs', 'sessionMs']),
       );
+      return withPublication(result, (done) => handovers.afterReserve(payload.hostId, done));
     },
 
-    [CHANNELS.extend]: (payload) => {
+    [CHANNELS.extend]: async (payload) => {
       if (!isPlain(payload) || !isId(payload.hostId) || !isId(payload.reservationId)) {
         return badRequest();
       }
-      return manager.extend(payload.hostId, pick(payload, ['reservationId', 'addMs']));
+      const result = await manager.extend(
+        payload.hostId,
+        pick(payload, ['reservationId', 'addMs']),
+      );
+      return withPublication(result, (done) => handovers.afterExtend(payload.hostId, done));
     },
 
-    [CHANNELS.end]: (payload) => {
+    [CHANNELS.end]: async (payload) => {
       if (!isPlain(payload) || !isId(payload.hostId) || !isId(payload.reservationId)) {
         return badRequest();
       }
-      return manager.end(payload.hostId, { reservationId: payload.reservationId });
+      const result = await manager.end(payload.hostId, { reservationId: payload.reservationId });
+      return withPublication(result, (done) => handovers.afterEnd(payload.hostId, done));
     },
 
     [CHANNELS.folder]: (payload) => {

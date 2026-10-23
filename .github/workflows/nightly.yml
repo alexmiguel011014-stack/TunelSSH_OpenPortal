@@ -22,7 +22,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
           cache: 'npm'
 
       - name: Install dependencies
@@ -50,7 +50,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
           cache: 'npm'
 
       - name: Install dependencies
@@ -59,8 +59,14 @@ jobs:
       - name: Generate dev version
         run: node scripts/bump-dev-version.js
 
+      # Contas (GOALS 20): o endereço e a chave PÚBLICA do projeto Supabase entram no instalador
+      # (scripts/write-auth-config.js). Sem os secrets o build sai sem contas, como antes; com uma
+      # chave secreta por engano o build falha.
       - name: Build renderer
         run: npm run build
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_PUBLISHABLE_KEY: ${{ secrets.SUPABASE_PUBLISHABLE_KEY }}
 
       # A sidecar RDP (C#/.NET 4.8) vai no instalador por extraResources
       # (package.json). Sem este passo o app instalado não teria RDP.

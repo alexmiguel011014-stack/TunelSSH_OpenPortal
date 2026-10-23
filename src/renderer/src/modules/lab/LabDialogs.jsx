@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
 import { Check, Copy } from 'lucide-react';
+import { describePublication } from '../../shared/lib/access';
 import {
   DEFAULT_QUOTA_GB,
   DEFAULT_START_WITHIN_MIN,
@@ -161,7 +162,7 @@ async function copyText(text, fallbackElement) {
 // A senha do aluno aparece aqui uma única vez: fica só na memória desta janela e some
 // quando ela fecha. O aviso do professor ao aluno é editável e fica salvo neste PC (é só
 // o texto, nunca a senha).
-export function CredentialsDialog({ credentials, pc, validityMin, onClose }) {
+export function CredentialsDialog({ credentials, pc, validityMin, published, onClose }) {
   const [notice, setNotice] = useState(() => loadNotice(window.localStorage));
   const [copied, setCopied] = useState(false);
   const [areaRef, setAreaRef] = useState(null);
@@ -186,12 +187,23 @@ export function CredentialsDialog({ credentials, pc, validityMin, onClose }) {
     setCopied(done);
   };
 
+  // GOALS 21: o acesso também foi para o aplicativo do aluno (ou por que não foi).
+  const publication = describePublication(published);
+
   return (
     <Modal title="Acesso do aluno" onClose={onClose} locked wide>
       <p className="text-xs text-text-secondary mb-3">
         A senha aparece só agora e não fica guardada em lugar nenhum. Copie e entregue ao aluno
         antes de fechar esta janela.
       </p>
+      {publication && (
+        <p
+          role="status"
+          className={`text-xs mb-3 ${publication.tone === 'ok' ? 'text-success' : 'text-warning'}`}
+        >
+          {publication.text}
+        </p>
+      )}
       <textarea
         ref={setAreaRef}
         readOnly
