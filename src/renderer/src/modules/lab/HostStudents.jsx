@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { FolderOpen, HardDrive, UserPlus } from 'lucide-react';
+import { describeLink, describePublication, indexLinks } from '../../shared/lib/access';
 import {
   DEFAULT_QUOTA_GB,
   deleteConfirmText,
@@ -15,6 +16,7 @@ import {
   validateStudentForm,
 } from '../../shared/lib/lab';
 import { inputClass } from './LabDialog';
+import LinkAccountDialog from './LinkAccountDialog';
 import {
   ConfirmDialog,
   CredentialsDialog,
@@ -118,6 +120,9 @@ export default function HostStudents({ entry, onFolder, addLog }) {
   const serviceReady = entry.service?.running === true;
 
   const [data, setData] = useState(null);
+  // Contas do aplicativo vinculadas aos alunos deste PC (GOALS 21); `available` é falso sem contas
+  // neste build ou sem professor conectado, e a tela esconde o vínculo.
+  const [links, setLinks] = useState({ available: false, byAccount: {} });
   const [error, setError] = useState('');
   const [feedback, setFeedback] = useState(null);
   const [busy, setBusy] = useState('');
@@ -126,19 +131,33 @@ export default function HostStudents({ entry, onFolder, addLog }) {
   const [formError, setFormError] = useState('');
   const [now, setNow] = useState(() => Date.now());
 
+  const loadLinks = useCallback(async () => {
+    try {
+      const result = await window.electronAPI.getLabLinks?.(hostId);
+      setLinks(
+        result?.ok
+          ? { available: true, byAccount: indexLinks(result.links) }
+          : { available: false, byAccount: {} },
+      );
+    } catch {
+      setLinks({ available: false, byAccount: {} });
+    }
+  }, [hostId]);
+
   const load = useCallback(async () => {
     try {
       const result = await window.electronAPI.getLabStudents(hostId);
       if (result?.ok) {
         setData(result);
         setError('');
+        loadLinks();
       } else {
         setError(describeActionError(result));
       }
     } catch (err) {
       setError(err.message);
     }
-  }, [hostId]);
+  }, [hostId, loadLinks]);
 
   // Atualiza ao abrir, a cada 10 s e quando o estado do PC muda (um aluno entrou ou saiu).
   useEffect(() => {
@@ -154,6 +173,12 @@ export default function HostStudents({ entry, onFolder, addLog }) {
   }, [load, reachable, serviceReady, entry.state]);
 
   const log = (text, type) => addLog?.(`Laboratório: ${entry.name}: ${text}`, type);
+
+  // O resultado de avisar o aplicativo do aluno (GOALS 21), depois de estender ou encerrar.
+  const notePublication = (published) => {
+    const line = describePublication(published);
+    if (line) setFeedback({ kind: line.tone === 'ok' ? 'info' : 'error', text: line.text });
+  };
 
   const act = async (label, action, doneText) => {
     setBusy(label);
@@ -194,7 +219,11 @@ export default function HostStudents({ entry, onFolder, addLog }) {
         }),
       `${parsed.label} adicionado`,
     );
-    if (result?.ok) setForm({ label: '', quotaGb: String(DEFAULT_QUOTA_GB) });
+    if (result?.ok) {
+      setForm({ label: '', quotaGb: String(DEFAULT_QUOTA_GB) });
+      // Com contas ligadas, já oferece vincular o aluno novo à conta dele.
+      if (links.available && result.student) setDialog({ type: 'link', student: result.student });
+    }
   };
 
   const openFolder = async (student) => {
@@ -261,6 +290,7 @@ export default function HostStudents({ entry, onFolder, addLog }) {
         credentials: result.credentials,
         pc: result.pc,
         validityMin: reservationForm.validityMin,
+        published: result.published,
       });
       load();
     } else {
@@ -316,6 +346,7 @@ export default function HostStudents({ entry, onFolder, addLog }) {
             <ul className="space-y-1.5">
               {students.map((student) => {
                 const isCurrent = reservation?.account === student.account;
+                const link = links.byAccount[student.account];
                 return (
                   <li
                     key={student.account}
@@ -327,6 +358,13 @@ export default function HostStudents({ entry, onFolder, addLog }) {
                         {student.account} · último uso:{' '}
                         {lastSessionText(student.lastSessionEnd, now)}
                       </div>
+                      {links.available && (
+                        <div
+                          className={`text-[11px] truncate ${link ? 'text-text-secondary' : 'text-text-faint'}`}
+                        >
+                          {describeLink(link).text}
+                        </div>
+                      )}
                     </div>
                     <UsageBar student={student} />
                     <span
@@ -352,6 +390,32 @@ export default function HostStudents({ entry, onFolder, addLog }) {
                           onClick={() => setDialog({ type: 'reserve', student })}
                         >
                           Reservar
+                        </RowButton>
+                      )}
+                      {links.available && (
+                        <RowButton
+                          disabled={editing}
+                          onClick={() => setDialog({ type: 'link', student })}
+                        >
+                          {link ? 'Trocar conta' : 'Vincular conta'}
+                        </RowButton>
+                      )}
+                      {links.available && link && (
+                        <RowButton
+                          disabled={editing}
+                          onClick={() =>
+                            act(
+                              `desvinculando ${student.label}`,
+                              () =>
+                                window.electronAPI.unlinkLabStudent({
+                                  hostId,
+                                  account: student.account,
+                                }),
+                              `${student.label} não está mais vinculado a uma conta`,
+                            )
+                          }
+                        >
+                          Desvincular
                         </RowButton>
                       )}
                       <RowButton disabled={editing} onClick={() => openFolder(student)}>
@@ -454,6 +518,30 @@ export default function HostStudents({ entry, onFolder, addLog }) {
           credentials={dialog.credentials}
           pc={dialog.pc}
           validityMin={dialog.validityMin}
+          published={dialog.published}
+          onClose={closeDialog}
+        />
+      )}
+      {dialog?.type === 'link' && (
+        <LinkAccountDialog
+          student={dialog.student}
+          onLink={async (person) => {
+            const result = await window.electronAPI.linkLabStudent({
+              hostId,
+              account: dialog.student.account,
+              label: dialog.student.label,
+              studentId: person.id,
+            });
+            if (result?.ok) {
+              log(`conta vinculada a ${dialog.student.label}`);
+              setFeedback({
+                kind: 'info',
+                text: `${dialog.student.label} agora usa a conta ${person.email}`,
+              });
+              loadLinks();
+            }
+            return result;
+          }}
           onClose={closeDialog}
         />
       )}
@@ -470,6 +558,7 @@ export default function HostStudents({ entry, onFolder, addLog }) {
               log(`sessão de ${dialog.reservation.label} estendida`);
               setDialog(null);
               load();
+              notePublication(result.published);
             }
             return result;
           }}
@@ -491,6 +580,7 @@ export default function HostStudents({ entry, onFolder, addLog }) {
               log(`sessão de ${dialog.reservation.label} encerrada`);
               setDialog(null);
               load();
+              notePublication(result.published);
             }
             return result;
           }}

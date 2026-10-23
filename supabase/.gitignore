@@ -1,0 +1,6 @@
+# Estado local da CLI do Supabase (projeto vinculado, branches) e segredos locais.
+.branches
+.temp
+.env
+.env.*
+!.env.example

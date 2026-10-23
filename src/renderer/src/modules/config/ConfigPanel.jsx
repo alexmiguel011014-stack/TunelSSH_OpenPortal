@@ -2,6 +2,7 @@ import { useContext, useEffect, useState } from 'react';
 import { ArrowLeft, Check, XCircle, AlertTriangle, Copy } from 'lucide-react';
 import { MachineContext } from '../../App';
 import LabModeSettings from '../lab/LabModeSettings';
+import AccountSettings from '../auth/AccountSettings';
 
 const MAX_PORT = 65535;
 
@@ -353,6 +354,8 @@ export default function ConfigPanel() {
             <ArrowLeft size={16} /> Voltar
           </button>
         </div>
+
+        <AccountSettings />
 
         <div className="mb-6 p-4 bg-accent/10 rounded-xl border border-accent/30">
           <p className="text-xs text-text-faint mb-1">

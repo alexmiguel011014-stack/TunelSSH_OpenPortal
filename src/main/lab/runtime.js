@@ -44,6 +44,8 @@ function createLabRuntime({
   onLegacyActivity = () => {},
   getPushAddresses = async () => [],
   pushEvent = () => {},
+  // GOALS 21: quem publica no Supabase o acesso liberado a um aluno (access/runtime.js).
+  handovers = null,
   serviceClient = createServiceClient(),
   serviceControl = createServiceControl({
     client: serviceClient,
@@ -130,6 +132,7 @@ function createLabRuntime({
     manager,
     store,
     eventLog,
+    handovers,
     onManagerRemoved: (login) => host.note('manager-removed', login),
     startWithWindows: createStartWithWindows({ app, isPackaged }),
     serviceControl,

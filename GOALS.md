@@ -2505,6 +2505,498 @@ plus the manager's `receivedAt`.
 
 ---
 
+## GOALS 20 — Accounts: sign-in and sign-up with student and teacher roles on Supabase (feature)
+
+```mermaid
+flowchart TD
+    P[Supabase project, Brevo SMTP and Auth settings - manual] --> S[Schema, RLS and grants as migrations]
+    S --> C[Main-process auth client and encrypted session]
+    C --> I[IPC and preload surface]
+    I --> U[Entrar, Criar conta, código and senha screens]
+    U --> G[Role gate - which screens each role sees]
+    S --> A[Teacher approvals]
+    G --> A
+    P --> K[Keep-alive workflow]
+    A --> T[Suites and real-account acceptance]
+    K --> T
+    T --> R[Docs and test battery]
+```
+
+Suggested: opus · xhigh — authentication, row-level security and a token store: a mistake here is a
+student promoting themselves to teacher or a session readable on disk.
+
+**Request (2026-10-22, user):** a sign-in and sign-up screen for users that tells students (aluno) from
+teachers (professor), using Supabase. "Design it the best way you can and tell me; call me for any
+decision."
+
+**Decisions taken in conversation (2026-10-22, user).**
+
+1. **Students use the app.** G16-D1 said students need no OpenPortal (they sign in to a lab PC with the
+   Windows Remote Desktop and the credentials the teacher hands over). That path does not change; what
+   changes is that the app becomes the way the access is delivered to a signed-in student (GOALS 21).
+   A student without the app still gets the copied message of G18-I5.
+2. **Becoming a teacher needs approval.** At sign-up a person chooses Aluno or Professor; Professor
+   creates a student account with a pending teacher request, which an approved teacher approves or
+   refuses in the app. The first teacher is promoted by the user in the Supabase dashboard (G20-S3).
+3. **E-mail is confirmed with a 6-digit code** sent through Brevo's free SMTP; the same code mechanism
+   gives "Esqueci minha senha".
+4. **The Windows password delivered to a student is stored in Supabase only while it is valid**
+   (GOALS 21).
+
+**Facts gathered (2026-10-22).**
+
+- Free plan: 2 active projects, 50,000 monthly active users, 500 MB database; a free project is
+  **paused after one week of inactivity** and stays down until restored in the dashboard
+  (third-party summaries: https://www.jetadmin.io/blog/supabase-pricing-2026-guide-to-plans-limits-and-real-world-costs/,
+  https://automationatlas.io/answers/supabase-free-tier-limits-2026/; confirm on supabase.com/pricing
+  in G20-P1).
+- Supabase's default SMTP **only delivers to the addresses of the organization's members**, about 2
+  messages per hour, with no SLA; any real sign-up needs custom SMTP
+  (https://supabase.com/docs/guides/auth/auth-smtp). With custom SMTP the Auth e-mail limit starts at
+  30 per hour and is changed in Authentication > Rate Limits.
+- Brevo's free plan sends 300 e-mails per day with a verified sender
+  (https://www.brevo.com/free-smtp-server, https://www.brevo.com/blog/supabase-send-email/). Whether a
+  single verified address without the user's own domain lands in the inbox (not spam) at Gmail and
+  Outlook was not verified: G20-P2 checks it.
+- An e-mail code instead of a link: put `{{ .Token }}` in the template and verify with
+  `verifyOtp({ email, token, type: 'email' })`; `signup` and `magiclink` types are deprecated in
+  supabase-js (https://supabase.com/docs/guides/auth/auth-email-otp,
+  https://supabase.com/docs/reference/javascript/auth-verifyotp). Password reset:
+  `resetPasswordForEmail`, then `verifyOtp({ type: 'recovery' })`, then `updateUser({ password })`.
+  No redirect URL, deep link or local web server is needed, which is why codes fit a desktop app.
+- **Data API change:** new tables in `public` are not exposed to the Data API without explicit
+  grants — the default for new projects since 2026-05-30, applied to existing projects on
+  2026-10-30 (https://supabase.com/changelog/45329-breaking-change-tables-not-exposed-to-data-and-graphql-api-automatically).
+  Every migration here grants explicitly and enables RLS.
+- Keys: the publishable key (`sb_publishable_…`) is meant to ship inside clients and is limited by
+  RLS; the secret key (`sb_secret_…`) never goes into the app. Asymmetric JWT signing keys expose a
+  JWKS at `/auth/v1/.well-known/jwks.json` (https://supabase.com/docs/guides/auth/jwts) — not used by
+  this GOALS (see out of scope).
+- Supabase documents role-based access with a Custom Access Token hook that adds a `user_role` claim
+  (https://supabase.com/docs/guides/database/postgres/custom-claims-and-role-based-access-control-rbac).
+  Not used here: the role is read from `profiles` under RLS through a `security definer` helper, so
+  there is no hook to configure and an approval takes effect at the next profile read instead of the
+  next token refresh.
+- Electron: tokens belong in the OS vault (`safeStorage`, DPAPI on Windows), and sign-in flows that
+  need a browser should use the system browser, not a webview (RFC 8252) — moot here, since e-mail,
+  password and codes need no browser at all.
+- **Code facts:** the renderer's CSP is `connect-src ws://localhost:* http://localhost:*`
+  (`src/renderer/index.html`), so Supabase calls belong in the main process (tokens never reach the
+  renderer and the CSP stays as it is); `net-guard.js` restricts only VNC and file dialing, not HTTPS;
+  `config-manager.js` already has `encryptSecret`/`decryptSecret` over `safeStorage`, but they fall back
+  to plain text when encryption is unavailable, which the session store must not do; `App.jsx` chooses
+  the panel with `showConfig`, `showFiles`, `showActivity` and `labVisible`; `nightly.yml` runs
+  `npm run build` before packaging; `.env.example` says no variable is mandatory; `.gitignore` covers
+  `*.env`.
+
+**Design rationale.**
+
+- **Where the code runs.** `@supabase/supabase-js` lives only in the main process (`src/main/auth/`).
+  The renderer receives `{ status, profile: { id, fullName, email, role, teacherPending } }` and never
+  a token. The session is persisted by a storage adapter that writes `userData/auth-session.json`
+  encrypted with `safeStorage`; when encryption is unavailable the session stays in memory only (sign
+  in at every start), never in plain text.
+- **Configuration.** `SUPABASE_URL` and `SUPABASE_PUBLISHABLE_KEY` come from `.env` in development; at
+  build, `scripts/write-auth-config.js` writes `src/main/auth/auth-config.json` (gitignored) from the
+  environment, and `nightly.yml` takes both from repository secrets. A build without them opens as it did before accounts existed (every old screen, no
+  login), and Configurações → Conta says "Contas indisponíveis nesta versão". *Amended 2026-10-22:* the
+  first draft offered only the no-account mode, which would have taken Conectar away from any unconfigured
+  build or dev run; the `OPENPORTAL_AUTH=off` switch was dropped for the same reason (an unconfigured dev
+  run already skips the gate).
+- **Trust model.** The Supabase role is **not** the boundary for controlling lab PCs: `lab-*`
+  messages stay authorized by `tailscale whois` and the PC's `managers` (GOALS 16). The role decides
+  which screens appear and, through RLS, what an account may read and write in Supabase (GOALS 21's
+  hand-overs). A student who bypasses the screens still cannot manage a PC whose owner never accepted
+  their Tailscale login. RLS is the boundary for the data in Supabase.
+- **Sign-up never trusts the client for the role.** The app sends `{ full_name, wants_teacher }` as
+  user metadata; a trigger creates every profile as `aluno` and records `teacher_requested_at` when a
+  teacher role was asked for. Only `approve_teacher()`, run by an approved teacher, changes a role.
+- **Who sees what.**
+
+  | Screen | Sem conta | Aluno | Professor pendente | Professor |
+  | --- | --- | --- | --- | --- |
+  | Início: "Este PC" card (hosting, managers, session password) | yes | yes | yes | yes |
+  | Meu acesso (GOALS 21) | – | yes | yes | – |
+  | Conectar, PCs salvos, Arquivos, Atividade | – | – | – | yes |
+  | Laboratório (when lab mode is on) | – | – | – | yes |
+  | Aprovações | – | – | – | yes |
+  | Configurações | yes | yes | yes | yes |
+
+  **"Usar sem conta (só este PC)"** exists because a lab PC starts unattended with
+  `openportal-host` (G16-D2) and must keep hosting with nobody signed in; it is also what a PC that only
+  receives help uses. Hosting (port 18902, approvals, the lab service) never depends on a sign-in.
+- **Offline or paused project.** A saved session starts without the network: the last profile read
+  (kept inside the encrypted session file) drives the screens for up to 7 days, with a banner "Sem
+  conexão com o servidor de contas"; anything that needs Supabase reports that instead of failing
+  silently. This is safe because the role is not the lab's security boundary.
+- **Messages to the person** are in Portuguese and never reveal whether an e-mail has an account
+  ("Se houver uma conta com esse e-mail, enviamos um código").
+- **Out of scope:** Google/Microsoft sign-in; captcha; two-factor; verifying Supabase tokens on the lab
+  PCs (JWKS) so that `lab-*` could be authorized by account instead of Tailscale login (a possible
+  later GOALS); self-service account deletion and e-mail change (a teacher does them in the dashboard
+  on request); teacher demotion in the app; any client other than this Windows app.
+
+### Supabase project and e-mail
+
+- [ ] **G20-P1 — Create the Supabase project `(manual)`:** a free project in the São Paulo region,
+      the limits above confirmed on supabase.com/pricing, `SUPABASE_URL` and `SUPABASE_PUBLISHABLE_KEY`
+      written in the local `.env` (only the names go into `.env.example`, with a comment that the
+      publishable key is public by design and the secret key never goes into the app) and saved as
+      GitHub repository secrets of the same names. Done when: the project exists, `.env` holds both
+      values, `git status` shows no `.env`, and both secrets are listed in the repository settings.
+      **Status 2026-10-22:** not started: it needs the user's own Supabase account. Steps are in
+      `docs/SUPABASE.md` (section 1).
+- [ ] **G20-P2 — Brevo SMTP and Auth settings `(manual)`:** a free Brevo account with a verified
+      sender and an SMTP key; in Supabase, Authentication > SMTP (`smtp-relay.brevo.com`, port 587,
+      sender name "OpenPortal"), "Confirm email" on, code length 6, code expiry 600 s, minimum password
+      8 characters with letters and digits, and the e-mail rate limit set to fit a class signing up
+      together (for example 60 per hour). The "Confirm signup" and "Reset password" templates are
+      Portuguese, show `{{ .Token }}` and are kept in `supabase/templates/` so they are versioned.
+      Done when: a sign-up to one Gmail and one Outlook address delivers the code to the inbox (not
+      spam) within a minute, and the result is written here. If it lands in spam, the fallback is a
+      sender on a domain the user owns, authenticated in Brevo (SPF and DKIM).
+      **Status 2026-10-22:** the two e-mail templates are written and versioned
+      (`supabase/templates/confirmation.html` and `recovery.html`, subjects in
+      `supabase/config.toml`). The Brevo account, the Supabase SMTP and Auth settings and the Gmail
+      and Outlook inbox check need the user (`docs/SUPABASE.md`, section 2).
+- [x] **G20-P3 — Supabase CLI files:** the `supabase` CLI as a devDependency, `supabase/config.toml`
+      (from `supabase init`, with the templates and the Auth settings of G20-P2 mirrored for the
+      local stack), `supabase/migrations/`, `supabase/tests/`. Done when: `npx supabase --version`
+      runs and the folder is in git without any key.
+      **Done 2026-10-22:** `supabase/config.toml` (from `supabase init`, with the Auth settings
+      above mirrored: confirmation on, 6-digit code, 600 s expiry, 8-character password with letters
+      and digits, 60 e-mails per hour, both templates), `supabase/migrations/`,
+      `supabase/templates/`, `supabase/.gitignore`; `npx supabase --version` runs. **Deviation:**
+      the CLI is not a devDependency. Its package downloads a binary at every `npm ci` (the
+      nightly's included) and nothing in CI needs it, so the docs use `npx supabase`.
+
+### Schema, RLS and grants
+
+- [x] **G20-S1 — Accounts migration:** `supabase/migrations/<timestamp>_accounts.sql` creates
+      `public.app_role` (`aluno`, `professor`) and `public.profiles` (`id` → `auth.users` on delete
+      cascade, `email`, `full_name` 1 to 80 characters, `role` default `aluno`,
+      `teacher_requested_at`, `approved_by`, `created_at`); a `security definer` trigger on
+      `auth.users` insert that copies `email` and `full_name` and sets `teacher_requested_at` when
+      `wants_teacher` is true, ignoring any role in the metadata; `public.is_teacher()` (`security
+      definer`, `stable`, `search_path = ''`); RLS on with policies "read own row" and "teachers read
+      every row" and "update own `full_name`"; explicit grants (`revoke all` from `anon` and
+      `authenticated`, then `select` and `update (full_name)` to `authenticated`);
+      `approve_teacher(uuid)` and `refuse_teacher(uuid)` (`security definer`, refused unless the
+      caller is a teacher, only for a pending request), executable by `authenticated` and not by
+      `anon` or `public`. Done when: the migration applies cleanly on the local stack.
+      **Done 2026-10-22:** `20261022120000_accounts.sql`, every grant explicit, with Supabase's
+      pre-2026-10-30 default grants simulated as the worst case. It was applied and exercised on
+      PGlite (a real Postgres in WASM) with Supabase's roles and `auth` schema stubbed. There is no
+      Docker on this PC, so it did **not** run on the CLI's local stack; its first run on Supabase
+      itself is G20-S3. Extras: a check constraint keeps a pending request and the professor role
+      apart (so the SQL of G20-S3 must clear the request, and `docs/SUPABASE.md` says so); the
+      trigger cleans the name (control characters, 80 characters, empty becomes the e-mail's local
+      part).
+- [x] **G20-S2 — Database tests:** `supabase/tests/accounts.test.sql` (pgTAP): a sign-up with
+      `role: 'professor'` or `wants_teacher` in its metadata is still `aluno`; a student cannot change
+      `role`, read another profile or call `approve_teacher`; a teacher reads every profile and
+      approves a pending request; approving someone with no request fails; `anon` reads nothing. Done
+      when: `npx supabase test db` passes (it needs Docker for the local stack; without Docker this
+      item stays open and says so).
+      **Done 2026-10-22:** **changed tool:** pgTAP needs Docker and the nightly's Windows runner has
+      none, so the same rules are tests inside `npm test`: `supabase/tests/accounts.test.js` (21)
+      runs the migrations on PGlite and checks each rule as the `anon` and `authenticated` roles,
+      plus two guards (every table in `public` has RLS on and nothing is granted to `anon`; only
+      `ping()` is executable by `anon`). It was mutation-checked: granting `update` on the whole
+      table lets a student promote themselves, so the suite would fail. `npx supabase test db` is
+      not used.
+- [ ] **G20-S3 — Apply and promote the first teacher `(manual)`:** `npx supabase login`,
+      `npx supabase link --project-ref <ref>`, `npx supabase db push`; then, in the SQL editor,
+      `update public.profiles set role = 'professor', teacher_requested_at = null where email = '<user>';`
+      after the user's own sign-up. Done when: the Security Advisor shows no RLS or exposure warning
+      for `public` and the user's account reads as `professor`.
+      **Status 2026-10-22:** the commands and the SQL are in `docs/SUPABASE.md` (section 4). The
+      `update` must set `teacher_requested_at = null` too: the check constraint refuses a professor
+      with a pending request. It needs G20-P1.
+
+### Main process
+
+- [x] **G20-C1 — Dependency and configuration:** `@supabase/supabase-js` (current 2.x, pinned by the
+      lockfile) in `dependencies`; `scripts/write-auth-config.js` called by `npm run build`;
+      `src/main/auth/auth-config.json` in `.gitignore`; `src/main/auth/config.js` reads the generated
+      file or, in development, `.env`, and reports "not configured" when either value is missing or
+      the URL is not `https://<ref>.supabase.co`; `nightly.yml` passes the two secrets to the build
+      step. Done when: tests cover the three outcomes (generated, dev `.env`, missing) and an unpacked
+      `electron-builder --dir` build contains the config and the library.
+      **Done 2026-10-22:** `@supabase/supabase-js` 2.118 in `dependencies`;
+      `src/main/auth/config.js` and `scripts/write-auth-config.js` (run by `npm run build`: no
+      variables means no file and a message; wrong values fail the build, including a secret key put
+      there by mistake); `auth-config.json` is gitignored; `nightly.yml` passes the two secrets to
+      the build step and now runs on Node 22 (supabase-js needs 22 or newer). An unpacked
+      `electron-builder --dir` build holds `auth-config.json`, `supabase-js`, `auth-js` and
+      `realtime-js`, no tests and no PGlite. Tests: `config.test.js`, `write-auth-config.test.js`.
+- [x] **G20-C2 — Encrypted session store:** `src/main/auth/session-store.js`, the storage adapter
+      supabase-js calls (`getItem`, `setItem`, `removeItem`), writing one file encrypted with
+      `safeStorage` and keeping memory only when encryption is unavailable. Done when: tests with a
+      fake `safeStorage` show the file never contains the refresh token in clear, a corrupt file reads
+      as signed out, and "unavailable" writes nothing to disk.
+      **Done 2026-10-22:** `session-store.js`. Tests with a fake vault (no token in the file, a
+      corrupt or tampered file reads as signed out, no vault means memory only and no file). With
+      the real Electron `safeStorage` in a throwaway probe: the file hides the tokens, the name and
+      the e-mail, and a restart restores the session without a password login.
+- [x] **G20-C3 — Auth service:** `src/main/auth/auth-service.js` with `signUp`, `verifySignupCode`,
+      `resendSignupCode`, `signIn`, `signOut`, `requestReset`, `confirmReset` (code and new password),
+      `refreshProfile`, `listTeacherRequests`, `decideTeacherRequest`, and a state emitted on every
+      change (`loading`, `signed-out`, `awaiting-code`, `signed-in`, `offline`); the 7-day offline
+      profile; Supabase error codes mapped to Portuguese messages (`invalid_credentials`,
+      `email_not_confirmed`, `user_already_exists`, `weak_password`, `otp_expired`,
+      `over_email_send_rate_limit`, network failure); `email_not_confirmed` on sign-in leads to the
+      code step. Done when: tests with a fake client cover each function, each mapped error, the
+      offline start with a saved profile (and after 7 days), and that no token or password appears in
+      a log line or in the state sent to the renderer.
+      **Done 2026-10-22:** `auth-service.js` and `errors.js`: about 60 tests with a fake client plus
+      16 against the REAL supabase-js and a local fake GoTrue and PostgREST server
+      (`real-client.test.js`: error codes, network failures, query shapes, restart, offline). Two
+      findings changed the code: (1) postgrest-js retries a failed GET three times (1 s, 2 s and 4
+      s), so an offline start took 7 s; the client is now created with `db: { retry: false }` (7042
+      ms became 9 ms in Electron); (2) a refresh token the server refused left the saved profile
+      behind; now it is erased and the notice says the session expired. Beyond the plan: a pending
+      teacher's profile is re-read every minute, so an approval shows without reopening.
+- [x] **G20-C4 — IPC and preload:** `auth:state` (subscribe), `auth:signUp`, `auth:verifyCode`,
+      `auth:resendCode`, `auth:signIn`, `auth:signOut`, `auth:resetRequest`, `auth:resetConfirm`,
+      `auth:noAccount`, `auth:teacherRequests`, `auth:decideTeacher`; each handler validates its input
+      (e-mail ≤ 254 characters and well formed, password 8 to 72 characters, code `^\d{6}$`, name 1 to
+      80 characters without control characters, a UUID for decisions). Done when: the preload surface
+      lists exactly these names next to the existing ones and a test feeds each handler bad input.
+      **Done 2026-10-22:** `src/main/auth/ipc.js` and the preload; `ipc.test.js` checks that the
+      preload lists exactly these names and feeds each handler bad input. The list gains
+      `auth:getState` (the first read; `auth:state` is the pushed update).
+
+### Screens
+
+- [x] **G20-U1 — Entrar and Criar conta:** `src/renderer/src/modules/auth/` with an `AuthGate`
+      around the app (a short loading state, then the screens or the app) and the screens Entrar
+      (e-mail, senha, "Esqueci minha senha", "Criar conta", "Usar sem conta (só este PC)"), Criar conta
+      (nome completo, e-mail, senha, confirmar senha, "Eu sou: Aluno / Professor", with the note
+      "Professores precisam da aprovação de outro professor"), Código (6 digits, "Reenviar código"
+      after 60 s, a hint to check spam) and Nova senha. Built on the existing tokens and Tailwind
+      classes, light and dark; labels tied to inputs, errors announced, Enter submits, the button
+      disabled while a request runs, "mostrar senha", a Caps Lock hint. Done when: in the browser pane
+      with a mocked preload, every screen and error state is reachable and works by keyboard only.
+      **Done 2026-10-22:** Entrar, Criar conta, Código (with a 60 s resend countdown), Esqueci minha
+      senha and Nova senha, in `modules/auth/`. Driven in the browser pane with a mocked preload:
+      every screen and error state; sign-in by keyboard only (type, Tab, type, Enter); 375 px wide
+      with no horizontal scroll; light and dark.
+- [x] **G20-U2 — Role gate:** `App.jsx` and `Sidebar.jsx` follow the table above; the sidebar shows
+      the person's name, a role badge ("Aluno", "Professor", "Professor — aguardando aprovação") and
+      "Sair"; a pending teacher sees a banner; "sem conta" shows "Entrar" in place of the name. Done
+      when: a test of the gating function covers the four columns and, in the browser pane, each role
+      sees exactly its row set.
+      **Done 2026-10-22:** `shared/lib/accounts.js` (`canSee` and friends; tests cover the four
+      columns and the build without accounts) and each role checked in the browser pane. **Deviation
+      from the design:** a build without accounts opens exactly as before (all the old screens, no
+      login) instead of offering only "sem conta", so an unconfigured build or dev run does not lose
+      Conectar; Configurações → Conta says why (`AccountSettings`).
+- [x] **G20-U3 — Aprovações:** a teacher-only screen listing pending requests (name, e-mail, asked
+      at) with "Aprovar" and "Recusar" and a count badge in the sidebar, refreshed when opened and
+      every 60 s while open. Done when: with a mocked preload approve and refuse update the list and
+      the badge, and a failed call shows its message.
+      **Done 2026-10-22:** `ApprovalsPanel` (the confirmation is in the row), the sidebar badge and
+      a refresh every 60 s; checked in the browser pane: approve and refuse send the right id and
+      the message shows.
+
+### Keep-alive
+
+- [ ] **G20-K1 — Keep the free project awake:** a `public.ping()` function (returns `now()`,
+      executable by `anon`, in its own migration) and `.github/workflows/supabase-keepalive.yml` that
+      calls it twice a week with the publishable key from the repository secrets. Done when: a manual
+      run of the workflow succeeds; the docs also explain how to restore a paused project.
+      **Status 2026-10-22:** `20261022120100_ping.sql` and
+      `.github/workflows/supabase-keepalive.yml` (Monday and Thursday plus `workflow_dispatch`; it
+      exits cleanly when the secrets are missing) are written, and `docs/SUPABASE.md` (section 6)
+      explains restoring a paused project. The manual run needs the secrets (G20-P1) and the
+      workflow on GitHub.
+
+### Regression test
+
+- [x] **G20-T1 — Suites:** `npm test` (no network, fake Supabase client) and `npm run lint` at 0
+      errors, plus `npx supabase test db` where Docker is available. Done when: all pass.
+      **Done 2026-10-22:** `npm test`: 1022 passed and 1 skipped (766 passed before this work;
+      `lab-service` and `sidecar` were built so the real-pipe suites ran). `npm run lint`: 0 errors,
+      the same 9 warnings. `npm run build` works. The database rules run inside `npm test`, so `npx
+      supabase test db` is not needed.
+- [ ] **G20-T2 — Real accounts `(manual)`:** on the installed build: sign up a student with a Gmail
+      address, receive the code, sign in; sign up a teacher, see the pending banner; the first teacher
+      (G20-S3) approves and the new teacher sees Laboratório after reopening Aprovações or the app; a
+      wrong password and an unknown e-mail give the same message; "Esqueci minha senha" works; "Sair"
+      returns to Entrar; a restart keeps the session; a start with the network off uses the saved
+      profile; `auth-session.json` contains no readable token; a lab PC in "sem conta" mode still
+      starts with Windows, hosts and runs the lab service. Done when: all hold and the result is
+      written here.
+      **Status 2026-10-22:** steps 1 to 13 of block 8 in `docs/BATERIA_DE_TESTES.md`; it needs
+      G20-P1, G20-P2 and G20-S3.
+
+### Registration
+
+- [x] **G20-R1 — Docs:** a section "Contas (GOALS 20)" in `docs/ARQUITETURA_CONEXAO.md` (trust model,
+      table of screens, where the session lives); `docs/SUPABASE.md` with the setup of G20-P1 to P3,
+      S3 and K1 in Portuguese; a block "Contas" in `docs/BATERIA_DE_TESTES.md` with the G20-T2 steps;
+      the feature list in `README.md`. Done when: each one mentions accounts, checked directly.
+      **Done 2026-10-22:** "Contas (GOALS 20)" in `docs/ARQUITETURA_CONEXAO.md`, the new
+      `docs/SUPABASE.md`, block 8 in `docs/BATERIA_DE_TESTES.md` and section 6 of `README.md`; each
+      mentions accounts, checked directly.
+
+---
+
+## GOALS 21 — "Meu acesso": the student receives the lab access in the app (feature)
+
+```mermaid
+flowchart TD
+    S[Links and hand-overs tables with RLS] --> L[Link a lab student to an account]
+    S --> P[Teacher app publishes on reserve, extend, end and hand-over]
+    L --> P
+    S --> M[Meu acesso screen with live updates]
+    M --> O[Open Remote Desktop with no password on a command line]
+    P --> T[Suites and three-party acceptance]
+    O --> T
+    T --> R[Docs]
+```
+
+Suggested: opus · high — a Windows password crosses the cloud, so RLS and expiry must hold; the lab
+service and its pipe do not change.
+
+Depends on GOALS 20 (accounts and roles) and on the reservation flow of GOALS 18 (built; its real-PC
+check is G18-T2). **The scenario:** Ana has the app and is signed in as a student. The teacher links
+Ana's lab account on PC 1 to her app account once. When the teacher reserves PC 1 for Ana, "Meu
+acesso" on Ana's app shows PC 1, its address, her Windows user, the password, the start-by and end
+times, and a button that opens the Windows Remote Desktop. On "Trocar aluno", "Estender" or
+"Encerrar agora" her screen follows within seconds. A student without the app still gets the copied
+message.
+
+**Design.**
+
+- **Links live in Supabase, not in the lab service.** `public.lab_student_links (host_id,
+  windows_account, student_id, label, linked_by, linked_at)`, primary key `(host_id,
+  windows_account)` and unique `(host_id, student_id)`. Every teacher sees the same links, and the
+  service, its pipe and the `lab-*` protocol stay as they are.
+- **Hand-overs.** `public.lab_handovers (id, student_id, created_by, host_id, host_name,
+  host_address, windows_user, password, start_by, ends_at, created_at)`. RLS: a student reads only
+  their own rows while `ends_at > now()`; teachers read every row; only teachers insert (as
+  themselves, for a profile whose role is `aluno` or a pending teacher), update `ends_at` (column
+  grant) and delete. **The password exists in Supabase only while the access is valid:** ending or
+  handing over deletes the row at once, and a `pg_cron` job every 10 minutes deletes rows past
+  `ends_at`. The GOALS 19 journal remains the audit trail; this table is never one.
+- **Publishing happens in the main process** of the teacher's app, right where the `lab-reserve`
+  answer (the only place the password exists) comes back: insert after a reserve or the reserve step
+  of a hand-over (deleting that PC's earlier rows first), update `ends_at` after an extend, delete
+  after an end. The address is the same one the credential message of G18-I5 uses. A publication
+  failure never undoes or blocks the lab action: the dialog says "Enviado para o app de Ana" or "Não
+  foi enviado (<motivo>) — use Copiar mensagem".
+- **The student's screen** reads its active row, subscribes to Realtime changes on
+  `lab_handovers` (any event triggers a re-read, since a delete event carries no row data under
+  RLS), re-reads on window focus and every 60 s, and hides the card at `ends_at` by its own clock.
+- **Opening Remote Desktop:** the main process writes a temporary `.rdp` file (address and user
+  `<hostName>\<windows_user>`, no password) and starts `mstsc.exe` with the file as an argument array
+  (no shell). The password never goes on a command line or into a file; "Copiar senha" puts it on
+  the clipboard and clears it after 60 s if it is still there. The file is deleted after a minute.
+- **Out of scope:** the embedded RDP viewer of GOALS 2 for students; Tailscale invite links in the
+  app (students at home still join through G16-D1 option B); notifications outside the app; students
+  on macOS or phones (they use the copied message).
+
+### Schema and RLS
+
+- [x] **G21-S1 — Hand-over migration:** `supabase/migrations/<timestamp>_lab_handovers.sql` with both
+      tables, their RLS policies, explicit grants (nothing to `anon`), the table added to the
+      `supabase_realtime` publication and the `pg_cron` purge job. Done when: it applies cleanly on
+      the local stack and the cron job is listed.
+      **Done 2026-10-22:** `20261022130000_lab_handovers.sql` (both tables, RLS, explicit grants,
+      `lab_handovers` in `supabase_realtime`, `purge_expired_handovers()` revoked from everyone but
+      the owner) and `20261022130100_lab_handovers_purge_cron.sql` (the extension and the 10-minute
+      job). The tables run on PGlite; **the pg_cron migration cannot run there, so "the job is
+      listed" and the scheduled purge are checked in G21-T2.**
+- [x] **G21-S2 — Database tests:** `supabase/tests/lab_handovers.test.sql` (pgTAP): a student reads
+      their active row and not after `ends_at`; another student reads nothing; a student cannot
+      insert, update or delete; a teacher can, and cannot insert as someone else; a pending teacher
+      cannot insert; only teachers read or write links; `anon` reads nothing; the purge removes
+      expired rows. Done when: `npx supabase test db` passes (Docker, as in G20-S2).
+      **Done 2026-10-22:** **changed tool, as G20-S2:** `supabase/tests/handovers.test.js` (16 tests
+      on PGlite). Three rules were mutation-checked (a student policy without `ends_at > now()`, an
+      insert policy without the "target is a student" clause, an update policy open to everyone each
+      let the abuse through).
+
+### Teacher side
+
+- [x] **G21-I1 — Link a lab student to an account:** in "Alunos" of each PC (`HostStudents.jsx`),
+      "Vincular conta" opens a search over student profiles by name or e-mail; a linked student shows
+      the account's e-mail and "Desvincular"; "Adicionar aluno" can link at once. IPC
+      `access:searchStudents`, `access:link`, `access:unlink`. Done when: tests cover the main-side
+      calls and validation, and in the browser pane with a mocked preload linking and unlinking update
+      the list.
+      **Done 2026-10-22:** `access/access-service.js` (search, list, link, unlink; the search text
+      is cleaned before the filter is built) and `access/ipc.js`; "Vincular conta", "Trocar conta"
+      and "Desvincular" in `HostStudents`, and "Adicionar aluno" offers the link dialog right after.
+      The link UI is hidden when accounts are unavailable. Tests cover the main side and validation;
+      in the browser pane with a mocked preload the list, the search, the link and the dialog
+      closing were driven. The IPC list gains `access:links` (the links of a PC).
+- [x] **G21-I2 — Publish hand-overs:** `src/main/lab/handover-publisher.js` hooked where the reserve,
+      hand-over, extend and end results return (`src/main/lab/ipc.js` and `manager.js`), skipped when
+      the student has no link or the teacher is not signed in; the dialog shows the result line.
+      Done when: tests with a fake client cover publish on reserve, the earlier row deleted on
+      hand-over, `ends_at` updated on extend, delete on end, an unlinked student, a failure that
+      leaves the reservation in place, and the password absent from every log line.
+      **Done 2026-10-22:** `lab/handover-publisher.js`, hooked in `lab/ipc.js` (the response gains
+      `published`). 15 tests with a fake client: publish on reserve, the earlier row removed on a
+      hand-over (and when a hand-over ends the old session but cannot reserve), `ends_at` on extend,
+      delete on end, an unlinked student, a failure or timeout that leaves the reservation alone,
+      and the password absent from every log line, result and message. The dialog shows the line
+      (sent, skipped and failed checked in the browser pane). Actions work by PC (one active student
+      per PC), so they do not depend on the reservation id matching at both ends.
+
+### Student side
+
+- [x] **G21-I3 — "Meu acesso" screen:** the student's home: one card with PC name, address, user,
+      password hidden with "Mostrar" and "Copiar senha", "Comece até HH:MM", "Válido até HH:MM" with
+      the time left, the notice of G18-I5 ("O professor pode ver a sua pasta pessoal neste PC") and its
+      line about the generic Windows sign-in error after the end; when there is none, "Nenhum acesso
+      liberado agora. Peça ao professor."; for a `100.x` address, a line that Tailscale must be on.
+      IPC `access:mine` (subscribe). Done when: in the browser pane with a mocked preload the card
+      appears, counts down, disappears at the end and on a delete, and the password never reaches
+      `localStorage`.
+      **Done 2026-10-22:** `MyAccessPanel`: a realtime subscription, a 60 s poll and a re-read on
+      focus in the main process (`access:mine`, pushed `access:mineChanged`). Checked in the browser
+      pane: the empty state, the card with the time left, hidden password, copy, open, the card
+      disappearing at the end time, and `localStorage` holding only the theme.
+- [x] **G21-I4 — Open Remote Desktop:** `access:openRdp` builds the `.rdp` text in a pure function
+      and starts `mstsc.exe` as described. Done when: tests show the text has the address and user and
+      no password, odd characters in names cannot add lines to the file, and the spawn uses an argument
+      array.
+      **Done 2026-10-22:** `access/rdp-file.js` with `access:openRdp` and `access:copyPassword`: the
+      `.rdp` has only the address and the user, values with line breaks are refused, `mstsc.exe`
+      starts with an argument array and no shell, the file is deleted after a minute, the address
+      and user come from what the main process read (not from the screen), and the clipboard is
+      cleared after 60 s only if it still holds the password.
+
+### Regression test
+
+- [x] **G21-T1 — Suites:** `npm test` and `npm run lint` at 0 errors, plus `npx supabase test db`
+      where Docker is available. Done when: all pass.
+      **Done 2026-10-22:** same run as G20-T1 (1022 tests passed, lint at 0 errors).
+- [ ] **G21-T2 — Teacher, lab PC and student `(manual)`:** PC A as teacher, PC B as lab PC, and a
+      third Windows device (or a second Windows user on PC A) with the app signed in as student Ana:
+      link Ana; reserve PC 1 for her and see "Meu acesso" fill within 5 s; open Remote Desktop and
+      sign in with the copied password; extend and see the new end; hand over to João and see Ana's
+      card disappear while João's appears; let João's time run out and confirm his row is gone in the
+      Table Editor within 10 minutes; with PC A offline from Supabase, a reserve still works and the
+      dialog says the message was not sent. Done when: all hold and the result is written here.
+      **Status 2026-10-22:** steps 15 to 22 of block 8 in `docs/BATERIA_DE_TESTES.md`; it needs the
+      G20 manual items and a third Windows device (or a second Windows user).
+
+### Registration
+
+- [x] **G21-R1 — Docs:** "Meu acesso (GOALS 21)" in `docs/ARQUITETURA_CONEXAO.md` (tables, RLS,
+      the password's lifetime, the trust model), the G21-T2 steps in `docs/BATERIA_DE_TESTES.md`, a
+      short student guide in `docs/` ("Como usar o Meu acesso") and the feature list in `README.md`.
+      Done when: each one mentions it, checked directly.
+      **Done 2026-10-22:** "Meu acesso (GOALS 21)" in `docs/ARQUITETURA_CONEXAO.md`, steps 15 to 22
+      of block 8 and section 6 of `README.md`; checked directly.
+
+---
+
 ## Cross-goal ordering
 
 GOALS 1 and GOALS 2 (transport: multi-session VNC, then optional RDP) are independent of
@@ -2550,3 +3042,13 @@ independent of GOALS 15 and of any open PR; delivery to `master` follows the use
 series. Not planned: monitoring of apps and downloads (the manager reads the student's folder instead),
 students moving between PCs, central file storage, more than one active student per PC, blocking RDP
 clipboard or drive redirection, PCs on Windows Home.
+
+For accounts (GOALS 20–21, added 2026-10-22): **the manual setup comes first** (G20-P1 project, G20-P2
+SMTP and its inbox check), because the code step and every real test need a project that sends e-mail.
+Then G20-P3 → S1/S2 → S3 (apply and promote the first teacher) → C1–C4 → U1–U3, with K1 any time after
+P1. **GOALS 21 starts only after G20-S3 and G20-C3**: its RLS reads `profiles` and its publisher needs a
+signed-in teacher. GOALS 21 builds on the reservation code of GOALS 18, which already exists, so it does
+not wait for G18-T2; G21-T2 runs together with or after G18-T2 on the same PCs. Both sections are
+independent of the RDP track and of GOALS 15. Decision 1 of GOALS 20 amends G16-D1 only in who may use
+the app: the student's path to the PC (Windows Remote Desktop, the firewall scope, Tailscale node
+sharing at home) is unchanged.

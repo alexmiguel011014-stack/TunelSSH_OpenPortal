@@ -104,6 +104,18 @@ npm run dev
   e de que endereco entrou, mesmo com o app do professor fechado durante a reserva. Tem filtros e
   **Exportar CSV** (abre direto no Excel em portugues).
 
+### 6. Contas (aluno e professor)
+- Com o Supabase configurado (`docs/SUPABASE.md`), o app abre numa tela de **Entrar** / **Criar conta**
+  com confirmacao por codigo enviado ao e-mail. Quem se cadastra escolhe **Aluno** ou **Professor**; o
+  professor precisa da aprovacao de outro professor (tela **Aprovacoes**).
+- O **aluno** ve **Meu acesso**: o PC do laboratorio que o professor liberou (endereco, usuario, senha e
+  horario), com um botao que abre a Area de Trabalho Remota do Windows. O **professor** ve tudo o que o
+  app ja tinha e, em cada PC do laboratorio, **Vincular conta** nos alunos.
+- **Usar sem conta (so este PC)** deixa o PC hospedando sem ninguem na tela de entrada, e um build sem
+  `SUPABASE_URL` abre sem login, como antes. A arquitetura e a confianca estao em
+  `docs/ARQUITETURA_CONEXAO.md` ("Contas" e "Meu acesso") e o roteiro de teste no bloco 8 de
+  `docs/BATERIA_DE_TESTES.md`.
+
 ---
 
 ## Estrutura do projeto
