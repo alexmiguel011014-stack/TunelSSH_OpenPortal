@@ -319,12 +319,14 @@ Precisa de um Windows em português **sem Tailscale e sem TightVNC** (uma máqui
 internet, e do instalador de um build novo (`npm run dist`, ou a pré-release do GitHub). Faça o passo 1
 antes de qualquer outro: ele fecha o G22-V1 e confirma o catálogo do script.
 
-1. **Opções e assinaturas (G22-V1):** em um PowerShell como administrador, baixe os dois instaladores
-   (endereços em `resources/prereqs/install-prereq.ps1`) e rode `Get-AuthenticodeSignature` em cada um.
-   Esperado: `Valid`, e o assunto do certificado igual a "Tailscale Inc." e "GlavSoft LLC". Rode o MSI do
-   TightVNC com os argumentos do script e confira: serviço `tvnserver` instalado, `LoopbackOnly` e
-   `UseVncAuthentication` em 1 em `HKLM\SOFTWARE\TightVNC\Server`, sem regra de firewall nova. Anote
-   no GOALS.md o que não bater (assinante, propriedade que não vale) e corrija o catálogo antes de seguir.
+1. **Instalação de verdade (G22-V1):** as assinaturas e as propriedades já foram conferidas lendo os MSI
+   (assinantes "Tailscale Inc." e "OOO GlavSoft"; ver o GOALS.md). Falta rodar os dois com os argumentos
+   do script, num PowerShell como administrador (`powershell -ExecutionPolicy Bypass -File
+   resources\prereqs\install-prereq.ps1 -Name tailscale`, depois `-Name tightvnc`), e conferir: serviço
+   `tvnserver` rodando, `LoopbackOnly` e `UseVncAuthentication` em 1 em
+   `HKLM\SOFTWARE\TightVNC\Server`, a porta 5900 só em 127.0.0.1 e nenhuma regra de firewall nova; se a
+   janela do Tailscale abre depois da instalação silenciosa. Para provar a recusa, troque um byte de uma
+   cópia do MSI e confirme que o script não instala. Anote no GOALS.md o que não bater.
 2. **Assistente:** rode o instalador do OpenPortal. Esperado: tudo em português, a imagem da marca na barra
    lateral e no topo e a licença com o resumo em português acima do texto MIT.
 3. **Página "Programas necessários":** depois da pasta. Esperado: Tailscale e TightVNC como não instalados,

@@ -3101,10 +3101,20 @@ computador" screen on first start and a gate card in place of each screen that c
       - the exact signer subject of each MSI (`Get-AuthenticodeSignature`);
       - how TightVNC 4 registers (service name, registry key, `DisplayVersion`), so detection can tell
         2 from 4.
-      **Status 2026-10-28:** step 1 of block 9 in `docs/BATERIA_DE_TESTES.md`. The script's catalog
-      uses the plan's candidates (signers "Tailscale Inc." and "GlavSoft LLC", the TightVNC
-      properties above); nothing was downloaded or installed on this PC, and a wrong signer name
-      fails safe (the install is refused).
+      **Status 2026-10-28 (partly done, by reading the files):** the two official MSIs were downloaded
+      into a temporary folder and only read (signatures and tables), never run. **Found and fixed:** the
+      TightVNC certificate says `CN=OOO GlavSoft` while the MSI's Manufacturer says "GlavSoft LLC", so
+      the plan's signer would have made every TightVNC install be refused; the script now uses the
+      certificate's name. Confirmed: both signatures are `Valid` (`CN=Tailscale Inc.` for 1.104.4,
+      `CN=OOO GlavSoft` for 2.8.90) and a copy with one byte changed gives `HashMismatch`, which the
+      script refuses. TightVNC has the features `Server` and `Viewer`, the SET_/VALUE_OF_ properties for
+      AllowLoopback, LoopbackOnly and UseVncAuthentication, `SERVER_REGISTER_AS_SERVICE` and
+      `SERVER_ADD_FIREWALL_EXCEPTION` (default 1, so the 0 is needed); it registers the service
+      `tvnserver` with a custom action and, in a silent install without `SET_PASSWORD`, does not run
+      the password check. Tailscale registers the service `Tailscale` (automatic start) and has no
+      action that opens its window. **Still open (needs a clean PC):** that a real install leaves the
+      TightVNC service answering only on loopback, with authentication on and no firewall rule; whether
+      the Tailscale window shows up after a silent install; how TightVNC 4 registers.
 
       Done when: the results are written in this item and the script's catalog uses them; any property
       that does not behave changes the design here first.

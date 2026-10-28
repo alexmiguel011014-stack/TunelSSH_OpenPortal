@@ -27,6 +27,12 @@ $ProgressPreference = 'SilentlyContinue'
 # sabe configurar (src/main/system/host-vnc.js); a 4.0 guarda a configuracao em outro lugar.
 # Os argumentos do TightVNC deixam so o servidor, como servico, sem excecao de firewall e so com
 # conexoes locais; sem senha na linha de comando (o app define uma depois, em "Configurar TightVNC").
+# Conferido em 2026-10-28 contra os próprios MSI (leitura das tabelas, sem instalar): o certificado do
+# Tailscale 1.104.4 tem CN=Tailscale Inc. e o do TightVNC 2.8.90 tem CN=OOO GlavSoft (o campo
+# Manufacturer do MSI diz "GlavSoft LLC", mas o que vale é o certificado). O TightVNC tem os recursos
+# Server e Viewer (ADDLOCAL=Server) e as propriedades SET_/VALUE_OF_ abaixo; SERVER_ADD_FIREWALL_EXCEPTION
+# vale 1 por padrão, por isso o 0. Em instalação silenciosa o serviço é o tvnserver e, sem SET_PASSWORD,
+# a verificação de senhas não roda: o app define a senha depois.
 $catalog = @{
   tailscale = @{
     Label   = 'Tailscale'
@@ -39,7 +45,7 @@ $catalog = @{
     Label   = 'TightVNC'
     Url     = 'https://www.tightvnc.com/download/2.8.90/tightvnc-2.8.90-gpl-setup-64bit.msi'
     Hosts   = @('www.tightvnc.com')
-    Signers = @('GlavSoft LLC')
+    Signers = @('OOO GlavSoft')
     Args    = @(
       '/qn', '/norestart',
       'ADDLOCAL=Server',

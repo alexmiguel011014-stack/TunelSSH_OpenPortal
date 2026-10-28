@@ -20,6 +20,9 @@ function catalogEntries() {
       hosts: [...(/Hosts\s*=\s*@\(([^)]*)\)/.exec(body)?.[1] || '').matchAll(/'([^']+)'/g)].map(
         (m) => m[1],
       ),
+      signers: [...(/Signers\s*=\s*@\(([^)]*)\)/.exec(body)?.[1] || '').matchAll(/'([^']+)'/g)].map(
+        (m) => m[1],
+      ),
       args: body,
     };
   }
@@ -43,6 +46,13 @@ describe('install-prereq.ps1 (análise do texto)', () => {
       expect(OFFICIAL_HOSTS, name).toContain(url.hostname);
       expect(entry.hosts, name).toEqual([url.hostname]);
     }
+  });
+
+  it('os assinantes são os que estão nos certificados dos MSI (lidos em 2026-10-28)', () => {
+    // O campo Manufacturer do MSI do TightVNC diz "GlavSoft LLC", mas o certificado diz "OOO GlavSoft":
+    // com o nome errado a instalação seria sempre recusada.
+    expect(catalogEntries().tailscale.signers).toEqual(['Tailscale Inc.']);
+    expect(catalogEntries().tightvnc.signers).toEqual(['OOO GlavSoft']);
   });
 
   it('o TightVNC fica na série 2.8, a que o app sabe configurar', () => {
@@ -150,5 +160,31 @@ describe.skipIf(process.platform !== 'win32')('install-prereq.ps1 (no Windows)',
       ].join('\n'),
     );
     expect(output.trim()).toBe('True,True,False,False,False,False');
+  });
+
+  it('aceita os assinantes reais do catálogo e recusa o nome do campo Manufacturer', () => {
+    const fn = /function Test-SignerMatches[\s\S]*?\r?\n\}/.exec(source)[0];
+    const cert = (subject) =>
+      `([pscustomobject]@{ SignerCertificate = [pscustomobject]@{ Subject = '${subject}' } })`;
+    // Os assuntos exatos dos certificados do Tailscale 1.104.4 e do TightVNC 2.8.90 (Get-AuthenticodeSignature).
+    const tailscale =
+      'CN=Tailscale Inc., O=Tailscale Inc., L=Toronto, S=Ontario, C=CA, SERIALNUMBER=1131559-5, OID.2.5.4.15=Private Organization, OID.1.3.6.1.4.1.311.60.2.1.3=CA';
+    const tightvnc =
+      'E=info@glavsoft.com, CN=OOO GlavSoft, O=OOO GlavSoft, L=Tomsk, S=Tomsk Oblast, C=RU';
+    const { tailscale: ts, tightvnc: vnc } = catalogEntries();
+    const list = (signers) => `@(${signers.map((s) => `'${s}'`).join(',')})`;
+    const output = powershell(
+      [
+        fn,
+        '$results = @(',
+        `  (Test-SignerMatches ${cert(tailscale)} ${list(ts.signers)}),`,
+        `  (Test-SignerMatches ${cert(tightvnc)} ${list(vnc.signers)}),`,
+        `  (Test-SignerMatches ${cert(tightvnc)} @('GlavSoft LLC')),`,
+        `  (Test-SignerMatches ${cert(tailscale)} ${list(vnc.signers)})`,
+        ')',
+        '($results | ForEach-Object { [string]$_ }) -join ","',
+      ].join('\n'),
+    );
+    expect(output.trim()).toBe('True,True,False,False');
   });
 });
