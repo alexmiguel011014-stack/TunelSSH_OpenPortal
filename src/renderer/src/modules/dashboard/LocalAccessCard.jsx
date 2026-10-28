@@ -1,5 +1,8 @@
 import { useEffect, useState } from 'react';
 import { Check, Copy, RefreshCw } from 'lucide-react';
+import { gateFor, vncNoteFor } from '../../shared/lib/requirements';
+import { usePrereqs } from '../prereqs/PrereqsContext';
+import { RequirementGate } from '../prereqs/RequirementGate';
 
 const sectionTitle = 'text-xs font-semibold mb-3 uppercase tracking-wide text-text-muted';
 const iconButton =
@@ -8,11 +11,17 @@ const iconButton =
 // Cartão "Este PC" da tela inicial, estilo TeamViewer/AnyDesk: o IP Tailscale
 // deste PC e a senha de acesso da sessão, para passar a quem vai conectar. A
 // senha vive no processo principal; aqui ela só é exibida.
-export default function LocalAccessCard() {
+export default function LocalAccessCard({ showTailscaleGate = true }) {
   const [info, setInfo] = useState(null);
   const [copied, setCopied] = useState('');
   const [settingUp, setSettingUp] = useState(false);
   const [setupError, setSetupError] = useState('');
+  // Receber conexões depende do Tailscale (o IP) e, por VNC, do TightVNC 2 (GOALS 22). O cartão
+  // continua útil sem eles, então o que falta aparece como aviso, não no lugar do cartão.
+  const { prerequisites } = usePrereqs();
+  // Quem também vê "Conectar a um PC" já recebe o mesmo aviso do Tailscale ali: não repete aqui.
+  const tailscaleGate = showTailscaleGate ? gateFor({ screen: 'receive', prerequisites }) : null;
+  const vncNote = vncNoteFor({ prerequisites });
 
   useEffect(() => {
     let alive = true;
@@ -119,7 +128,9 @@ export default function LocalAccessCard() {
         Quem tiver este IP e a senha entra sem você clicar em Aceitar. A senha muda depois de cada
         acesso e sempre que o app abre.
       </p>
-      {info && !info.hostVncLocalOnly && (
+      <RequirementGate gate={tailscaleGate} variant="notice" />
+      <RequirementGate gate={vncNote} variant="notice" />
+      {info && !info.hostVncLocalOnly && !vncNote && (
         <div className="mt-3 flex items-center gap-3 rounded-lg border border-warning/40 bg-warning/10 px-3 py-2.5 text-xs text-text-secondary">
           <span className="flex-1">
             {info.hostVncConfigured
@@ -136,7 +147,7 @@ export default function LocalAccessCard() {
           </button>
         </div>
       )}
-      {info?.hostVncLocalOnly && (
+      {info?.hostVncLocalOnly && !vncNote && (
         <div className="mt-3 flex items-center gap-3 text-[11px] text-text-faint">
           <span className="flex-1">
             TightVNC protegido: só aceita conexões feitas pelo OpenPortal, depois da aprovação.

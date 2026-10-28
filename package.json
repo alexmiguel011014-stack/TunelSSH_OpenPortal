@@ -69,6 +69,13 @@
         ]
       },
       {
+        "from": "resources/prereqs",
+        "to": "prereqs",
+        "filter": [
+          "install-prereq.ps1"
+        ]
+      },
+      {
         "from": "lab-service/bin/Release",
         "to": "lab-service",
         "filter": [
@@ -94,7 +101,15 @@
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
       "shortcutName": "OpenPortal Remote",
-      "license": "docs/LICENSE.txt",
+      "license": "resources/installer/license.txt",
+      "installerSidebar": "resources/installer/sidebar.bmp",
+      "uninstallerSidebar": "resources/installer/sidebar.bmp",
+      "installerHeader": "resources/installer/header.bmp",
+      "installerLanguages": [
+        "pt_BR",
+        "en_US"
+      ],
+      "language": "1046",
       "include": "scripts/installer.nsh",
       "installerIcon": "resources/icon.ico",
       "uninstallerIcon": "resources/icon.ico",

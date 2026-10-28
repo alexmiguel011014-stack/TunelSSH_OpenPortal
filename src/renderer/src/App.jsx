@@ -12,6 +12,9 @@ import AccountBanner from './modules/auth/AccountBanner';
 import ApprovalsPanel from './modules/auth/ApprovalsPanel';
 import { useAuth } from './modules/auth/AuthContext';
 import MyAccessPanel from './modules/access/MyAccessPanel';
+import { PrereqsProvider } from './modules/prereqs/PrereqsContext';
+import Gated from './modules/prereqs/RequirementGate';
+import { FirstRunReview } from './modules/prereqs/PrereqsPanel';
 import { canSee, landingScreen } from './shared/lib/accounts';
 import { isLabModeOn } from './shared/lib/lab';
 import {
@@ -505,74 +508,81 @@ export default function App() {
 
   return (
     <MachineContext.Provider value={contextValue}>
-      <div className="flex h-screen w-screen relative overflow-hidden">
-        <Sidebar />
-        <main className="flex-1 flex flex-col overflow-hidden relative">
-          <AccountBanner />
-          {/* Uma instância de RemoteViewer por máquina conectada, sempre
+      <PrereqsProvider>
+        <div className="flex h-screen w-screen relative overflow-hidden">
+          <Sidebar />
+          <main className="flex-1 flex flex-col overflow-hidden relative">
+            <AccountBanner />
+            <FirstRunReview />
+            {/* Uma instância de RemoteViewer por máquina conectada, sempre
               montada — só a focada (e só quando não estamos em
               Config/Arquivos/Atividade) fica visível. Isso evita derrubar a
               sessão VNC das outras ao trocar de foco (ver
               docs/ARQUITETURA_CONEXAO.md). */}
-          {Object.entries(connectedMachines).map(([id, entry]) => {
-            const isFocusedAndVisible =
-              !showConfig &&
-              !showFiles &&
-              !showActivity &&
-              !labVisible &&
-              !approvalsVisible &&
-              !accessVisible &&
-              id === focusedMachineId;
-            return (
-              <div
-                key={id}
-                className="absolute inset-0 flex flex-col overflow-hidden"
-                style={{
-                  display: isFocusedAndVisible ? 'flex' : 'none',
-                }}
-              >
-                {resolveTransport(entry.machine) === 'rdp' ? (
-                  <RdpViewer machine={entry.machine} isVisible={isFocusedAndVisible} />
-                ) : (
-                  <RemoteViewer
-                    machine={entry.machine}
-                    vncGrant={entry.vncGrant}
-                    vncTunnel={entry.vncTunnel}
-                    reconnectFlag={reconnectFlag}
-                  />
-                )}
-              </div>
-            );
-          })}
+            {Object.entries(connectedMachines).map(([id, entry]) => {
+              const isFocusedAndVisible =
+                !showConfig &&
+                !showFiles &&
+                !showActivity &&
+                !labVisible &&
+                !approvalsVisible &&
+                !accessVisible &&
+                id === focusedMachineId;
+              return (
+                <div
+                  key={id}
+                  className="absolute inset-0 flex flex-col overflow-hidden"
+                  style={{
+                    display: isFocusedAndVisible ? 'flex' : 'none',
+                  }}
+                >
+                  {resolveTransport(entry.machine) === 'rdp' ? (
+                    <RdpViewer machine={entry.machine} isVisible={isFocusedAndVisible} />
+                  ) : (
+                    <RemoteViewer
+                      machine={entry.machine}
+                      vncGrant={entry.vncGrant}
+                      vncTunnel={entry.vncTunnel}
+                      reconnectFlag={reconnectFlag}
+                    />
+                  )}
+                </div>
+              );
+            })}
 
-          {showConfig ? (
-            <ConfigPanel />
-          ) : showFiles ? (
-            <FileExplorer />
-          ) : showActivity ? (
-            <ActivityPanel />
-          ) : labVisible ? (
-            <LabPanel />
-          ) : approvalsVisible ? (
-            <ApprovalsPanel />
-          ) : accessVisible ? (
-            <MyAccessPanel />
-          ) : !focusedMachineId ? (
-            <Dashboard />
-          ) : null}
-        </main>
+            {showConfig ? (
+              <ConfigPanel />
+            ) : showFiles ? (
+              <Gated screen="files">
+                <FileExplorer />
+              </Gated>
+            ) : showActivity ? (
+              <ActivityPanel />
+            ) : labVisible ? (
+              <Gated screen="lab">
+                <LabPanel />
+              </Gated>
+            ) : approvalsVisible ? (
+              <ApprovalsPanel />
+            ) : accessVisible ? (
+              <MyAccessPanel />
+            ) : !focusedMachineId ? (
+              <Dashboard />
+            ) : null}
+          </main>
 
-        {/* Hamburger when sidebar collapsed */}
-        {sidebarCollapsed && (
-          <button
-            onClick={toggleSidebar}
-            title="Mostrar barra lateral"
-            className="fixed top-2 left-2 z-[9999] p-2 rounded-md bg-surface/85 border border-line hover:opacity-100 opacity-85 transition-opacity text-text-secondary"
-          >
-            <PanelLeftOpen size={18} />
-          </button>
-        )}
-      </div>
+          {/* Hamburger when sidebar collapsed */}
+          {sidebarCollapsed && (
+            <button
+              onClick={toggleSidebar}
+              title="Mostrar barra lateral"
+              className="fixed top-2 left-2 z-[9999] p-2 rounded-md bg-surface/85 border border-line hover:opacity-100 opacity-85 transition-opacity text-text-secondary"
+            >
+              <PanelLeftOpen size={18} />
+            </button>
+          )}
+        </div>
+      </PrereqsProvider>
     </MachineContext.Provider>
   );
 }

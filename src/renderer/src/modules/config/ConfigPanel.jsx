@@ -3,6 +3,7 @@ import { ArrowLeft, Check, XCircle, AlertTriangle, Copy } from 'lucide-react';
 import { MachineContext } from '../../App';
 import LabModeSettings from '../lab/LabModeSettings';
 import AccountSettings from '../auth/AccountSettings';
+import PrereqsPanel from '../prereqs/PrereqsPanel';
 
 const MAX_PORT = 65535;
 
@@ -356,6 +357,19 @@ export default function ConfigPanel() {
         </div>
 
         <AccountSettings />
+
+        <section
+          aria-label="Programas necessários"
+          className="mb-6 p-4 bg-surface rounded-xl border border-line-subtle"
+        >
+          <h3 className="text-xs font-semibold uppercase tracking-wide text-text-muted">
+            Programas necessários
+          </h3>
+          <p className="mt-1 mb-3 text-[11px] text-text-faint">
+            O Tailscale conecta os PCs; o TightVNC é o servidor VNC deste PC.
+          </p>
+          <PrereqsPanel />
+        </section>
 
         <div className="mb-6 p-4 bg-accent/10 rounded-xl border border-accent/30">
           <p className="text-xs text-text-faint mb-1">

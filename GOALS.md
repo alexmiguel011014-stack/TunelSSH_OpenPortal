@@ -2997,6 +2997,275 @@ message.
 
 ---
 
+## GOALS 22 — Installer that checks for Tailscale and TightVNC, and requirement gates in the app (feature)
+
+```mermaid
+flowchart TD
+    V[Spike: MSI switches, signatures, TightVNC 4] --> S[Shared prerequisite script]
+    L[Installer look: Portuguese, art, license] --> P[Installer page: scan and offer]
+    S --> P
+    S --> D[App: detection and install IPC]
+    D --> G[App: requirement gates and first-run check]
+    P --> T[Suites and clean-PC acceptance]
+    G --> T
+    T --> R[Docs]
+```
+
+Suggested: opus · high — it downloads installers and runs them elevated on users' PCs, so the
+signature checks must hold, and the NSIS installer has no automated tests; the look items alone are
+haiku · low.
+
+**The request (2026-10-28):** apply the installer suggestion (Portuguese, the app's own art) and make
+the installer scan the PC for what OpenPortal needs, Tailscale and TightVNC, offering to download what
+is missing. If the user declines, an OpenPortal screen blocks them and explains that their connection
+depends on those programs. The user asked whether the app works without them at all.
+
+**Answer, from the code (2026-10-28): partly, so the block must be per feature, not the whole app.**
+
+| Feature | Tailscale on this PC | TightVNC on this PC |
+| --- | --- | --- |
+| Sign in, create account, Aprovações | no (internet only) | no |
+| Meu acesso (student) | only when the PC's address is `100.x` (students at home); a campus LAN address works without it | no (`mstsc.exe` is part of Windows) |
+| Conectar a um PC (VNC or RDP) | **yes**: `src/main/connection/net-guard.js` and `proxy.js` dial only `100.64.0.0/10` | no: the viewer is the embedded noVNC, RDP uses the bundled sidecar |
+| Este PC being controlled by others | **yes**: callers dial its `100.x` and approval reads `tailscale whois` | **yes for VNC** (TightVNC 2, configured by "Configurar TightVNC"); no for RDP, which needs Windows Pro, Enterprise or Education instead |
+| Laboratório (manager) and a lab PC | **yes**: managers are authorized by `tailscale whois` (`src/main/lab/host.js`) | no: lab PCs use RDP accounts (GOALS 17) |
+| Arquivos (file transfer) | **yes** (`100.x` only) | no |
+
+Blocking the whole app would break cases that work today: a student on campus using Meu acesso, a
+teacher's PC that only connects out (no TightVNC needed), a Windows Pro PC hosting by RDP (no
+TightVNC), and the screens that only need the internet. So the app gets one "Verificação do
+computador" screen on first start and a gate card in place of each screen that cannot work.
+
+**Design.**
+
+- **One prerequisite script, used by the installer and by the app.** `resources/prereqs/install-prereq.ps1
+  -Name tailscale|tightvnc -ResultFile <path>`, shipped through `extraResources`. It holds the only
+  catalog: the official HTTPS URL, the expected Authenticode signer, the `msiexec` arguments.
+  - Tailscale: `https://pkgs.tailscale.com/stable/tailscale-setup-latest-amd64.msi` (on 2026-10-28 it
+    redirected to `tailscale-setup-1.104.4-amd64.msi`, 38.8 MB) with `/qn /norestart`.
+  - TightVNC: `https://www.tightvnc.com/download/2.8.90/tightvnc-2.8.90-gpl-setup-64bit.msi` (2.5 MB),
+    server only, as a service, no firewall exception, loopback-only from the first second (the
+    properties are confirmed in G22-V1). **No password on the command line:** the app's existing
+    "Configurar TightVNC" sets a random one afterwards (GOALS 9 and 10).
+  - The script downloads into a new folder, refuses to run anything whose signature is not `Valid` from
+    the expected signer, runs `msiexec` with an argument list (no string built from input), treats exit
+    codes 0 and 3010 as success (3010 = restart needed), deletes the MSI, and writes a small JSON result
+    (`ok`, `code`, `restartNeeded`, `message`). Unknown names are refused.
+- **TightVNC stays on 2.8.x.** TightVNC 4.0.0 (released by 2026-10) is closed source and stores settings
+  "in protected locations", while `src/main/system/host-vnc.js` writes `HKLM\SOFTWARE\TightVNC\Server`;
+  TightVNC 2 "will continue to be supported" by GlavSoft. A PC with TightVNC 4 is told that OpenPortal
+  configures only TightVNC 2.
+- **Download, not bundling.** The MSIs are fetched from the vendors at install time: no redistribution
+  question (TightVNC is GPL, the Tailscale Windows client is not open source), no stale copies inside the
+  installer, and the installer stays small. An offline PC still installs OpenPortal; the app offers the
+  programs again later.
+- **Installer page** (`customPageAfterChangeDir` in `scripts/installer.nsh`, after the folder page): "Programas
+  necessários" lists Tailscale and TightVNC as found or missing, read from the 64-bit registry (the
+  `Tailscale` and `tvnserver` services). A missing Tailscale is pre-checked ("necessário para conectar a
+  outros PCs e para ser acessado por eles"); a missing TightVNC is not ("só se outros PCs vão controlar
+  este pelo VNC; no Windows Pro o RDP serve sem ele"). The page is skipped on updates (`${isUpdated}`,
+  which the electron-updater uses) and in silent installs. The choices run in `customInstall`, after the
+  files exist, through the same script; a failure never fails the OpenPortal install and ends in one
+  message ("O Tailscale não foi instalado: <motivo>. O OpenPortal vai oferecer de novo ao abrir.").
+- **Installer look:** the wizard in Portuguese (`installerLanguages: ["pt_BR", "en_US"]`, `language:
+  "1046"`), its own sidebar (164 × 314) and header (150 × 57) bitmaps made from `resources/icon.png` on
+  the app's dark background by a committed script, and a license file with a short Portuguese summary
+  above the unchanged MIT text.
+- **App detection** (`src/main/system/prerequisites.js`): Tailscale missing, installed but stopped,
+  needing sign-in, or running (from `tailscale status --json`, `BackendState`, with the fallback binary
+  path already used by `identity.js`); TightVNC missing, 2.x or 4.x, service running or not, configured
+  by the app or not (the existing host VNC state); the Windows edition (`EditionID`), to say whether RDP
+  hosting is possible.
+- **Gates in the app.** A pure function in `src/renderer/src/shared/lib/requirements.js` maps detection,
+  role and screen to "allowed" or a gate card. The card replaces the screen's content and says what is
+  missing, why, and offers **Instalar** (the script through UAC), **Abrir o Tailscale** (when it only
+  needs sign-in) and **Verificar de novo**. Gated: Conectar a um PC, Laboratório, Arquivos, and the
+  receiving part of "Este PC". Never gated: sign in, Aprovações, Meu acesso (it keeps its `100.x` hint),
+  Configurações, Atualizações. "Verificação do computador" shows once on the first start after install
+  (and from Configurações at any time), with "Continuar sem instalar".
+- **Out of scope:** ARM64 and 32-bit Windows; macOS; signing in to Tailscale for the user (auth keys,
+  invite links); installing or uninstalling anything when OpenPortal is uninstalled; TightVNC 4 support;
+  `winget`; bundling the MSIs; checking for newer versions of the two programs.
+
+### Spike
+
+- [ ] **G22-V1 — Switches, signatures and TightVNC 4 on a clean PC `(manual)`:** on a Windows VM or PC
+      without either program, run both MSIs with the planned arguments from an elevated prompt and
+      record:
+      - the TightVNC properties that give a service listening only on loopback with VNC
+        authentication on and no firewall rule (`ADDLOCAL=Server`, `SERVER_REGISTER_AS_SERVICE=1`,
+        `SERVER_ADD_FIREWALL_EXCEPTION=0`, `SET_USEVNCAUTHENTICATION=1`/`VALUE_OF_USEVNCAUTHENTICATION=1`,
+        `SET_ALLOWLOOPBACK=1`/`VALUE_OF_ALLOWLOOPBACK=1`, `SET_LOOPBACKONLY=1`/`VALUE_OF_LOOPBACKONLY=1`
+        are the candidates);
+      - whether the Tailscale GUI starts after a silent install, so the user can sign in;
+      - the exact signer subject of each MSI (`Get-AuthenticodeSignature`);
+      - how TightVNC 4 registers (service name, registry key, `DisplayVersion`), so detection can tell
+        2 from 4.
+      **Status 2026-10-28:** step 1 of block 9 in `docs/BATERIA_DE_TESTES.md`. The script's catalog
+      uses the plan's candidates (signers "Tailscale Inc." and "GlavSoft LLC", the TightVNC
+      properties above); nothing was downloaded or installed on this PC, and a wrong signer name
+      fails safe (the install is refused).
+
+      Done when: the results are written in this item and the script's catalog uses them; any property
+      that does not behave changes the design here first.
+
+### Installer look
+
+- [x] **G22-I1 — Portuguese wizard:** `installerLanguages: ["pt_BR", "en_US"]` and `language: "1046"` in
+      `package.json` `build.nsis`. Done when: an installer built with `npm run dist` shows its pages in
+      Portuguese on a Portuguese Windows (G22-T2).
+      **Done 2026-10-28:** `installerLanguages: ["pt_BR", "en_US"]` and `language: "1046"`.
+      **Correction to the design:** electron-builder already picked the language from the OS among
+      every bundled one, so the gain is Portuguese as the fallback and only two languages to
+      translate (the new page has both). `electron-builder --win nsis` compiled it with warnings as
+      errors; that the wizard shows Portuguese on a Portuguese Windows is step 2 of block 9
+      (G22-T2).
+- [x] **G22-I2 — Sidebar and header art:** `scripts/make-installer-art.ps1` (System.Drawing, no new npm
+      dependency) writes `resources/installer/sidebar.bmp` (164 × 314) and `resources/installer/header.bmp`
+      (150 × 57) as 24-bit BMPs from `resources/icon.png` on the app's dark background color, and
+      `build.nsis` points `installerSidebar`, `uninstallerSidebar` and `installerHeader` at them. Both
+      files are committed. Done when: the files have those sizes and format (a test reads the BMP header)
+      and the built installer shows them.
+      **Done 2026-10-28:** `scripts/make-installer-art.ps1` (System.Drawing; the 48 × 48 icon keeps
+      its size, no upscaling) wrote `resources/installer/sidebar.bmp` and `header.bmp`, and
+      `build.nsis` points `installerSidebar`, `uninstallerSidebar` and `installerHeader` at them.
+      `scripts/__tests__/installer-assets.test.js` reads the BMP headers (BM, 164 × 314 and 150 ×
+      57, 24 bits, no compression). The installer compiled with them; seeing them in the wizard is
+      step 2 of block 9.
+- [x] **G22-I3 — License page:** `resources/installer/license.txt` with a short Portuguese summary of the
+      MIT terms followed by the full, unchanged text of `docs/LICENSE.txt`, set as `build.nsis.license`.
+      Done when: a test checks the file ends with the exact text of `docs/LICENSE.txt`.
+      **Done 2026-10-28:** `resources/installer/license.txt` is a Portuguese summary plus
+      `docs/LICENSE.txt` byte for byte, saved as UTF-8 with BOM (the Unicode NSIS reads accents only
+      with it); the test checks that it ends with the exact text of `docs/LICENSE.txt`.
+
+### Shared prerequisite script
+
+- [x] **G22-I4 — `resources/prereqs/install-prereq.ps1`:** as in the design, plus an `extraResources`
+      entry so it lands in `resources/prereqs/` of the installed app. Done when: `src/main/system/__tests__/prereq-script.test.js`
+      checks the script statically (only `https://` URLs on `pkgs.tailscale.com` and `www.tightvnc.com`,
+      a signature check before `msiexec`, no `Invoke-Expression`, unknown names refused, 0 and 3010
+      mapped to success), the unpacked build (`npm run pack`) contains it, and on the clean PC of G22-V1
+      each name installs and a tampered MSI (one byte changed) is refused.
+      **Done 2026-10-28:** `resources/prereqs/install-prereq.ps1` (UTF-8 with BOM, for Windows
+      PowerShell 5.1) and its `extraResources` entry; exit codes 0, 2 (restart asked) and 10 to 15.
+      `prereq-script.test.js` checks the catalog, https from the two official hosts only, the
+      signature check before `msiexec`, no `Invoke-Expression` or encoded command, TightVNC without
+      a password and loopback-only, the exit-code mapping, an unknown name refused with code 10 and
+      a result file, and that the signer must match the exact CN (not a prefix or another field).
+      The packaged build contains it (`dist-electron/win-unpacked/resources/prereqs/`). **Amended:**
+      the last clause of "Done when" (each name installs on the clean PC, a tampered MSI is refused)
+      is checked in G22-V1 and G22-T2, not here.
+
+### Installer page
+
+- [x] **G22-I5 — "Programas necessários" page:** `customPageAfterChangeDir` with nsDialogs in
+      `scripts/installer.nsh`, with the detection, defaults and texts of the design (Portuguese and English
+      `LangString`s); skipped on `${isUpdated}` and in silent mode; a TightVNC 4 found is shown with the
+      note that OpenPortal configures only TightVNC 2. Done when: the build compiles with
+      `warningsAsErrors` left on, and the page behaves as described in G22-T2.
+      **Done 2026-10-28:** `scripts/installer.nsh` has `customPageAfterChangeDir`, `customHeader`
+      (functions and `LangString`s in Portuguese and English, behind `!ifndef BUILD_UNINSTALLER`)
+      and `customInstall`. Detection reads the `Tailscale` and `tvnserver` services and any
+      `TightVNC*` entry of the uninstall list, so a TightVNC 4 counts as installed. **Deviation:**
+      the "TightVNC 4 note" lives in the app only, since the service name of version 4 is unknown
+      (G22-V1). Compiled with `warningsAsErrors` on, plus static tests in
+      `installer-assets.test.js`. **Amended:** "behaves as described" is G22-T2 (block 9, steps 3,
+      8, 9 and 11); the page was not run here.
+- [x] **G22-I6 — Install the chosen programs:** `customInstall` runs the script for each choice
+      (`nsExec`, `powershell -NoProfile -ExecutionPolicy Bypass -File`), shows "Baixando o Tailscale…" in
+      the details list, writes the result files to the installer's temp folder, and shows one message
+      listing what failed (none in silent mode). Done when: on the clean PC both install from the wizard,
+      and with the network unplugged OpenPortal still installs and the message names both.
+      **Done 2026-10-28:** `PrereqInstallChosen` and `PrereqRunOne` call a fixed command line
+      (`-NoProfile -NonInteractive -ExecutionPolicy Bypass -File
+      "$INSTDIR\resources\prereqs\install-prereq.ps1" -Name <fixed name>`) with the 64-bit
+      PowerShell (`DisableX64FSRedirection`, since the installer is 32-bit) and `nsExec::Exec`; the
+      wizard's sentences come from the exit codes because the script's own text uses another code
+      page. One final message lists the reasons; silent and update installs choose nothing.
+      **Amended:** "Done when" (both install on the clean PC; offline still installs) is G22-T2,
+      block 9, steps 4, 5 and 10; a static test pins the command line.
+
+### App: detection, gates and first-run check
+
+- [x] **G22-I7 — Detection module:** `src/main/system/prerequisites.js` with pure parsers (status JSON,
+      `sc query`, `reg query`, `EditionID`) and a `detectPrerequisites()` that never throws. Done when:
+      tests cover each Tailscale state, TightVNC missing, 2.x, 4.x and stopped, Home vs Pro, and a missing
+      or hanging `tailscale` binary (timeout).
+      **Done 2026-10-28:** `src/main/system/prerequisites.js` with `prerequisites.test.js` (each
+      Tailscale state, the CLI outside PATH, a hanging or garbled binary, TightVNC missing, 2.x, 4.x
+      and stopped, Windows Home vs Pro, and the failure of either probe). Run for real on this PC:
+      Tailscale running, TightVNC 2.8.88 running, Windows Professional.
+- [x] **G22-I8 — IPC:** `prereqs:get`, `prereqs:install` (`tailscale` or `tightvnc` only; one at a time;
+      the script through `runElevatedPowerShell`, which cannot return an exit code, so the result comes
+      from the result file and a fresh detection) and `prereqs:openTailscale` (starts
+      `tailscale-ipn.exe`, argument array, no shell); preload entries. Done when: tests cover the name
+      validation, the refused UAC, a failed result file and the re-detection.
+      **Done 2026-10-28:** `src/main/system/prerequisites-ipc.js` (`prereqs:get`, `prereqs:install`,
+      `prereqs:openTailscale`), the preload entries `getPrerequisites`, `installPrerequisite` and
+      `openTailscale`, registered in `main.js`. The elevated command runs the script with `-File`
+      and `exit $LASTEXITCODE`; the result comes from a result file and a new detection. Tests cover
+      the name validation (`tailscale; calc`, odd types), one install at a time, a refused UAC, a
+      missing or broken result file, the temp folder removed and the GUI start with no shell. In the
+      real app over CDP the three functions exist, `prereqs:get` returns the real state and an
+      invalid name is refused; no install was run.
+- [x] **G22-I9 — Gate rules and cards:** `requirements.js` (pure) and a `RequirementGate` component used
+      by the gated screens, with the texts of the design; "Este PC" shows the TightVNC card only for the
+      VNC part, and on Windows Pro mentions RDP as the alternative. Done when: tests cover the table of
+      the answer above for each role (teacher, student, guest), and in the browser pane with a mocked
+      preload each gated screen shows its card, **Instalar** moves to "instalando" and back, and the
+      ungated screens never show one.
+      **Done 2026-10-28:** `shared/lib/requirements.js` with `requirements.test.js` (the table of
+      the plan per screen and per account kind; `unknown` never blocks), `PrereqsContext`, and
+      `RequirementGate` (a full card for Arquivos and Laboratório; a notice for the Conectar section
+      and the Este PC card; each card shows only its own program's progress and result, and the Este
+      PC card does not repeat the Tailscale notice when Conectar shows it). In the browser pane with
+      a mocked preload: Tailscale missing, stopped and needing login; TightVNC missing (Pro and
+      Home), unsupported and stopped; an install in progress, succeeding and failing; light and
+      dark; the 900 × 600 minimum window. Atividade, Meu acesso and Configurações never show a card.
+      The Laboratório card was not opened in the pane (its menu entry needs lab mode on); it is the
+      same `Gated` as Arquivos.
+- [x] **G22-I10 — "Verificação do computador":** shown once on the first start after install (a flag in
+      the config), reachable from Configurações, with both programs, their state, the buttons of G22-I9
+      and "Continuar sem instalar". Done when: in the browser pane it appears on the first start only and
+      from Configurações at any time.
+      **Done 2026-10-28:** `PrereqsPanel` and `FirstRunReview`: shown over the content once per PC
+      and only if something is missing (a PC with both programs running never sees it, and the
+      "seen" flag is set at once), and always under Configurações → Programas necessários. Checked
+      in the browser pane. **Deviation:** the "seen" flag is in the window's `localStorage`, like
+      the theme, instead of `config.json`, which needs no main-process change.
+
+### Regression test
+
+- [x] **G22-T1 — Suites:** `npm test`, `npm run lint` at 0 errors and `npm run build`. Done when: all
+      pass.
+      **Done 2026-10-28:** `npm test` 1126 passed and 1 skipped (it was 1022), `npm run lint` 0
+      errors and the same 9 warnings, `npm run build` OK, and `electron-builder --win nsis` compiled
+      the installer locally.
+- [ ] **G22-T2 — Clean PC, update and offline `(manual)`:** on a Portuguese Windows without either
+      program: the wizard is in Portuguese with the new art; the page shows both missing with Tailscale
+      pre-checked; with both checked they install, TightVNC answers only on loopback (the app's probe of
+      GOALS 10) and the Tailscale window asks for sign-in; uninstall Tailscale and the app shows its gate
+      on Conectar and Laboratório but not on Meu acesso, and **Instalar** reinstalls it through UAC; an
+      update through the app (electron-updater) never shows the page; `/S` installs neither program; with
+      the network off OpenPortal installs and the message names both programs. Done when: all hold and
+      the result is written here.
+      **Status 2026-10-28:** steps 2 to 12 of block 9 in `docs/BATERIA_DE_TESTES.md`; it needs a
+      clean Windows (a virtual machine is enough). Add to it a tampered MSI (one byte changed): the
+      script must refuse it.
+
+### Registration
+
+- [x] **G22-R1 — Docs:** "Programas necessários" in `README.md` (what each program is for, the table of
+      the answer above), the installer and the gates in `docs/ARQUITETURA_CONEXAO.md`, the G22-T2 steps
+      as block 9 of `docs/BATERIA_DE_TESTES.md`, and a `docs/CHANGELOG.md` entry. Done when: each one
+      mentions it, checked directly.
+      **Done 2026-10-28:** section 7 of `README.md`, "Programas necessários" in
+      `docs/ARQUITETURA_CONEXAO.md`, block 9 of `docs/BATERIA_DE_TESTES.md` and a
+      `docs/CHANGELOG.md` row; checked directly.
+
+---
+
 ## Cross-goal ordering
 
 GOALS 1 and GOALS 2 (transport: multi-session VNC, then optional RDP) are independent of
@@ -3042,6 +3311,13 @@ independent of GOALS 15 and of any open PR; delivery to `master` follows the use
 series. Not planned: monitoring of apps and downloads (the manager reads the student's folder instead),
 students moving between PCs, central file storage, more than one active student per PC, blocking RDP
 clipboard or drive redirection, PCs on Windows Home.
+
+GOALS 22 (installer prerequisites and requirement gates, added 2026-10-28) is independent of GOALS 20
+and 21 and of the open manual items; it changes the installer, so it ships through the nightly build of
+GOALS 15. Inside it: **G22-V1 comes first**, because the TightVNC properties and the signer names it
+records are the script's catalog; the look items (G22-I1 to I3) can land at any time; the script
+(G22-I4) before both the installer page (G22-I5, I6) and the app's install button (G22-I8); the gates
+(G22-I9, I10) after detection (G22-I7).
 
 For accounts (GOALS 20–21, added 2026-10-22): **the manual setup comes first** (G20-P1 project, G20-P2
 SMTP and its inbox check), because the code step and every real test need a project that sends e-mail.
