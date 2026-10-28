@@ -2717,7 +2717,7 @@ decision."
       `ping()` is executable by `anon`). It was mutation-checked: granting `update` on the whole
       table lets a student promote themselves, so the suite would fail. `npx supabase test db` is
       not used.
-- [ ] **G20-S3 — Apply and promote the first teacher `(manual)`:** `npx supabase login`,
+- [x] **G20-S3 — Apply and promote the first teacher `(manual)`:** `npx supabase login`,
       `npx supabase link --project-ref <ref>`, `npx supabase db push`; then, in the SQL editor,
       `update public.profiles set role = 'professor', teacher_requested_at = null where email = '<user>';`
       after the user's own sign-up. Done when: the Security Advisor shows no RLS or exposure warning
@@ -2725,15 +2725,17 @@ decision."
       **Status 2026-10-22:** the commands and the SQL are in `docs/SUPABASE.md` (section 4). The
       `update` must set `teacher_requested_at = null` too: the check constraint refuses a professor
       with a pending request. It needs G20-P1.
-      **Status 2026-10-28:** the user ran `supabase login`, `link` and `db push`: all four
-      migrations are applied (`npx supabase migration list --linked` shows local and remote equal)
-      and the user's account reads as `professor` (the app shows the teacher screens). Security
-      Advisor (`npx supabase db advisors --linked --type security`): no RLS warning. Remaining
-      warnings: `ping` with a mutable search_path (fixed by `20261028120000_ping_search_path.sql`,
-      **not applied yet**), the three teacher functions callable by signed-in users (by design: each
-      checks the caller, and the RLS rules use `is_teacher`), `rls_auto_enable` (Supabase's own
-      function) and leaked-password protection (a Pro-plan feature). Left open until that migration
-      is applied and the "Done when" above is amended to accept the by-design warnings.
+      **Done 2026-10-28:** the user ran `supabase login`, `link` and `db push`, and all five
+      migrations are applied (`npx supabase migration list --linked` shows local and remote equal;
+      the fifth, `20261028120000_ping_search_path.sql`, was applied afterwards with `db push
+      --linked`). The user's account reads as `professor` (the app shows the teacher screens).
+      `ping()` still answers HTTP 200. Security Advisor (`npx supabase db advisors --linked --type
+      security`): no RLS warning and no `ping` warning after the migration. Six warnings remain, all
+      expected: the three teacher functions callable by signed-in users (by design: each checks the
+      caller, and the RLS rules use `is_teacher`), `rls_auto_enable` for `anon` and for signed-in
+      users (Supabase's own function), and leaked-password protection (a Pro-plan feature).
+      **Amended:** the "Done when" above accepts these documented warnings instead of requiring an
+      empty list.
 
 ### Main process
 

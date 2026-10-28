@@ -101,9 +101,9 @@ npx supabase db push
 `<projeto>` é a primeira parte da URL (`https://<projeto>.supabase.co`). O `link` pede a senha do banco. O
 `db push` lista as migrations e pergunta se pode aplicá-las (responda Sim); se a CLI avisar que o `db push`
 vai passar a mirar o banco local por padrão, acrescente `--linked`. Ele aplica, em ordem:
-as contas, o `ping` do passo 6, os acessos do GOALS 21 e o agendamento da limpeza com `pg_cron`. Se a
-última recusar `create extension pg_cron`, ligue **pg_cron** em **Database → Extensions** e rode o
-`db push` de novo.
+as contas, o `ping` do passo 6, os acessos do GOALS 21, o agendamento da limpeza com `pg_cron` e o
+`search_path` fixo do `ping`. Se o do agendamento recusar `create extension pg_cron`, ligue **pg_cron** em
+**Database → Extensions** e rode o `db push` de novo.
 
 Depois, **crie a sua própria conta** pelo app (como aluno) e, no **SQL Editor** do painel, promova-a:
 
