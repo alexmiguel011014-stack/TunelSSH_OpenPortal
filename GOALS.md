@@ -2638,7 +2638,7 @@ decision."
 
 ### Supabase project and e-mail
 
-- [ ] **G20-P1 — Create the Supabase project `(manual)`:** a free project in the São Paulo region,
+- [x] **G20-P1 — Create the Supabase project `(manual)`:** a free project in the São Paulo region,
       the limits above confirmed on supabase.com/pricing, `SUPABASE_URL` and `SUPABASE_PUBLISHABLE_KEY`
       written in the local `.env` (only the names go into `.env.example`, with a comment that the
       publishable key is public by design and the secret key never goes into the app) and saved as
@@ -2646,6 +2646,13 @@ decision."
       values, `git status` shows no `.env`, and both secrets are listed in the repository settings.
       **Status 2026-10-22:** not started: it needs the user's own Supabase account. Steps are in
       `docs/SUPABASE.md` (section 1).
+      **Done 2026-10-28:** the user created the free project; `.env` holds both values (the app's
+      own validation accepts the pair and `git check-ignore` shows `.env` is ignored);
+      `SUPABASE_URL` and `SUPABASE_PUBLISHABLE_KEY` are listed as repository secrets (`gh secret
+      list`, names only). The free-plan limits (500 MB of database, 50,000 monthly active users)
+      show in the dashboard's usage panel. **Deviations:** the project is in `us-west-2`, not São
+      Paulo (it works, with a little more latency); a new project had no publishable key, so it was
+      created under Settings → API Keys; the dashboard paths in `docs/SUPABASE.md` were corrected.
 - [ ] **G20-P2 — Brevo SMTP and Auth settings `(manual)`:** a free Brevo account with a verified
       sender and an SMTP key; in Supabase, Authentication > SMTP (`smtp-relay.brevo.com`, port 587,
       sender name "OpenPortal"), "Confirm email" on, code length 6, code expiry 600 s, minimum password
@@ -2659,6 +2666,11 @@ decision."
       (`supabase/templates/confirmation.html` and `recovery.html`, subjects in
       `supabase/config.toml`). The Brevo account, the Supabase SMTP and Auth settings and the Gmail
       and Outlook inbox check need the user (`docs/SUPABASE.md`, section 2).
+      **Status 2026-10-28 (partly done by the user):** Brevo account created, a sender verified (it
+      is a Gmail address, so Brevo warns about DKIM and DMARC), an SMTP key generated, and the
+      Supabase custom SMTP, the Auth settings and both templates saved; a sign-up of the user's own
+      account received the code and finished. **Still to record:** the Gmail and Outlook
+      inbox-versus-spam check (the folder of the first code was not noted).
 - [x] **G20-P3 — Supabase CLI files:** the `supabase` CLI as a devDependency, `supabase/config.toml`
       (from `supabase init`, with the templates and the Auth settings of G20-P2 mirrored for the
       local stack), `supabase/migrations/`, `supabase/tests/`. Done when: `npx supabase --version`
@@ -2713,6 +2725,15 @@ decision."
       **Status 2026-10-22:** the commands and the SQL are in `docs/SUPABASE.md` (section 4). The
       `update` must set `teacher_requested_at = null` too: the check constraint refuses a professor
       with a pending request. It needs G20-P1.
+      **Status 2026-10-28:** the user ran `supabase login`, `link` and `db push`: all four
+      migrations are applied (`npx supabase migration list --linked` shows local and remote equal)
+      and the user's account reads as `professor` (the app shows the teacher screens). Security
+      Advisor (`npx supabase db advisors --linked --type security`): no RLS warning. Remaining
+      warnings: `ping` with a mutable search_path (fixed by `20261028120000_ping_search_path.sql`,
+      **not applied yet**), the three teacher functions callable by signed-in users (by design: each
+      checks the caller, and the RLS rules use `is_teacher`), `rls_auto_enable` (Supabase's own
+      function) and leaked-password protection (a Pro-plan feature). Left open until that migration
+      is applied and the "Done when" above is amended to accept the by-design warnings.
 
 ### Main process
 
@@ -2802,7 +2823,7 @@ decision."
 
 ### Keep-alive
 
-- [ ] **G20-K1 — Keep the free project awake:** a `public.ping()` function (returns `now()`,
+- [x] **G20-K1 — Keep the free project awake:** a `public.ping()` function (returns `now()`,
       executable by `anon`, in its own migration) and `.github/workflows/supabase-keepalive.yml` that
       calls it twice a week with the publishable key from the repository secrets. Done when: a manual
       run of the workflow succeeds; the docs also explain how to restore a paused project.
@@ -2811,6 +2832,10 @@ decision."
       exits cleanly when the secrets are missing) are written, and `docs/SUPABASE.md` (section 6)
       explains restoring a paused project. The manual run needs the secrets (G20-P1) and the
       workflow on GitHub.
+      **Done 2026-10-28:** a manual run of `Supabase keep-alive` (workflow_dispatch) succeeded and
+      its log shows "Projeto respondeu.": `public.ping()` answered HTTP 200 on the real project with
+      the publishable key from the repository secrets. `docs/SUPABASE.md` (section 6) explains how
+      to restore a paused project.
 
 ### Regression test
 
@@ -2830,6 +2855,10 @@ decision."
       written here.
       **Status 2026-10-22:** steps 1 to 13 of block 8 in `docs/BATERIA_DE_TESTES.md`; it needs
       G20-P1, G20-P2 and G20-S3.
+      **Status 2026-10-28:** partly seen by the user: a student sign-up received the e-mail code and
+      signed in, and after the SQL promotion the reopened app showed the teacher screens. The rest
+      of block 8 (wrong password, reset, a pending teacher approved, an offline start, the token
+      file, a lab PC in "sem conta" mode) is not done.
 
 ### Registration
 
