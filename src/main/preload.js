@@ -136,6 +136,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('access:changed', handler);
     return () => ipcRenderer.removeListener('access:changed', handler);
   },
+  // Programas necessários (GOALS 22): Tailscale e TightVNC.
+  getPrerequisites: () => ipcRenderer.invoke('prereqs:get'),
+  installPrerequisite: (name) => ipcRenderer.invoke('prereqs:install', name),
+  openTailscale: () => ipcRenderer.invoke('prereqs:openTailscale'),
   setupHostVnc: () => ipcRenderer.invoke('hostVnc:setup'),
   allowDirectVnc: () => ipcRenderer.invoke('hostVnc:allowDirect'),
 

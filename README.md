@@ -116,7 +116,31 @@ npm run dev
   `docs/ARQUITETURA_CONEXAO.md` ("Contas" e "Meu acesso") e o roteiro de teste no bloco 8 de
   `docs/BATERIA_DE_TESTES.md`.
 
+### 7. Programas necessarios (Tailscale e TightVNC)
+- O **instalador** (assistente em portugues) pergunta, depois da escolha da pasta, se quer instalar o que
+  falta neste PC: o **Tailscale** (vem marcado) e o **TightVNC** (desmarcado). Os dois sao baixados dos sites
+  oficiais e conferidos pela assinatura digital antes de rodar. Em atualizacoes e em instalacao silenciosa
+  (`/S`) a pergunta nao aparece, e se algo falhar o OpenPortal instala do mesmo jeito.
+- Ao abrir, uma tela **Verificacao do computador** aparece uma vez, so se algo falta. Depois,
+  **Configuracoes → Programas necessarios** mostra o estado e instala. Sem o programa, so as telas que
+  dependem dele mostram um cartao com o que falta; entrar na conta, Meu acesso e Configuracoes seguem
+  funcionando.
+
+| Recurso | Precisa do Tailscale neste PC | Precisa do TightVNC neste PC |
+|---------|-------------------------------|------------------------------|
+| Entrar, criar conta, Aprovacoes | nao | nao |
+| Meu acesso (aluno) | so se o PC tiver endereco `100.x` (aluno em casa) | nao (usa o Remote Desktop do Windows) |
+| Conectar a um PC (VNC ou RDP) | sim | nao |
+| Este PC sendo controlado | sim | sim, para VNC; para RDP o Windows precisa ser Pro, Enterprise ou Education |
+| Laboratorio e Arquivos | sim | nao |
+
+O app usa o TightVNC **2.8** (o 4.0 e de codigo fechado e guarda a configuracao em outro lugar). A
+arquitetura esta em `docs/ARQUITETURA_CONEXAO.md` ("Programas necessarios") e o roteiro de teste no bloco 9
+de `docs/BATERIA_DE_TESTES.md`.
+
 ---
+
+## Estrutura do projeto---
 
 ## Estrutura do projeto
 

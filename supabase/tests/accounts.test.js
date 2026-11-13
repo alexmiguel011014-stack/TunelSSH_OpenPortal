@@ -273,4 +273,18 @@ describe('anon e proteção geral', () => {
     );
     expect(rows.map((row) => row.proname)).toEqual(['ping']);
   });
+
+  // O Security Advisor do Supabase ("Function Search Path Mutable", 2026-10-28) apontou o ping().
+  it('toda função de public tem o search_path fixo', async () => {
+    const { rows } = await db.query(
+      `select p.proname
+         from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+        where n.nspname = 'public'
+          and not exists (
+            select 1 from unnest(coalesce(p.proconfig, array[]::text[])) as setting
+             where setting like 'search_path=%')
+        order by p.proname`,
+    );
+    expect(rows.map((row) => row.proname)).toEqual([]);
+  });
 });

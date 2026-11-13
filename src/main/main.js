@@ -9,6 +9,7 @@ const {
   clipboard,
 } = require('electron');
 const os = require('os');
+const path = require('path');
 const { initLogging } = require('./logging');
 const { createMainWindow } = require('./windows/main-window');
 const { onFileSessionOpen, onFileSessionClose } = require('./windows/control-banner');
@@ -47,6 +48,7 @@ const { effectiveAllowedUsers, effectiveReportTo } = require('./lab/lab-config')
 const { createLabRuntime } = require('./lab/runtime');
 const { createAuthRuntime } = require('./auth/runtime');
 const { createAccessRuntime } = require('./access/runtime');
+const { registerPrerequisitesIpc } = require('./system/prerequisites-ipc');
 
 initLogging();
 
@@ -440,6 +442,13 @@ app.whenReady().then(() => {
 
   registerIpcHandlers(mainWindow, { accessGate });
   registerFileTransferIpc(mainWindow);
+  // Programas necessários (GOALS 22): o script é o mesmo do instalador, dentro do pacote.
+  registerPrerequisitesIpc({
+    ipcMain,
+    scriptPath: app.isPackaged
+      ? path.join(process.resourcesPath, 'prereqs', 'install-prereq.ps1')
+      : path.join(__dirname, '..', '..', 'resources', 'prereqs', 'install-prereq.ps1'),
+  });
 
   // Diagnóstico completo de portas/servidores locais, para o painel de
   // Configurações mostrar status real (sem precisar ler log de terminal).

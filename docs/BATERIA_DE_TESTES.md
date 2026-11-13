@@ -313,6 +313,46 @@ Fecha: G20-T2 (passos 1 a 13), G20-K1 (passo 14), G20-P1, G20-P2 e G20-S3 (a bas
 
 Fecha: G21-T2 (passos 15 a 22).
 
+## 9. Instalador e programas necessários (GOALS 22, G22-V1 e G22-T2)
+
+Precisa de um Windows em português **sem Tailscale e sem TightVNC** (uma máquina virtual serve), com
+internet, e do instalador de um build novo (`npm run dist`, ou a pré-release do GitHub). Faça o passo 1
+antes de qualquer outro: ele fecha o G22-V1 e confirma o catálogo do script.
+
+1. **Instalação de verdade (G22-V1):** as assinaturas e as propriedades já foram conferidas lendo os MSI
+   (assinantes "Tailscale Inc." e "OOO GlavSoft"; ver o GOALS.md). Falta rodar os dois com os argumentos
+   do script, num PowerShell como administrador (`powershell -ExecutionPolicy Bypass -File
+   resources\prereqs\install-prereq.ps1 -Name tailscale`, depois `-Name tightvnc`), e conferir: serviço
+   `tvnserver` rodando, `LoopbackOnly` e `UseVncAuthentication` em 1 em
+   `HKLM\SOFTWARE\TightVNC\Server`, a porta 5900 só em 127.0.0.1 e nenhuma regra de firewall nova; se a
+   janela do Tailscale abre depois da instalação silenciosa. Para provar a recusa, troque um byte de uma
+   cópia do MSI e confirme que o script não instala. Anote no GOALS.md o que não bater.
+2. **Assistente:** rode o instalador do OpenPortal. Esperado: tudo em português, a imagem da marca na barra
+   lateral e no topo e a licença com o resumo em português acima do texto MIT.
+3. **Página "Programas necessários":** depois da pasta. Esperado: Tailscale e TightVNC como não instalados,
+   o Tailscale marcado e o TightVNC desmarcado, com a explicação de cada um.
+4. Marque os dois e avance. Esperado: a lista de detalhes mostra "Baixando e instalando Tailscale..." e
+   "...TightVNC" e "instalado" para cada um; o OpenPortal termina de instalar.
+5. **Depois:** a janela do Tailscale pede para entrar na conta; `Get-Service tvnserver` está rodando e a
+   porta 5900 só responde em 127.0.0.1 (a sonda do GOALS 10 em "Configurar TightVNC" confirma).
+6. **Primeira abertura:** com o Tailscale ainda sem conta, o app mostra "Verificação do computador" com o
+   Tailscale como "Instalado, falta entrar na conta" e **Abrir o Tailscale**. Entre na conta e volte à
+   janela do app: o estado muda sozinho para "Conectado" e a tela some ao continuar.
+7. **Desinstale o Tailscale** pelo Windows e abra o app. Esperado: **Conectar a um PC** (tela inicial),
+   **Arquivos** e **Laboratório** mostram "Falta o Tailscale"; **Meu acesso** (aluno), **Configurações**
+   e **Atividade** abrem normalmente. **Instalar o Tailscale** pede o UAC, instala e o cartão passa a
+   pedir para entrar na conta.
+8. **Atualização:** instale uma versão mais nova por cima (ou deixe o auto-update fazer). Esperado: a página
+   "Programas necessários" **não** aparece.
+9. **Silencioso:** rode o instalador com `/S`. Esperado: nenhum dos dois programas é instalado.
+10. **Sem internet:** desligue a rede e rode o instalador marcando os dois. Esperado: o OpenPortal instala e
+    uma mensagem final lista os dois com "sem acesso à internet"; ao abrir, o app oferece de novo.
+11. **TightVNC 4:** num PC limpo, instale o TightVNC 4 antes. Esperado: a página do instalador mostra o
+    TightVNC como já instalado e o app diz "TightVNC 4 instalado: o OpenPortal configura só o TightVNC 2".
+12. **Windows Home (se houver):** sem TightVNC, o aviso do cartão "Este PC" diz que o Home não recebe RDP.
+
+Fecha: G22-V1 (passo 1) e G22-T2 (passos 2 a 12).
+
 ## Fora desta bateria
 
 - **GOALS 3** precisa de três logins Tailscale diferentes e dois PCs.

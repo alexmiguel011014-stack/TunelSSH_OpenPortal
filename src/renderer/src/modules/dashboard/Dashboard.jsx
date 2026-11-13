@@ -10,6 +10,9 @@ import {
   normalizeQuickVncHost,
 } from '../../shared/lib/vncSession';
 import { groupConnectionHistory } from '../../shared/lib/connectionState';
+import { gateFor } from '../../shared/lib/requirements';
+import { usePrereqs } from '../prereqs/PrereqsContext';
+import { RequirementGate } from '../prereqs/RequirementGate';
 import LocalAccessCard from './LocalAccessCard';
 import ManagedHostCard from '../lab/ManagedHostCard';
 
@@ -58,6 +61,9 @@ export default function Dashboard() {
   // Conectar a outros PCs é de quem é professor (GOALS 20); os outros veem só o card deste PC.
   const { account } = useAuth();
   const canConnect = canSee(account, 'connect');
+  // Conectar a outros PCs só funciona com o Tailscale ligado (GOALS 22): sem ele, o cartão do que falta.
+  const { prerequisites } = usePrereqs();
+  const connectGate = gateFor({ screen: 'connect', prerequisites });
   const [quickIp, setQuickIp] = useState(readQuickIp);
   const [quickPassword, setQuickPassword] = useState('');
   const [connecting, setConnecting] = useState(false);
@@ -125,7 +131,7 @@ export default function Dashboard() {
         <h1 className="text-2xl font-light mb-1 text-text-primary">OpenPortal Remote</h1>
         <p className="text-sm text-text-faint mb-6">Acesso remoto seguro via Tailscale</p>
 
-        <LocalAccessCard />
+        <LocalAccessCard showTailscaleGate={!(canConnect && connectGate)} />
         <ManagedHostCard />
 
         {account.kind === 'guest' && (
@@ -135,7 +141,14 @@ export default function Dashboard() {
           </div>
         )}
 
-        {canConnect && (
+        {canConnect && connectGate && (
+          <div className="bg-surface rounded-xl border border-line-subtle p-5">
+            <h2 className={sectionTitle}>Conectar a um PC</h2>
+            <RequirementGate gate={connectGate} variant="notice" />
+          </div>
+        )}
+
+        {canConnect && !connectGate && (
           <>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="bg-surface rounded-xl border border-line-subtle p-5">

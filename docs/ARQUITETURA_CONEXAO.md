@@ -947,6 +947,48 @@ avisos fora do aplicativo; alunos em macOS ou celular (usam a mensagem copiada).
 
 ---
 
+## Programas necessários (GOALS 22)
+
+O OpenPortal depende de dois programas de terceiros, e **não** trava inteiro sem eles: o que depende de
+cada um é barrado tela a tela.
+
+| Recurso | Tailscale neste PC | TightVNC neste PC |
+| --- | --- | --- |
+| Entrar, criar conta, Aprovações | não (só internet) | não |
+| Meu acesso (aluno) | só com endereço `100.x` | não (`mstsc.exe` é do Windows) |
+| Conectar a um PC | **sim**: `net-guard.js` e `proxy.js` só discam `100.64.0.0/10` | não: o visualizador é o noVNC embutido, o RDP usa a sidecar |
+| Este PC sendo controlado | **sim** | **sim para VNC** (TightVNC 2); para RDP, Windows Pro, Enterprise ou Education |
+| Laboratório e Arquivos | **sim**: gerentes autorizados por `tailscale whois` (`lab/host.js`) | não |
+
+**Um script, dois usos.** `resources/prereqs/install-prereq.ps1` (no pacote, em `resources/prereqs/`) é o
+único lugar com o catálogo: a URL oficial, o assinante esperado e os argumentos do `msiexec`. O nome do
+programa vem de fora mas só vale se for `tailscale` ou `tightvnc`. O script baixa por HTTPS para uma pasta
+nova, confere a assinatura Authenticode (`Valid` e o assinante esperado) **antes** de rodar o `msiexec`,
+apaga o arquivo e devolve um código de saída (0 instalado, 2 instalado com reinício pedido, 10 a 15 falhas)
+e um JSON com a mensagem. O instalador o roda como administrador; o app o roda por `prereqs:install`, com
+o mesmo UAC de "Configurar TightVNC" (`runElevatedPowerShell`), e confere o estado de novo ao fim em vez de
+confiar no código de saída (o `Start-Process -Verb RunAs` não o devolve).
+
+**TightVNC 2, não 4.** O app escreve em `HKLM\SOFTWARE\TightVNC\Server` (`host-vnc.js`). O TightVNC 4
+(código fechado) guarda a configuração em outro lugar, então um TightVNC 4 aparece como "não suportado" e
+nunca ganha um TightVNC 2 por cima. O TightVNC é baixado na versão 2.8.90, sem senha na linha de comando
+(o app define uma depois), só com conexões locais e sem exceção de firewall.
+
+**Detecção** (`src/main/system/prerequisites.js`): `tailscale status --json` (`BackendState`: conectado, precisa
+entrar, parado, ou o executável não existe), o serviço `tvnserver` e a versão do TightVNC na lista de
+programas instalados, e a edição do Windows (`EditionID`, para dizer se o RDP é alternativa). Nada lança:
+o que não deu para ler vira `unknown`, e `unknown` nunca bloqueia.
+
+**No instalador** (`scripts/installer.nsh`): a página "Programas necessários" vem depois da pasta, só em
+instalação nova e não silenciosa; o Tailscale vem marcado e o TightVNC desmarcado. Uma falha nunca impede a
+instalação do OpenPortal e termina numa mensagem com o motivo (sem internet, assinatura, cancelado).
+
+**No app:** `shared/lib/requirements.js` decide (função pura) se uma tela abre ou mostra o cartão do que
+falta (`Gated`, em volta de Laboratório e Arquivos, e a seção "Conectar a um PC" da tela inicial); o cartão
+"Este PC" continua útil e mostra só um aviso. A tela "Verificação do computador" aparece uma vez por PC, só
+se algo falta, e fica em Configurações → Programas necessários. O estado é lido ao abrir e quando a janela
+volta ao foco.
+
 ## 3. Comparação Lado-a-Lado
 
 | Aspecto                    | AnyDesk/TeamViewer                  | OpenPortal Remote                                                          |
